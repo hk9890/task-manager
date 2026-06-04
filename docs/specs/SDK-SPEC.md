@@ -292,7 +292,7 @@ type ParseError struct { Pos int; Message string } // Pos = byte offset in the e
 func (e *ParseError) Error() string
 ```
 
-The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §4.
+The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §1.
 
 ---
 
@@ -302,7 +302,8 @@ The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §4.
   lock (`flock` on `.tasks/.lock`). Concurrent processes serialize; reads are
   lock-free.
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
-  never observes a torn file.
+  never observes a torn file — except the append-only comment sidecar (§4), which is
+  grown with `O_APPEND` + `fsync` rather than rewritten.
 - **Read consistency.** Read methods take a fresh directory snapshot per call; a
   returned `*Issue` is a copy the caller may mutate without affecting disk.
 

@@ -82,7 +82,7 @@ unless the expression selects them or `--all` is given. Default order: priority
 |---|---|
 | `-q, --query <expr>` | Filter expression (§3.1). Omitted → all active issues. |
 | `--all` | Include closed issues (reads the cold partition). |
-| `--sort <field>` | `id` \| `priority` \| `created` \| `updated` \| `closed` (default: priority). |
+| `--sort <field>` | `work` \| `id` \| `priority` \| `created` \| `updated` \| `closed`. Default `work` = priority, then oldest `created`; `priority` sorts by priority alone. |
 | `--reverse` | Reverse the sort order. |
 | `--limit <n>` | Cap the number of results (`0` = all). |
 
