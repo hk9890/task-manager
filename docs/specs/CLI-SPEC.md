@@ -19,7 +19,6 @@ atctl <command> [subcommand] [args] [flags]
 |---|---|---|
 | `--json` | off | Emit machine-readable JSON instead of the human table/detail view. |
 | `-C, --dir <path>` | cwd | Start directory for locating the store; `.tasks` is found by walking up. |
-| `--project <prefix>` | auto | Select a project when the workspace holds more than one. |
 
 ### Output modes
 
@@ -51,12 +50,12 @@ Create a new store in the current project.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--prefix <p>` | derived from directory name | ID prefix for the project (`^[a-z][a-z0-9]*$`). |
+| `--prefix <p>` | derived from directory name | ID prefix for the store (`^[a-z][a-z0-9]*$`). |
 
-- Creates the project directory and its `config.yaml`.
-- If `--prefix` is omitted it is derived from the directory name (lowercased,
-  non-alphanumerics stripped, leading digits removed, truncated; falls back to
-  `task`).
+- Creates the `.tasks/` store directory and its `config.yaml`.
+- If `--prefix` is omitted it is derived from the working directory name
+  (lowercased, non-alphanumerics stripped, leading digits removed, truncated; falls
+  back to `task`).
 - Fails if a store already exists.
 - **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON).
 
@@ -68,7 +67,8 @@ Create a new store in the current project.
 
 Show full detail for one issue: all fields, resolved relationships (parent,
 blocked-by, related, plus derived **blocks** and **children**), the description
-body, and comments.
+body, and comments (the **resolved** log — edits applied, deleted comments
+removed; see storage spec §4.4).
 
 - **Output (JSON):** `detailDTO` (§5).
 
@@ -90,37 +90,24 @@ unless the expression selects them or `--all` is given. Default order: priority
 
 ### 3.1 Filter expressions
 
-A filter expression selects issues by combining field predicates with boolean
-operators. The CLI and the SDK share this grammar.
-
-A predicate is `<field> <op> <value>`, or a bare boolean field.
-
-| Field | Values | Notes |
-|---|---|---|
-| `status` | `open` / `in_progress` / `blocked` / `closed` | |
-| `type` | `task` / `bug` / `feature` / `epic` / `chore` | |
-| `priority` | `0`–`4` | numeric comparisons |
-| `assignee` | string | |
-| `parent` | issue ID | |
-| `label` | string | `==` exact match, `~` substring / membership |
-| `text` | string | `~` matches ID, title, or description |
-| `created` / `updated` / `closed` | ISO-8601 date | date comparisons |
-| `ready` / `blocked` | — | bare boolean predicates |
-
-Operators: `==` `!=` `<` `<=` `>` `>=` `~` (contains). Combine predicates with
-`&&`, `||`, `!`, and parentheses.
+`-q` takes a **filter expression** — `<field> <op> <value>` predicates combined with
+`&&`, `||`, `!`, and parentheses (e.g. `status == "open" && priority <= 1`). The
+grammar, the full field/operator table, value syntax, and error semantics are
+defined once, at the engine layer, in **[QUERY-SPEC.md](QUERY-SPEC.md)**; the CLI
+passes the string to the SDK unchanged.
 
 ```
 status == "open"
 status == "open" && priority <= 1
-type == "bug" && label ~ "area:db"
+type == bug && label ~ "area:db"
 ready && priority <= 2
 text ~ "drill" && !blocked
 closed > "2026-01-01"
 ```
 
-Closed issues are excluded unless the expression references `status == "closed"`
-or `--all` is passed.
+Scope: closed issues are excluded unless `--all` is passed or the expression itself
+references closed work (`status == "closed"`, or a `closed` comparison). See
+QUERY-SPEC.md §5.
 
 ### `atctl search <text> [options]`
 
@@ -135,10 +122,19 @@ priority then age. `--limit` caps results.
 
 ### `atctl blocked`
 
-List non-closed issues that have at least one open blocker, each followed by the
-blocking issues (ID, status, title).
+List non-closed issues that have at least one open blocker. Human output prints
+each blocked issue as a standard list row, then its blockers indented one per line
+as `↳ <id>  <status>  <title>`:
 
-- **Output (JSON):** array of `issueDTO` extended with `blocked_by_refs` (`refDTO[]`).
+```
+dtt-0042  in_progress  P1  Fix drill navigation
+  ↳ dtt-0040  open  Land the rail refactor
+dtt-0051  open         P2  Wire up export
+  ↳ dtt-0047  open  Define export schema
+```
+
+- **Output (JSON):** array of `blockedDTO` (§6) — `issueDTO` plus `blocked_by_refs`
+  (`refDTO[]`).
 
 ---
 
@@ -185,8 +181,9 @@ as-is.
 | `--set-labels <l,…>` | Replace the entire label set. |
 | `--clear-labels` | Remove all labels. |
 
-- Setting `--status closed` is equivalent to `close` (sets the closed timestamp);
-  moving away from `closed` reopens.
+- Setting `--status closed` transitions the issue to closed (stamps the close time
+  and moves it to the cold partition) but records **no** reason — use `close
+  --reason` for that. Moving away from `closed` reopens (status → `open`).
 - **Output:** the updated `issueDTO`.
 
 ### `atctl close <id> [--reason <r>]`
@@ -197,7 +194,7 @@ Close an issue: set status `closed`, stamp the close time, optionally record
 ### `atctl reopen <id>`
 
 Move a closed issue back to the active set, clear its closed timestamp/reason, and
-restore a non-closed status.
+set its status to `open`.
 
 ### `atctl dep add <dependent> <blocker>`
 
@@ -225,7 +222,13 @@ argument or `--file`.
 
 Append a revision that supersedes an earlier comment (`replaces`). The original
 stays in the log; readers render the newest revision. Same body source/options as
-`comment add`. An empty body retracts (tombstones) the target comment.
+`comment add`. The body must be non-empty — use `comment rm` to delete.
+
+### `atctl comment rm <id> <comment-id> [--author <a>]`
+
+Delete a comment: append a tombstone that retracts the target (`replaces` it with
+no body). The original stays in the log as history; the resolved view omits it.
+Idempotent.
 
 ---
 
@@ -259,8 +262,10 @@ nested in others:
 
 **`refDTO`** — a lightweight reference (no body): `{id, title, type, status, priority}`.
 
-**`commentDTO`** — `{id, author, created, replaces, body}` (`author`/`replaces`
-omitted when empty).
+**`commentDTO`** — `{id, author, created, replaces, body}` where `id` is the
+comment's random token (`^[0-9a-z]{8}$`); `author`/`replaces` are omitted when
+empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
+`replaces`-chain collapsed to its newest revision, tombstoned comments omitted.
 
 **`detailDTO`** — `issueDTO` plus: `description`, `parent_ref` (`refDTO`),
 `blocked_by_refs`, `related_refs`, `blocks`, `children` (each `refDTO[]`), and
@@ -290,8 +295,9 @@ atctl reopen   <id>
 atctl dep      add|rm <dependent> <blocker>
 atctl comment  add  <id> [body] [--author --file]
 atctl comment  edit <id> <comment-id> [body] [--author --file]
+atctl comment  rm   <id> <comment-id> [--author]
 atctl labels | statuses | types
 atctl version
 
-Global: --json, -C/--dir <path>, --project <prefix>
+Global: --json, -C/--dir <path>
 ```
