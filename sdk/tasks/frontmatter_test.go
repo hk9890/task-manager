@@ -1,0 +1,105 @@
+package tasks
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestMarshalUnmarshalRoundTrip(t *testing.T) {
+	created := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	updated := time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC)
+	closed := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
+
+	in := &Issue{
+		ID:          "agt-0042",
+		Title:       "Fix drill nav",
+		Status:      StatusClosed,
+		Type:        TypeBug,
+		Priority:    1,
+		Assignee:    "hans",
+		Labels:      []string{"area:details", "risk:low"},
+		Parent:      "agt-0007",
+		BlockedBy:   []string{"agt-0040"},
+		Related:     []string{"agt-0012"},
+		Created:     created,
+		Updated:     updated,
+		Closed:      closed,
+		CloseReason: "shipped",
+		Comments: []Comment{
+			{Author: "hans", Created: updated, Body: "decided to follow the rail"},
+		},
+		Description: "## Description\nDrilling a related issue should navigate fully.",
+	}
+
+	data, err := Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.HasPrefix(string(data), "---\n") {
+		t.Fatalf("expected leading fence, got:\n%s", data)
+	}
+
+	out, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if out.ID != in.ID || out.Title != in.Title || out.Status != in.Status || out.Type != in.Type {
+		t.Errorf("scalar mismatch: %+v", out)
+	}
+	if out.Priority != 1 || out.Assignee != "hans" {
+		t.Errorf("priority/assignee mismatch: %+v", out)
+	}
+	if !out.Closed.Equal(closed) || out.CloseReason != "shipped" {
+		t.Errorf("closed mismatch: %v / %q", out.Closed, out.CloseReason)
+	}
+	if len(out.Labels) != 2 || out.Labels[0] != "area:details" {
+		t.Errorf("labels mismatch: %v", out.Labels)
+	}
+	if len(out.BlockedBy) != 1 || out.BlockedBy[0] != "agt-0040" {
+		t.Errorf("blocked_by mismatch: %v", out.BlockedBy)
+	}
+	if out.Parent != "agt-0007" || len(out.Related) != 1 {
+		t.Errorf("parent/related mismatch: %q / %v", out.Parent, out.Related)
+	}
+	if len(out.Comments) != 1 || out.Comments[0].Body != "decided to follow the rail" {
+		t.Errorf("comments mismatch: %+v", out.Comments)
+	}
+	if out.Description != in.Description {
+		t.Errorf("description mismatch:\nwant %q\ngot  %q", in.Description, out.Description)
+	}
+}
+
+func TestUnmarshalOpenIssueNoClosed(t *testing.T) {
+	data, err := Marshal(&Issue{
+		ID: "agt-0001", Title: "open one", Status: StatusOpen, Type: TypeTask, Priority: 2,
+		Created: time.Now(), Updated: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "closed:") {
+		t.Errorf("open issue should not serialize a closed field:\n%s", data)
+	}
+	out, err := Unmarshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Closed.IsZero() {
+		t.Errorf("expected zero closed time, got %v", out.Closed)
+	}
+}
+
+func TestUnmarshalErrors(t *testing.T) {
+	cases := map[string]string{
+		"no frontmatter": "just some text",
+		"unterminated":   "---\nid: x\ntitle: y",
+		"bad yaml":       "---\nid: [unclosed\n---\n",
+	}
+	for name, in := range cases {
+		if _, err := Unmarshal([]byte(in)); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
