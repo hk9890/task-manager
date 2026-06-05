@@ -164,19 +164,10 @@ fields are applied.
 
 ```go
 type Filter struct {
-    Expr          string    // filter expression — the selector (QUERY-SPEC.md); closed-scope auto-detected
-    Statuses      []Status  // require one of these statuses (empty = all non-closed by default)
-    Types         []Type    // require one of these types (empty = all)
-    PriorityMin   *int      // minimum priority (inclusive; nil = no bound)
-    PriorityMax   *int      // maximum priority (inclusive; nil = no bound)
-    Assignee      string    // exact match on assignee (empty = all)
-    Labels        []string  // issue must carry every listed label (empty = all)
-    Text          string    // case-insensitive substring of ID, title, or body
+    Expr          string    // filter expression (QUERY-SPEC.md); closed-scope auto-detected
     IncludeClosed bool      // scope: include closed issues (reads closed/ partition)
-    OnlyReady     bool      // only issues that are open with no open blockers
-    OnlyBlocked   bool      // only issues with at least one open blocker
-    Sort          SortField // presentation
-    Reverse       bool
+    Sort          SortField // presentation order
+    Reverse       bool      // reverse the sort order
     Limit         int       // 0 = no limit
 }
 
@@ -187,11 +178,14 @@ const (
 )
 ```
 
+All filtering (by status, type, priority, assignee, label, text, ready/blocked, dates)
+is expressed via the `Expr` field using the filter-expression language
+(see [QUERY-SPEC.md](QUERY-SPEC.md)). The empty expression is the always-true predicate.
+
 **Scope semantics (TASK-STORAGE-SPEC §5, QUERY-SPEC.md §5):**
-- By default (`IncludeClosed:false`, no closed-referencing `Expr`, no `StatusClosed` in `Statuses`)
+- By default (`IncludeClosed:false`, no closed-referencing `Expr`)
   only the hot (active) set is scanned. The `closed/` partition is never opened.
 - `IncludeClosed:true`: reads both hot and cold partitions.
-- `Statuses` contains `StatusClosed`: cold partition is auto-included.
 - `Expr` references closed work (e.g. `status == "closed"` or a `closed` date comparison):
   cold partition is auto-included; `IncludeClosed` need not be set explicitly.
 - Callers must never rely on the cold partition being scanned silently — they must

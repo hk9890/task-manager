@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
 )
 
 // openBlockers returns the IDs of an issue's blockers that are not yet closed.
@@ -246,31 +248,20 @@ func findCycle(idx map[string]*Issue, start string) string {
 
 // Filter selects and orders issues for List.
 //
-// Scope semantics (TASK-STORAGE-SPEC §5, SDK-SPEC §4):
+// Scope semantics (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
 //   - By default only the hot (active) set is scanned. Closed issues in
 //     closed/ are never read unless explicitly requested.
 //   - Set IncludeClosed:true to read both hot and cold partitions.
 //   - Set Expr to a filter expression (QUERY-SPEC.md); if the expression
-//     references closed work (status == "closed", or a closed comparison),
-//     the cold partition is included automatically — the caller does not need
-//     to set IncludeClosed explicitly in that case.
-//   - Expr and the structured fields (Statuses, Types, …) can be combined;
-//     both must match for an issue to be returned.
+//     references closed work (status == "closed", or a closed field comparison),
+//     the cold partition is included automatically — IncludeClosed need not be
+//     set explicitly in that case.
 type Filter struct {
 	Expr          string    // filter expression (QUERY-SPEC.md); closed-scope auto-detected
-	Statuses      []Status
-	Types         []Type
-	PriorityMin   *int
-	PriorityMax   *int
-	Assignee      string
-	Labels        []string // issue must carry every listed label
-	Text          string   // case-insensitive substring of ID, title, or body
-	IncludeClosed bool     // when true, read closed/ in addition to the hot set
-	OnlyReady     bool
-	OnlyBlocked   bool
-	Sort          SortField
-	Reverse       bool
-	Limit         int
+	IncludeClosed bool      // when true, read closed/ in addition to the hot set
+	Sort          SortField // presentation order
+	Reverse       bool      // reverse the sort order
+	Limit         int       // 0 = no limit
 }
 
 // SortField names the orderings List understands.
@@ -302,64 +293,6 @@ func (s *Store) Query(expr string) ([]*Issue, error) {
 	return s.List(Filter{Expr: expr})
 }
 
-// exprReferencesClosedWork reports whether expr contains a reference to closed
-// work that requires the cold partition to be scanned. It detects:
-//   - status == "closed" (or status=="closed" without spaces)
-//   - any comparison against the closed timestamp field (e.g. closed > "2026-01-01")
-//
-// This is a lightweight textual scan — it is not a full parse. It errs on the
-// side of including the cold partition (no false negatives) because the
-// performance cost of a redundant closed/ scan is acceptable, and silently
-// excluding the cold partition would violate correctness.
-func exprReferencesClosedWork(expr string) bool {
-	e := strings.ToLower(strings.TrimSpace(expr))
-	if e == "" {
-		return false
-	}
-	// status == "closed" or status=="closed"
-	if strings.Contains(e, `status`) && strings.Contains(e, `closed`) {
-		return true
-	}
-	// closed field comparisons: closed > ..., closed < ..., closed == ..., etc.
-	// Look for the word "closed" followed (possibly after spaces) by a comparison
-	// operator, or the field name "closed" at the start of a comparison token.
-	// Heuristic: the field name "closed" followed by whitespace or an operator.
-	for i, r := range e {
-		_ = r
-		const word = "closed"
-		if i+len(word) > len(e) {
-			break
-		}
-		if e[i:i+len(word)] != word {
-			continue
-		}
-		// Make sure it is a whole word (not a prefix of "closedXxx").
-		after := i + len(word)
-		if after < len(e) {
-			ch := e[after]
-			if ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
-				continue // not a word boundary
-			}
-		}
-		// Before must be a non-word character or start of string.
-		if i > 0 {
-			ch := e[i-1]
-			if ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
-				continue
-			}
-		}
-		// "closed" as a standalone word — check if it looks like a field comparison.
-		rest := strings.TrimSpace(e[after:])
-		if len(rest) > 0 {
-			ch := rest[0]
-			if ch == '=' || ch == '!' || ch == '<' || ch == '>' || ch == '~' {
-				return true // closed field comparison
-			}
-		}
-	}
-	return false
-}
-
 // List returns issues matching the filter in the requested order.
 //
 // Scope (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
@@ -367,23 +300,22 @@ func exprReferencesClosedWork(expr string) bool {
 //   - IncludeClosed:true: hot + cold partitions.
 //   - f.Expr references closed work (status=="closed" or closed field comparison):
 //     cold partition is auto-included.
-//   - f.Statuses contains StatusClosed: cold partition is auto-included.
 //
 // Callers must never depend on the cold partition being scanned silently —
 // always set IncludeClosed or use an expression that opts in explicitly.
+//
+// A malformed f.Expr returns a *ParseError and nothing is read from disk.
 func (s *Store) List(f Filter) ([]*Issue, error) {
+	// Compile the expression first — return *ParseError before touching disk.
+	pred, err := compileExpr(f.Expr)
+	if err != nil {
+		return nil, err
+	}
+
 	// Decide whether to include the closed partition.
 	needClosed := f.IncludeClosed
-	if !needClosed {
-		for _, st := range f.Statuses {
-			if st.IsClosed() {
-				needClosed = true
-				break
-			}
-		}
-	}
 	if !needClosed && f.Expr != "" {
-		needClosed = exprReferencesClosedWork(f.Expr)
+		needClosed = query.ReferencesClosedWork(f.Expr)
 	}
 
 	_, all, err := s.index()
@@ -410,61 +342,16 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 	// already contains closed issues (Stat would be redundant but harmless).
 	closedStat := s.closedStatFn()
 
-	statusSet := map[Status]struct{}{}
-	for _, st := range f.Statuses {
-		statusSet[st] = struct{}{}
-	}
-	typeSet := map[Type]struct{}{}
-	for _, t := range f.Types {
-		typeSet[t] = struct{}{}
-	}
-	text := strings.ToLower(strings.TrimSpace(f.Text))
-
 	var out []*Issue
 	for _, iss := range all {
-		// Scope guard: exclude closed issues unless the caller opted in (via
-		// IncludeClosed, a StatusClosed filter, or a closed-referencing Expr).
+		// Scope guard: exclude closed issues unless the caller opted in.
 		if iss.Status.IsClosed() && !needClosed {
 			continue
 		}
 
-		// Structured-field filters.
-		if len(statusSet) > 0 {
-			if _, ok := statusSet[iss.Status]; !ok {
-				continue
-			}
-		}
-		if len(typeSet) > 0 {
-			if _, ok := typeSet[iss.Type]; !ok {
-				continue
-			}
-		}
-		if f.PriorityMin != nil && iss.Priority < *f.PriorityMin {
-			continue
-		}
-		if f.PriorityMax != nil && iss.Priority > *f.PriorityMax {
-			continue
-		}
-		if f.Assignee != "" && iss.Assignee != f.Assignee {
-			continue
-		}
-		if !hasAllLabels(iss, f.Labels) {
-			continue
-		}
-		if text != "" && !matchesText(iss, text) {
-			continue
-		}
-		if f.OnlyReady && !(iss.Status == StatusOpen && len(openBlockers(idx, closedStat, iss)) == 0) {
-			continue
-		}
-		if f.OnlyBlocked && len(openBlockers(idx, closedStat, iss)) == 0 {
-			continue
-		}
-
-		// Expression filter (QUERY-SPEC.md): applied after all structured-field
-		// guards so the expression is only evaluated for candidates that already
-		// pass the cheaper structured filters.
-		if f.Expr != "" && !evalExpr(f.Expr, iss, idx, closedStat) {
+		// Expression filter: evaluate using the compiled predicate and the Row adapter.
+		row := newIssueRow(iss, idx, closedStat)
+		if !pred.Match(row) {
 			continue
 		}
 
@@ -481,28 +368,6 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 		out = out[:f.Limit]
 	}
 	return out, nil
-}
-
-func hasAllLabels(iss *Issue, want []string) bool {
-	if len(want) == 0 {
-		return true
-	}
-	have := make(map[string]struct{}, len(iss.Labels))
-	for _, l := range iss.Labels {
-		have[l] = struct{}{}
-	}
-	for _, w := range want {
-		if _, ok := have[w]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func matchesText(iss *Issue, lowered string) bool {
-	return strings.Contains(strings.ToLower(iss.ID), lowered) ||
-		strings.Contains(strings.ToLower(iss.Title), lowered) ||
-		strings.Contains(strings.ToLower(iss.Description), lowered)
 }
 
 func sortIssues(issues []*Issue, field SortField) {

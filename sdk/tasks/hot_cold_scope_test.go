@@ -1,7 +1,8 @@
 // L1/L2 tests for hot/cold partition scoping semantics (at-zib.2.4).
 //
-// L1 (pure): TestExprReferencesClosedWork — tests exprReferencesClosedWork,
-// a pure function with no disk access.
+// L1 (pure): TestReferencesClosedWork — tests query.ReferencesClosedWork,
+// the parser-based function used by List/Query to decide whether to include the
+// cold partition.
 //
 // L2 (vfs.Mem): the remaining tests exercise Store methods on an in-memory
 // FS to prove:
@@ -15,14 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
 	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
 )
 
 // ── L1: pure-function tests ───────────────────────────────────────────────────
 
-// TestExprReferencesClosedWork verifies the closed-scope detection heuristic
-// used by List/Query to decide whether to include the cold partition.
-func TestExprReferencesClosedWork(t *testing.T) {
+// TestReferencesClosedWork verifies the closed-scope detection used by
+// List/Query to decide whether to include the cold partition.
+// This now delegates to query.ReferencesClosedWork (parser-based, not heuristic).
+func TestReferencesClosedWork(t *testing.T) {
 	cases := []struct {
 		expr string
 		want bool
@@ -45,21 +48,21 @@ func TestExprReferencesClosedWork(t *testing.T) {
 		// Expressions that do NOT reference closed.
 		{`status == "open"`, false},
 		{`status == "in_progress"`, false},
-		{`type == "bug"`, false},
+		{`type == bug`, false},
 		{`priority <= 2`, false},
 		{`text ~ "done"`, false},
 		{`assignee == "alice"`, false},
 
 		// Combined expressions that include a closed reference.
 		{`status == "closed" && priority <= 2`, true},
-		{`type == "bug" || status == "closed"`, true},
+		{`type == bug || status == "closed"`, true},
 		{`closed > "2026-01-01" && assignee == "hans"`, true},
 	}
 
 	for _, tc := range cases {
-		got := exprReferencesClosedWork(tc.expr)
+		got := query.ReferencesClosedWork(tc.expr)
 		if got != tc.want {
-			t.Errorf("exprReferencesClosedWork(%q) = %v, want %v", tc.expr, got, tc.want)
+			t.Errorf("query.ReferencesClosedWork(%q) = %v, want %v", tc.expr, got, tc.want)
 		}
 	}
 }

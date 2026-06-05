@@ -8,21 +8,16 @@ import (
 	"github.com/hk9890/agent-tasks/sdk/tasks"
 )
 
+// filterFlags holds the flag values for list/search commands.
+// The structured field filters (Statuses, Types, etc.) have been removed;
+// filtering is now done exclusively via the -q/--query expression language
+// (QUERY-SPEC.md). The --all flag maps to Filter.IncludeClosed.
 type filterFlags struct {
-	query       string   // filter expression (-q/--query); closed-scope auto-detected
-	statuses    []string
-	types       []string
-	priorityMin int
-	priorityMax int
-	assignee    string
-	labels      []string
-	text        string
-	all         bool
-	ready       bool
-	blocked     bool
-	sort        string
-	reverse     bool
-	limit       int
+	query   string // filter expression (-q/--query); closed-scope auto-detected
+	all     bool   // include closed issues (reads the cold partition)
+	sort    string // sort field
+	reverse bool   // reverse sort order
+	limit   int    // maximum number of results (0 = all)
 }
 
 func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
@@ -30,50 +25,22 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	// -q/--query: filter expression (QUERY-SPEC.md). Closed-referencing expressions
 	// automatically include the cold partition; --all is not required in that case.
 	f.StringVarP(&ff.query, "query", "q", "", "filter expression (QUERY-SPEC.md); closed-scope auto-detected")
-	f.StringSliceVar(&ff.statuses, "status", nil, "filter by status (repeatable/csv)")
-	f.StringSliceVar(&ff.types, "type", nil, "filter by type (repeatable/csv)")
-	f.IntVar(&ff.priorityMin, "priority-min", 0, "minimum priority (most urgent)")
-	f.IntVar(&ff.priorityMax, "priority-max", 0, "maximum priority (least urgent)")
-	f.StringVar(&ff.assignee, "assignee", "", "filter by assignee")
-	f.StringSliceVar(&ff.labels, "label", nil, "require label (repeatable; all must match)")
 	// --all reads the cold partition (closed/) in addition to the hot set. When a
 	// closed-referencing -q expression is used, --all is not needed but harmless.
 	f.BoolVar(&ff.all, "all", false, "include closed issues (reads the cold partition)")
-	f.BoolVar(&ff.ready, "ready", false, "only ready issues")
-	f.BoolVar(&ff.blocked, "blocked", false, "only blocked issues")
 	f.StringVar(&ff.sort, "sort", "", "sort by: id|priority|created|updated|closed (default: priority)")
 	f.BoolVar(&ff.reverse, "reverse", false, "reverse sort order")
 	f.IntVar(&ff.limit, "limit", 0, "maximum number of results (0 = all)")
 }
 
-func (ff *filterFlags) build(cmd *cobra.Command) tasks.Filter {
-	flt := tasks.Filter{
+func (ff *filterFlags) build() tasks.Filter {
+	return tasks.Filter{
 		Expr:          ff.query,
-		Assignee:      ff.assignee,
-		Labels:        ff.labels,
-		Text:          ff.text,
 		IncludeClosed: ff.all,
-		OnlyReady:     ff.ready,
-		OnlyBlocked:   ff.blocked,
 		Sort:          tasks.SortField(ff.sort),
 		Reverse:       ff.reverse,
 		Limit:         ff.limit,
 	}
-	for _, s := range ff.statuses {
-		flt.Statuses = append(flt.Statuses, tasks.Status(s))
-	}
-	for _, t := range ff.types {
-		flt.Types = append(flt.Types, tasks.Type(t))
-	}
-	if cmd.Flags().Changed("priority-min") {
-		p := ff.priorityMin
-		flt.PriorityMin = &p
-	}
-	if cmd.Flags().Changed("priority-max") {
-		p := ff.priorityMax
-		flt.PriorityMax = &p
-	}
-	return flt
 }
 
 func runList(cmd *cobra.Command, ff *filterFlags) error {
@@ -81,7 +48,7 @@ func runList(cmd *cobra.Command, ff *filterFlags) error {
 	if err != nil {
 		return err
 	}
-	issues, err := s.List(ff.build(cmd))
+	issues, err := s.List(ff.build())
 	if err != nil {
 		return err
 	}
@@ -118,7 +85,14 @@ var searchCmd = &cobra.Command{
 	Short: "Search issues by text (ID, title, description)",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		searchFilter.text = args[0]
+		// Translate the search text into a text ~ "<text>" expression.
+		// If the user also passed -q, combine them with &&.
+		textExpr := fmt.Sprintf(`text ~ %q`, args[0])
+		if searchFilter.query != "" {
+			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
+		} else {
+			searchFilter.query = textExpr
+		}
 		return runList(cmd, &searchFilter)
 	},
 }
