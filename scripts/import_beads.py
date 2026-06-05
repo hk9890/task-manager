@@ -147,17 +147,17 @@ def load_records(path: str | None) -> list[dict]:
             lines = f.read().splitlines()
     else:
         eprint("Running `bd export` ...")
-        proc = subprocess.run(["bd", "export", "-o", "-"], capture_output=True, text=True)
-        if proc.returncode != 0:
-            # some bd versions only write to a file
-            with tempfile.NamedTemporaryFile("r", suffix=".jsonl", delete=False) as tmp:
-                tmp_path = tmp.name
-            subprocess.run(["bd", "export", "-o", tmp_path], check=True)
+        # bd writes only to a real file (`-o -` makes a file literally named "-"),
+        # so always export to a temp file and read it back.
+        fd, tmp_path = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        try:
+            subprocess.run(["bd", "export", "-o", tmp_path], check=True,
+                           capture_output=True, text=True)
             with open(tmp_path) as f:
                 lines = f.read().splitlines()
+        finally:
             os.unlink(tmp_path)
-        else:
-            lines = proc.stdout.splitlines()
     recs = []
     for ln in lines:
         ln = ln.strip()
