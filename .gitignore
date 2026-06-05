@@ -8,3 +8,6 @@ coverage.out
 .dolt/
 *.db
 .beads-credential-key
+
+# beads import id-map (generated)
+scripts/.beads-import-map.json
