@@ -1,0 +1,216 @@
+//go:build integration
+
+package vfs_test
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+)
+
+func TestOsFS_WriteAtomic_NoTornFile(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "issue.md")
+	data := []byte("hello world")
+
+	if err := fs.WriteAtomic(name, data, 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	got, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want %q", got, data)
+	}
+
+	// Verify no temp files left behind.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "issue.md" {
+			t.Errorf("unexpected leftover file: %s", e.Name())
+		}
+	}
+}
+
+func TestOsFS_WriteAtomic_Overwrite(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "file.md")
+
+	if err := fs.WriteAtomic(name, []byte("v1"), 0o644); err != nil {
+		t.Fatalf("first WriteAtomic: %v", err)
+	}
+	if err := fs.WriteAtomic(name, []byte("v2"), 0o644); err != nil {
+		t.Fatalf("second WriteAtomic: %v", err)
+	}
+
+	got, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "v2" {
+		t.Errorf("got %q, want %q", got, "v2")
+	}
+}
+
+func TestOsFS_Append_Grows(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "log.txt")
+
+	if err := fs.Append(name, []byte("line1\n"), 0o644); err != nil {
+		t.Fatalf("first Append: %v", err)
+	}
+	if err := fs.Append(name, []byte("line2\n"), 0o644); err != nil {
+		t.Fatalf("second Append: %v", err)
+	}
+
+	got, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "line1\nline2\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestOsFS_Lock_Serializes(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	lockPath := filepath.Join(dir, ".lock")
+
+	// Acquire lock, do work, release — verify exclusive access via a counter.
+	var counter int
+	var mu sync.Mutex
+	const goroutines = 4
+	var wg sync.WaitGroup
+
+	errs := make(chan error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			unlock, err := fs.Lock(lockPath)
+			if err != nil {
+				errs <- err
+				return
+			}
+			mu.Lock()
+			counter++
+			mu.Unlock()
+			errs <- unlock()
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Lock/unlock: %v", err)
+		}
+	}
+	if counter != goroutines {
+		t.Errorf("counter = %d, want %d", counter, goroutines)
+	}
+}
+
+func TestOsFS_ReadDir(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	if err := fs.WriteAtomic(filepath.Join(dir, "a.md"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.WriteAtomic(filepath.Join(dir, "b.md"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := fs.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("got %d entries, want 2", len(entries))
+	}
+}
+
+func TestOsFS_Stat(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "file.md")
+	if err := fs.WriteAtomic(name, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fi, err := fs.Stat(name)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if fi.Size() != 4 {
+		t.Errorf("size = %d, want 4", fi.Size())
+	}
+}
+
+func TestOsFS_MkdirAll_Remove(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	sub := filepath.Join(dir, "a", "b", "c")
+	if err := fs.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	fi, err := os.Stat(sub)
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("expected directory at %s", sub)
+	}
+
+	name := filepath.Join(dir, "f.md")
+	if err := fs.WriteAtomic(name, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Remove(name); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(name); !os.IsNotExist(err) {
+		t.Errorf("file should be gone")
+	}
+}
+
+func TestOsFS_Rename(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	src := filepath.Join(dir, "src.md")
+	dst := filepath.Join(dir, "dst.md")
+
+	if err := fs.WriteAtomic(src, []byte("content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Rename(src, dst); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src should be gone")
+	}
+	got, err := fs.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "content" {
+		t.Errorf("got %q", got)
+	}
+}

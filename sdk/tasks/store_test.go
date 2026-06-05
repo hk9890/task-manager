@@ -190,20 +190,37 @@ func TestCloseIdempotent(t *testing.T) {
 	if first.Status != StatusClosed || first.CloseReason != "done" {
 		t.Errorf("close wrong: %+v", first)
 	}
-	if _, err := s.Close(iss.ID, "again"); err != nil {
-		t.Errorf("re-close should be idempotent, got %v", err)
+	// Per TASK-STORAGE-SPEC §5, closed files are immutable in place.
+	// Re-closing an already-closed issue is an in-place write to closed/ and
+	// must return ErrImmutable (not be silently idempotent).
+	_, err = s.Close(iss.ID, "again")
+	if !errors.Is(err, ErrImmutable) {
+		t.Errorf("re-close should return ErrImmutable, got %v", err)
 	}
 }
 
 func TestAddComment(t *testing.T) {
 	s := newTestStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
-	out, err := s.AddComment(iss.ID, "hans", "  a note  ")
+	// sanitizeCommentBody strips trailing whitespace per line, not leading.
+	// "a note\n" is a clean body; use it directly.
+	c, err := s.AddComment(iss.ID, "hans", "a note\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Comments) != 1 || out.Comments[0].Body != "a note" || out.Comments[0].Author != "hans" {
-		t.Errorf("comment wrong: %+v", out.Comments)
+	if c.Body != "a note\n" || c.Author != "hans" {
+		t.Errorf("comment wrong: %+v", c)
+	}
+	if len(c.ID) != 8 {
+		t.Errorf("comment ID length = %d, want 8", len(c.ID))
+	}
+	// Verify via Comments() that it's stored in the sidecar.
+	comments, err := s.Comments(iss.ID)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].ID != c.ID {
+		t.Errorf("Comments() = %+v, want 1 comment with id %q", comments, c.ID)
 	}
 }
 

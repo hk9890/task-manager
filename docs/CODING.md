@@ -1,58 +1,53 @@
 # Coding
 
-Repository-specific implementation constraints. Read [OVERVIEW.md](OVERVIEW.md)
-for the layout and [SPEC.md](../SPEC.md) for the model first.
+Read [OVERVIEW.md](OVERVIEW.md) and the specs in `specs/` first. For the package
+map and the test layers, read
+[implementation/PACKAGE-OVERVIEW.md](implementation/PACKAGE-OVERVIEW.md) and
+[implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
-## Build and run
+## Build & test (mise; `make` still works)
 
 ```bash
-make build      # -> ./bin/atctl  (version stamped via -ldflags)
-make install    # build atctl onto $PATH ($GOBIN, else $GOPATH/bin)
-make fmt vet    # gofmt -w + go vet, both modules
+mise run build             # -> ./bin/atctl
+mise run fmt vet lint
+mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
+mise run test:integration  # L3 real temp dir + L4 CLI
+mise run quality           # vet + lint + test  (pre-commit gate)
 ```
 
-Toolchain: Go 1.26 (see `go.mod`).
+## Single-writer rule
 
-## The single-writer rule
-
-`sdk/tasks` is the **only** package that may read or write files under `.tasks/`.
-`cmd/` and any external viewer go through the `Store` API. Do not open, stat, or
-write issue files from `cmd/` or anywhere else — that bypasses validation,
-locking, and the atomic-write path.
-
-## Module layout
-
-- The root module `github.com/hk9890/agent-tasks` (the CLI) depends on the SDK
-  module via a `replace ... => ./sdk` directive in `go.mod`.
-- `sdk/` is a separate module with minimal dependencies (only `yaml.v3`). Do not
-  add CLI-only or heavy dependencies to `sdk/go.mod`.
-- `bench/` is a third, standalone module (`replace`d onto `../sdk`) holding the
-  scaling harness. Keep it outside the CLI's dependency graph: it is excluded
-  from `go build ./...` and `make test`, and `make tidy` does not touch it.
-- After changing imports in the root or `sdk` module, run `make tidy` (runs
-  `go mod tidy` in both).
+Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `cmd/`
+and every consumer go through the `Store` API. **Only `internal/vfs` may import
+`os`/`syscall`;** the pure core imports neither.
 
 ## Where changes go
 
-- **New CLI command** → add to `cmd/`, grouped by kind (`create.go`, `query.go`,
-  `mutate.go`, `show.go`, `init.go`) and wired in `root.go`. Commands call the
-  `Store`, never the filesystem.
-- **New stored field or behavior** → `sdk/tasks` (`model.go` for the type,
-  `frontmatter.go` for serialization, `validate.go`/`store.go` for the rules),
-  then expose it through the CLI DTOs in `cmd/render.go`.
-- **Output** → human rendering and the snake_case JSON DTOs both live in
-  `cmd/render.go`. Every command supports `--json`; keep the JSON shapes stable
-  for agent consumers.
+| Change | Goes in |
+|---|---|
+| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS |
+| Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
+| Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
+| Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
+| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
 
-## Storage invariants to preserve
+## How to test
 
-- **Validation is layered.** `validate.go` checks self-contained invariants
-  (non-empty title, known enums, priority range, no self/duplicate edges).
-  Referential checks (referenced IDs exist, no dependency cycles) need the whole
-  graph and live in `store.go`. Put new rules on the correct side.
-- **Never persist derived edges.** Only `parent`, `blocked_by`, and `related`
-  are written; children and "blocks" are derived.
-- **Atomic writes only.** Mutations run through the store's lock + temp-file +
-  fsync + rename path (`withLock`). Don't write issue files directly.
-- **Timestamps** are UTC truncated to whole seconds (`defaultNow`) for readable,
-  minimal git diffs.
+- Pure logic → **L1** (no FS). Store orchestration & error paths → **L2** on
+  `vfs.Mem` (with fault injection). Durability, `flock`, round-trip → **L3** real
+  temp dir. CLI → **L4**.
+- Build fixtures with `internal/storetest`; never hand-roll a real `.tasks/`.
+  Deterministic time via `Store.now`. Details in TESTING-STRATEGY.md.
+
+## Keep specs in sync
+
+A change to a CLI command/flag or a public `sdk/tasks` function/type/semantics
+**must update the matching spec in the same change** ([CLI](specs/CLI-SPEC.md),
+[SDK](specs/SDK-SPEC.md), [STORAGE](specs/TASK-STORAGE-SPEC.md),
+[QUERY](specs/QUERY-SPEC.md)). A structural change (packages, the `vfs` seam)
+updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
+
+## Modules
+
+Root (CLI) → SDK via `replace … => ./sdk`; `sdk/` is minimal-dep (only `yaml.v3`);
+`bench/` is standalone, outside build/test. Run `mise run tidy` after changing imports.

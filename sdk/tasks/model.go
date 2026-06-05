@@ -64,11 +64,15 @@ const (
 )
 
 // Comment is an immutable, append-only note on an issue. It is the durable
-// record of decisions and progress.
+// record of decisions and progress. Each comment is stored as one YAML document
+// in the issue's sidecar file (.tasks/comments/<id>.yml).
 type Comment struct {
-	Author  string    `yaml:"author,omitempty"`
-	Created time.Time `yaml:"created"`
-	Body    string    `yaml:"body"`
+	ID       string    `yaml:"id,omitempty"` // opaque random token, ^[0-9a-z]{8}$
+	Author   string    `yaml:"author,omitempty"`
+	Created  time.Time `yaml:"created"`
+	Replaces string    `yaml:"replaces,omitempty"` // ID of an earlier comment this supersedes
+	Deleted  bool      `yaml:"deleted,omitempty"`  // true → tombstone (no Body)
+	Body     string    `yaml:"body,omitempty"`
 }
 
 // Issue is the complete in-memory model of a single task file. It is the unit
@@ -96,7 +100,6 @@ type Issue struct {
 	Closed      time.Time // zero value means not closed
 	CloseReason string
 
-	Comments    []Comment
 	Description string // free-form markdown body of the file
 }
 
@@ -119,11 +122,12 @@ type Ref struct {
 type Detail struct {
 	Issue
 
-	ParentRef *Ref  // resolved Parent, if set and found
-	BlockedBy []Ref // resolved blockers (overrides Issue.BlockedBy IDs for display)
-	Related   []Ref // resolved related issues
-	Blocks    []Ref // derived: issues that list this one in their BlockedBy
-	Children  []Ref // derived: issues whose Parent is this one
+	ParentRef *Ref      // resolved Parent, if set and found
+	BlockedBy []Ref     // resolved blockers (overrides Issue.BlockedBy IDs for display)
+	Related   []Ref     // resolved related issues
+	Blocks    []Ref     // derived: issues that list this one in their BlockedBy
+	Children  []Ref     // derived: issues whose Parent is this one
+	Comments  []Comment // resolved effective comment log (edits applied, tombstones omitted)
 }
 
 // ref builds a Ref from an issue.

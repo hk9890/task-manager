@@ -108,26 +108,26 @@ func TestListFilters(t *testing.T) {
 		t.Errorf("closed should be excluded by default: %v", ids(open))
 	}
 
-	// Type filter.
-	bugs, _ := s.List(Filter{Types: []Type{TypeBug}})
+	// Type filter via Expr.
+	bugs, _ := s.List(Filter{Expr: `type == bug`})
 	if len(bugs) != 1 || bugs[0].ID != bug.ID {
 		t.Errorf("type filter wrong: %v", ids(bugs))
 	}
 
-	// Label filter.
-	labeled, _ := s.List(Filter{Labels: []string{"x"}})
+	// Label filter via Expr.
+	labeled, _ := s.List(Filter{Expr: `label == "x"`})
 	if len(labeled) != 1 || labeled[0].ID != bug.ID {
 		t.Errorf("label filter wrong: %v", ids(labeled))
 	}
 
-	// Text filter.
-	found, _ := s.List(Filter{Text: "BUG"})
+	// Text filter via Expr (case-insensitive ~).
+	found, _ := s.List(Filter{Expr: `text ~ "BUG"`})
 	if len(found) != 1 || found[0].ID != bug.ID {
 		t.Errorf("text filter wrong: %v", ids(found))
 	}
 
-	// Status filter including closed.
-	closed, _ := s.List(Filter{Statuses: []Status{StatusClosed}})
+	// Status filter via Expr: closed scope auto-included.
+	closed, _ := s.List(Filter{Expr: `status == "closed"`})
 	if len(closed) != 1 || closed[0].ID != done.ID {
 		t.Errorf("status filter wrong: %v", ids(closed))
 	}

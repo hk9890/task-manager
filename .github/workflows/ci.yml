@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ── root module ───────────────────────────────────────────────────────
+
+      - name: fmt-check (root)
+        run: |
+          out="$(gofmt -l cmd sdk/tasks main.go)"
+          if [ -n "$out" ]; then
+            echo "unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet (root)
+        run: go vet ./...
+
+      - name: test (root)
+        run: go test ./...
+
+      - name: test integration (root)
+        run: go test -tags integration ./...
+
+      # ── sdk module ────────────────────────────────────────────────────────
+
+      - name: fmt-check (sdk)
+        working-directory: sdk
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet (sdk)
+        working-directory: sdk
+        run: go vet ./...
+
+      - name: test (sdk)
+        working-directory: sdk
+        run: go test ./...
+
+      - name: test integration (sdk)
+        working-directory: sdk
+        run: go test -tags integration ./...
+
+      # ── binary ────────────────────────────────────────────────────────────
+
+      - name: build atctl
+        run: go build -o bin/atctl .

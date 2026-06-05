@@ -88,7 +88,7 @@ var closeReason string
 
 var closeCmd = &cobra.Command{
 	Use:   "close <id>",
-	Short: "Close an issue",
+	Short: "Close an issue: stamp close time, move to cold partition",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := openStore()
@@ -100,6 +100,26 @@ var closeCmd = &cobra.Command{
 			return err
 		}
 		return reportMutation(iss, "Closed")
+	},
+}
+
+var reopenCmd = &cobra.Command{
+	Use:   "reopen <id>",
+	Short: "Move a closed issue back to the active set",
+	Long: `Move a closed issue back to the active set: clear its closed timestamp and
+close_reason, set status to open, and move the file from closed/ back to the
+hot directory.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		iss, err := s.Reopen(args[0])
+		if err != nil {
+			return err
+		}
+		return reportMutation(iss, "Reopened")
 	},
 }
 
@@ -190,11 +210,91 @@ var commentAddCmd = &cobra.Command{
 		if author == "" {
 			author = os.Getenv("USER")
 		}
-		iss, err := s.AddComment(args[0], author, body)
+		c, err := s.AddComment(args[0], author, body)
 		if err != nil {
 			return err
 		}
-		return reportMutation(iss, "Commented on")
+		if flagJSON {
+			return printJSON(commentDTO{
+				ID:      c.ID,
+				Author:  c.Author,
+				Created: c.Created,
+				Body:    c.Body,
+			})
+		}
+		fmt.Printf("Commented on %s (comment %s)\n", args[0], c.ID)
+		return nil
+	},
+}
+
+var commentEditCmd = &cobra.Command{
+	Use:   "edit <id> <comment-id> [body]",
+	Short: "Append a revision to an existing comment",
+	Args:  cobra.RangeArgs(2, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		var body string
+		switch {
+		case commentFlags.file != "":
+			b, err := readFileOrStdin(commentFlags.file)
+			if err != nil {
+				return err
+			}
+			body = string(b)
+		case len(args) == 3:
+			body = args[2]
+		default:
+			return fmt.Errorf("provide a body as an argument or via --file")
+		}
+		if strings.TrimSpace(body) == "" {
+			return fmt.Errorf("comment body is empty; use comment rm to delete")
+		}
+		author := commentFlags.author
+		if author == "" {
+			author = os.Getenv("USER")
+		}
+		c, err := s.EditComment(args[0], args[1], author, body)
+		if err != nil {
+			return err
+		}
+		if flagJSON {
+			return printJSON(commentDTO{
+				ID:       c.ID,
+				Author:   c.Author,
+				Created:  c.Created,
+				Replaces: c.Replaces,
+				Body:     c.Body,
+			})
+		}
+		fmt.Printf("Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
+		return nil
+	},
+}
+
+var commentRmCmd = &cobra.Command{
+	Use:   "rm <id> <comment-id>",
+	Short: "Delete a comment (append a tombstone; idempotent)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		author := commentFlags.author
+		if author == "" {
+			author = os.Getenv("USER")
+		}
+		if err := s.DeleteComment(args[0], args[1], author); err != nil {
+			return err
+		}
+		if flagJSON {
+			return printJSON(map[string]string{"op": "rm", "issue": args[0], "comment_id": args[1]})
+		}
+		fmt.Printf("Deleted comment %s from %s\n", args[1], args[0])
+		return nil
 	},
 }
 
@@ -224,11 +324,19 @@ func init() {
 
 	closeCmd.Flags().StringVar(&closeReason, "reason", "", "reason for closing")
 
+	rootCmd.AddCommand(reopenCmd)
+
 	depCmd.AddCommand(depAddCmd, depRmCmd)
 
 	commentAddCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
 	commentAddCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
-	commentCmd.AddCommand(commentAddCmd)
+
+	commentEditCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
+	commentEditCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
+
+	commentRmCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author for tombstone (default: $USER)")
+
+	commentCmd.AddCommand(commentAddCmd, commentEditCmd, commentRmCmd)
 
 	rootCmd.AddCommand(updateCmd, closeCmd, depCmd, commentCmd)
 }

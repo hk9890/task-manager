@@ -1,17 +1,37 @@
 package tasks
 
 import (
+	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
 )
 
 // openBlockers returns the IDs of an issue's blockers that are not yet closed.
-// A blocker that no longer exists is treated as resolved.
-func openBlockers(idx map[string]*Issue, iss *Issue) []string {
+//
+// A blocker present in the hot index (idx) is open if its status is not closed.
+// A blocker absent from the hot index is checked against the closed/ partition
+// via a cheap vfs.Stat: if found there it is resolved (closed); if found in
+// neither partition it is dangling — also treated as resolved here because
+// dangling refs are rejected at write time by checkRefs and should not arise
+// during ordinary ready/blocked computation. This satisfies TASK-STORAGE-SPEC
+// §9: "A blocker that exists in closed/ counts as resolved."
+func openBlockers(idx map[string]*Issue, closedStat func(id string) bool, iss *Issue) []string {
 	var open []string
 	for _, b := range iss.BlockedBy {
 		blk, ok := idx[b]
 		if !ok {
+			// Not in the hot set. If it's in closed/ it is resolved; otherwise
+			// treat as resolved too (dangling refs cannot reach here in a valid
+			// store — checkRefs prevents them at write time).
+			if !closedStat(b) {
+				// Dangling: not in hot, not in closed. Per spec this should have
+				// been caught at write time; treat as unresolved to surface the
+				// inconsistency rather than silently marking the issue as ready.
+				open = append(open, b)
+			}
+			// Found in closed/ → resolved; skip.
 			continue
 		}
 		if !blk.Status.IsClosed() {
@@ -21,6 +41,16 @@ func openBlockers(idx map[string]*Issue, iss *Issue) []string {
 	return open
 }
 
+// closedStatFn returns a function that checks whether an issue ID exists in the
+// closed/ partition using a cheap vfs.Stat (no parse). The returned function is
+// safe to call multiple times; each call performs one Stat.
+func (s *Store) closedStatFn() func(id string) bool {
+	return func(id string) bool {
+		_, err := s.fs.Stat(s.closedFilePath(id))
+		return err == nil
+	}
+}
+
 // Ready returns open issues with no unresolved blockers, ordered by priority
 // (most urgent first) then creation time.
 func (s *Store) Ready() ([]*Issue, error) {
@@ -28,12 +58,13 @@ func (s *Store) Ready() ([]*Issue, error) {
 	if err != nil {
 		return nil, err
 	}
+	closedStat := s.closedStatFn()
 	var ready []*Issue
 	for _, iss := range all {
 		if iss.Status != StatusOpen {
 			continue
 		}
-		if len(openBlockers(idx, iss)) == 0 {
+		if len(openBlockers(idx, closedStat, iss)) == 0 {
 			ready = append(ready, iss)
 		}
 	}
@@ -54,18 +85,24 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 	if err != nil {
 		return nil, err
 	}
+	closedStat := s.closedStatFn()
 	var blocked []BlockedIssue
 	for _, iss := range all {
 		if iss.Status.IsClosed() {
 			continue
 		}
-		open := openBlockers(idx, iss)
+		open := openBlockers(idx, closedStat, iss)
 		if len(open) == 0 {
 			continue
 		}
 		bi := BlockedIssue{Issue: iss}
 		for _, id := range open {
-			bi.BlockedBy = append(bi.BlockedBy, ref(idx[id]))
+			if blk, ok := idx[id]; ok {
+				bi.BlockedBy = append(bi.BlockedBy, ref(blk))
+			}
+			// Dangling blockers are included in open (see openBlockers) but
+			// cannot be resolved to a ref — they are omitted from BlockedBy
+			// refs. The issue still appears in Blocked to surface the inconsistency.
 		}
 		blocked = append(blocked, bi)
 	}
@@ -76,7 +113,14 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 }
 
 // Detail loads an issue and resolves both its outgoing references and its
-// derived inverse edges (children, blocks).
+// derived inverse edges (children, blocks). It also loads the comment sidecar
+// lazily and populates Detail.Comments with the resolved effective log.
+// Detail falls through to closed/ when the issue is not in the hot set.
+//
+// Ref resolution falls through to closed/ (SDK-SPEC §4): if a parent, blocker,
+// or related ref is not found in the hot index, Detail calls Get (which already
+// handles the hot→closed fall-through) and populates the ref from the closed
+// issue's metadata.
 func (s *Store) Detail(id string) (*Detail, error) {
 	idx, all, err := s.index()
 	if err != nil {
@@ -84,23 +128,54 @@ func (s *Store) Detail(id string) (*Detail, error) {
 	}
 	iss, ok := idx[id]
 	if !ok {
-		return nil, errNotFound(id)
+		// Fall through to closed/.
+		iss, err = s.Get(id)
+		if err != nil {
+			return nil, err
+		}
 	}
 	d := &Detail{Issue: *iss}
-	if iss.Parent != "" {
-		if p, ok := idx[iss.Parent]; ok {
-			r := ref(p)
-			d.ParentRef = &r
+
+	// resolveRef returns a Ref for id, first from the hot index and, if absent,
+	// by falling through to closed/ via Get (cheap: closed reads are lock-free).
+	resolveRef := func(refID string) (*Ref, error) {
+		if x, ok := idx[refID]; ok {
+			r := ref(x)
+			return &r, nil
 		}
+		// Not in hot set — try closed/.
+		x, err := s.Get(refID)
+		if err != nil {
+			// Truly dangling (should not happen post-checkRefs, but be defensive).
+			return nil, nil //nolint:nilerr
+		}
+		r := ref(x)
+		return &r, nil
+	}
+
+	if iss.Parent != "" {
+		r, err := resolveRef(iss.Parent)
+		if err != nil {
+			return nil, fmt.Errorf("resolve parent ref %s: %w", iss.Parent, err)
+		}
+		d.ParentRef = r
 	}
 	for _, b := range iss.BlockedBy {
-		if x, ok := idx[b]; ok {
-			d.BlockedBy = append(d.BlockedBy, ref(x))
+		r, err := resolveRef(b)
+		if err != nil {
+			return nil, fmt.Errorf("resolve blocker ref %s: %w", b, err)
+		}
+		if r != nil {
+			d.BlockedBy = append(d.BlockedBy, *r)
 		}
 	}
-	for _, r := range iss.Related {
-		if x, ok := idx[r]; ok {
-			d.Related = append(d.Related, ref(x))
+	for _, relID := range iss.Related {
+		r, err := resolveRef(relID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve related ref %s: %w", relID, err)
+		}
+		if r != nil {
+			d.Related = append(d.Related, *r)
 		}
 	}
 	for _, other := range all {
@@ -116,6 +191,12 @@ func (s *Store) Detail(id string) (*Detail, error) {
 			}
 		}
 	}
+	// Load comments from the sidecar (lazy; zero cost for All/Ready/List).
+	stream, err := readCommentStream(s.fs, s.commentsPath(id))
+	if err != nil {
+		return nil, fmt.Errorf("load comments for %s: %w", id, err)
+	}
+	d.Comments = resolveComments(stream)
 	return d, nil
 }
 
@@ -166,20 +247,21 @@ func findCycle(idx map[string]*Issue, start string) string {
 }
 
 // Filter selects and orders issues for List.
+//
+// Scope semantics (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
+//   - By default only the hot (active) set is scanned. Closed issues in
+//     closed/ are never read unless explicitly requested.
+//   - Set IncludeClosed:true to read both hot and cold partitions.
+//   - Set Expr to a filter expression (QUERY-SPEC.md); if the expression
+//     references closed work (status == "closed", or a closed field comparison),
+//     the cold partition is included automatically — IncludeClosed need not be
+//     set explicitly in that case.
 type Filter struct {
-	Statuses      []Status
-	Types         []Type
-	PriorityMin   *int
-	PriorityMax   *int
-	Assignee      string
-	Labels        []string // issue must carry every listed label
-	Text          string   // case-insensitive substring of ID, title, or body
-	IncludeClosed bool     // when Statuses is empty, whether to include closed issues
-	OnlyReady     bool
-	OnlyBlocked   bool
-	Sort          SortField
-	Reverse       bool
-	Limit         int
+	Expr          string    // filter expression (QUERY-SPEC.md); closed-scope auto-detected
+	IncludeClosed bool      // when true, read closed/ in addition to the hot set
+	Sort          SortField // presentation order
+	Reverse       bool      // reverse the sort order
+	Limit         int       // 0 = no limit
 }
 
 // SortField names the orderings List understands.
@@ -194,58 +276,85 @@ const (
 	SortClosed   SortField = "closed"
 )
 
+// Query selects issues using a filter expression (QUERY-SPEC.md §1).
+//
+// Scope semantics (QUERY-SPEC.md §5):
+//   - The closed/ partition is included automatically when the expression
+//     references closed work: a status == "closed" comparison, or any
+//     comparison against the closed field (e.g. closed > "2026-01-01").
+//   - All other expressions operate on the hot (active) set only.
+//
+// An empty or whitespace-only expression matches every issue in scope (the
+// always-true predicate — see QUERY-SPEC.md §1).
+//
+// This method is equivalent to List(Filter{Expr: expr}); callers that also
+// need sort/limit control should use List with an Expr set in the Filter.
+func (s *Store) Query(expr string) ([]*Issue, error) {
+	return s.List(Filter{Expr: expr})
+}
+
 // List returns issues matching the filter in the requested order.
+//
+// Scope (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
+//   - Default: hot (active) set only — closed/ is never opened.
+//   - IncludeClosed:true: hot + cold partitions.
+//   - f.Expr references closed work (status=="closed" or closed field comparison):
+//     cold partition is auto-included.
+//
+// Callers must never depend on the cold partition being scanned silently —
+// always set IncludeClosed or use an expression that opts in explicitly.
+//
+// A malformed f.Expr returns a *ParseError and nothing is read from disk.
 func (s *Store) List(f Filter) ([]*Issue, error) {
-	idx, all, err := s.index()
+	// Compile the expression first — return *ParseError before touching disk.
+	pred, err := compileExpr(f.Expr)
 	if err != nil {
 		return nil, err
 	}
 
-	statusSet := map[Status]struct{}{}
-	for _, st := range f.Statuses {
-		statusSet[st] = struct{}{}
+	// Decide whether to include the closed partition.
+	needClosed := f.IncludeClosed
+	if !needClosed && f.Expr != "" {
+		needClosed = query.ReferencesClosedWork(f.Expr)
 	}
-	typeSet := map[Type]struct{}{}
-	for _, t := range f.Types {
-		typeSet[t] = struct{}{}
+
+	_, all, err := s.index()
+	if err != nil {
+		return nil, err
 	}
-	text := strings.ToLower(strings.TrimSpace(f.Text))
+
+	if needClosed {
+		closed, err := s.allClosed()
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, closed...)
+	}
+
+	// Rebuild idx from all (including closed if loaded).
+	idx := make(map[string]*Issue, len(all))
+	for _, iss := range all {
+		idx[iss.ID] = iss
+	}
+
+	// closedStat is used by openBlockers to check whether a blocker not in the
+	// hot index lives in the closed/ partition. When needClosed is true the idx
+	// already contains closed issues (Stat would be redundant but harmless).
+	closedStat := s.closedStatFn()
 
 	var out []*Issue
 	for _, iss := range all {
-		if len(statusSet) > 0 {
-			if _, ok := statusSet[iss.Status]; !ok {
-				continue
-			}
-		} else if iss.Status.IsClosed() && !f.IncludeClosed {
+		// Scope guard: exclude closed issues unless the caller opted in.
+		if iss.Status.IsClosed() && !needClosed {
 			continue
 		}
-		if len(typeSet) > 0 {
-			if _, ok := typeSet[iss.Type]; !ok {
-				continue
-			}
-		}
-		if f.PriorityMin != nil && iss.Priority < *f.PriorityMin {
+
+		// Expression filter: evaluate using the compiled predicate and the Row adapter.
+		row := newIssueRow(iss, idx, closedStat)
+		if !pred.Match(row) {
 			continue
 		}
-		if f.PriorityMax != nil && iss.Priority > *f.PriorityMax {
-			continue
-		}
-		if f.Assignee != "" && iss.Assignee != f.Assignee {
-			continue
-		}
-		if !hasAllLabels(iss, f.Labels) {
-			continue
-		}
-		if text != "" && !matchesText(iss, text) {
-			continue
-		}
-		if f.OnlyReady && !(iss.Status == StatusOpen && len(openBlockers(idx, iss)) == 0) {
-			continue
-		}
-		if f.OnlyBlocked && len(openBlockers(idx, iss)) == 0 {
-			continue
-		}
+
 		out = append(out, iss)
 	}
 
@@ -259,28 +368,6 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 		out = out[:f.Limit]
 	}
 	return out, nil
-}
-
-func hasAllLabels(iss *Issue, want []string) bool {
-	if len(want) == 0 {
-		return true
-	}
-	have := make(map[string]struct{}, len(iss.Labels))
-	for _, l := range iss.Labels {
-		have[l] = struct{}{}
-	}
-	for _, w := range want {
-		if _, ok := have[w]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func matchesText(iss *Issue, lowered string) bool {
-	return strings.Contains(strings.ToLower(iss.ID), lowered) ||
-		strings.Contains(strings.ToLower(iss.Title), lowered) ||
-		strings.Contains(strings.ToLower(iss.Description), lowered)
 }
 
 func sortIssues(issues []*Issue, field SortField) {

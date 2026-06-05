@@ -77,10 +77,11 @@ live in the sidecar and are loaded on demand (§4, `Detail` / `Comments`).
 
 ```go
 type Comment struct {
-    ID       int       // per-issue, monotonic from 1
+    ID       string    // opaque random token, ^[0-9a-z]{8}$ (self-assigned on append)
     Author   string
     Created  time.Time
-    Replaces int       // 0, or the ID of a comment this one supersedes
+    Replaces string    // "", or the id of a comment this one supersedes
+    Deleted  bool      // true → tombstone retracting Replaces (Body is empty)
     Body     string
 }
 ```
@@ -163,11 +164,11 @@ fields are applied.
 
 ```go
 type Filter struct {
-    Expr          string    // filter expression — the selector (CLI spec §3.1)
-    IncludeClosed bool      // scope: include closed issues
-    Sort          SortField // presentation
-    Reverse       bool
-    Limit         int
+    Expr          string    // filter expression (QUERY-SPEC.md); closed-scope auto-detected
+    IncludeClosed bool      // scope: include closed issues (reads closed/ partition)
+    Sort          SortField // presentation order
+    Reverse       bool      // reverse the sort order
+    Limit         int       // 0 = no limit
 }
 
 type SortField string
@@ -177,6 +178,19 @@ const (
 )
 ```
 
+All filtering (by status, type, priority, assignee, label, text, ready/blocked, dates)
+is expressed via the `Expr` field using the filter-expression language
+(see [QUERY-SPEC.md](QUERY-SPEC.md)). The empty expression is the always-true predicate.
+
+**Scope semantics (TASK-STORAGE-SPEC §5, QUERY-SPEC.md §5):**
+- By default (`IncludeClosed:false`, no closed-referencing `Expr`)
+  only the hot (active) set is scanned. The `closed/` partition is never opened.
+- `IncludeClosed:true`: reads both hot and cold partitions.
+- `Expr` references closed work (e.g. `status == "closed"` or a `closed` date comparison):
+  cold partition is auto-included; `IncludeClosed` need not be set explicitly.
+- Callers must never rely on the cold partition being scanned silently — they must
+  explicitly opt in. `All()`, `Ready()`, `Blocked()`, and `Labels()` are always hot-only.
+
 ---
 
 ## 4. Store methods
@@ -185,8 +199,8 @@ const (
 
 ```go
 func (s *Store) Get(id string) (*Issue, error)        // one issue (falls through to closed/)
-func (s *Store) All() ([]*Issue, error)               // active set, sorted by ID
-func (s *Store) Query(expr string) ([]*Issue, error)  // select by filter expression (CLI spec §3.1)
+func (s *Store) All() ([]*Issue, error)               // hot (active) set only, sorted by ID
+func (s *Store) Query(expr string) ([]*Issue, error)  // select by filter expression (QUERY-SPEC.md)
 func (s *Store) List(f Filter) ([]*Issue, error)      // Query + scope/sort/limit via Filter
 func (s *Store) Ready() ([]*Issue, error)             // open, no open blockers
 func (s *Store) Blocked() ([]BlockedIssue, error)     // non-closed with an open blocker
@@ -202,11 +216,26 @@ type BlockedIssue struct {
 }
 ```
 
-- **`Query`** / **`List`** / **`Ready`** / **`Blocked`** read the active set by
-  default; passing `IncludeClosed` (or an expression that selects closed issues)
-  reads the cold partition too.
+- **`All`** returns only the hot (active) set — it never descends into `closed/` or
+  `comments/`. It is the cheapest scan: O(open issues), regardless of how many
+  closed issues exist. Use `List(Filter{IncludeClosed:true})` to read history.
+- **`Query`** / **`List`** parse and evaluate the **filter-expression language**;
+  the engine is its sole implementation (the CLI just forwards a string). The
+  grammar, fields, operators, and error semantics are defined in
+  [QUERY-SPEC.md](QUERY-SPEC.md); a malformed expression returns a `*ParseError`
+  (§6), not a match.
+- **`Query`** / **`List`** read the active set by default; passing
+  `IncludeClosed:true` **or** using an expression that references closed work
+  (e.g. `status == "closed"` or a `closed` date comparison) includes the cold
+  partition. See Filter scope semantics in §3.
+- **`Ready`** / **`Blocked`** / **`Labels`** are always hot-only. They are O(open)
+  and never read `closed/`. Use `List(Filter{IncludeClosed:true})` for history.
 - **`Detail`** resolves `ParentRef`, `BlockedBy`, `Related`, computes `Blocks` and
   `Children` by scanning, and loads `Comments` from the sidecar.
+- **`Comments`** / **`Detail.Comments`** return the **resolved effective log**: each
+  `replaces`-chain collapsed to its newest document, tombstoned comments omitted
+  (storage spec §4.4). The on-disk stream keeps full history; the API returns the
+  current view.
 
 ### Write (validated, under the lock)
 
@@ -215,8 +244,9 @@ func (s *Store) Create(in CreateInput) (*Issue, error)
 func (s *Store) Update(id string, in UpdateInput) (*Issue, error)
 func (s *Store) Close(id, reason string) (*Issue, error)   // idempotent; moves to closed/
 func (s *Store) Reopen(id string) (*Issue, error)          // moves back to active
-func (s *Store) AddComment(id, author, body string) (*Issue, error)
-func (s *Store) EditComment(id string, commentID int, author, body string) (*Issue, error)
+func (s *Store) AddComment(id, author, body string) (*Comment, error)         // returns the new comment (with its id)
+func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) // appends a revision; returns the new effective comment
+func (s *Store) DeleteComment(id, commentID, author string) error             // appends a tombstone
 func (s *Store) AddDep(dependent, blocker string) error    // idempotent; rejects self/cycle
 func (s *Store) RemoveDep(dependent, blocker string) error
 ```
@@ -225,10 +255,15 @@ func (s *Store) RemoveDep(dependent, blocker string) error
   the project lock.
 - **`Create`** allocates the next ID, applies defaults (`TypeTask`,
   `PriorityDefault`, `StatusOpen`), de-duplicates labels/edges, and validates.
-- **`AddComment`** appends to the sidecar (sanitizing the body); **`EditComment`**
-  appends a revision with `Replaces` set.
-- **`Close`** sets the closed timestamp/reason and relocates the file; **`Reopen`**
-  reverses it.
+- **`AddComment`** appends a new comment and returns it, including its freshly
+  allocated random `ID` (the handle a caller needs for a later edit/delete);
+  **`EditComment`** appends a revision with `Replaces` set and returns the new
+  effective comment; **`DeleteComment`** appends a tombstone (`Replaces` set,
+  `Deleted: true`, empty body). All three sanitize the body and run under the store
+  lock; none rewrites the task file (the sidecar is append-only, storage §4.4).
+- **`Close`** sets the closed timestamp/reason and relocates the file to `closed/`;
+  **`Reopen`** moves it back to the hot set, clears the close fields, and sets
+  `StatusOpen` (the pre-close status is not persisted).
 
 ---
 
@@ -254,8 +289,14 @@ var (
     ErrAlreadyExists // issue already exists
     ErrNoStore       // no .tasks directory found
     ErrStoreExists   // .tasks directory already exists
+    ErrImmutable     // attempted in-place write to a closed issue (closed/ partition)
 )
 ```
+
+`ErrImmutable` is returned by `Update` and `Close` when the target issue lives in
+`closed/`. Use `Reopen` to restore mutability; `AddComment` / `EditComment` /
+`DeleteComment` are still allowed on closed issues (sidecar append is the one
+exception — see storage spec §5).
 
 Validation failures return a typed error carrying the offending field:
 
@@ -268,15 +309,26 @@ The store rejects (before any byte is written) every invariant listed in the
 storage spec: empty title, unknown enum, priority out of range, self/duplicate/
 dangling references, dependency cycles, and field-constraint violations.
 
+A malformed filter expression (`Query` / `List`) returns a typed parse error
+locating the failure; it is not a validation error and never reaches disk:
+
+```go
+type ParseError struct { Pos int; Message string } // Pos = byte offset in the expression
+func (e *ParseError) Error() string
+```
+
+The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §1.
+
 ---
 
 ## 7. Concurrency & durability contract
 
-- **One writer per project.** Every mutating method runs under an exclusive
-  advisory lock (`flock`) on the project. Concurrent processes serialize; reads are
+- **One writer per store.** Every mutating method runs under an exclusive advisory
+  lock (`flock` on `.tasks/.lock`). Concurrent processes serialize; reads are
   lock-free.
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
-  never observes a torn file.
+  never observes a torn file — except the append-only comment sidecar (§4), which is
+  grown with `O_APPEND` + `fsync` rather than rewritten.
 - **Read consistency.** Read methods take a fresh directory snapshot per call; a
   returned `*Issue` is a copy the caller may mutate without affecting disk.
 

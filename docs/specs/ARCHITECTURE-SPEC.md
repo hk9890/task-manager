@@ -37,7 +37,7 @@ the files except through the engine.
 
 ```
         ┌──────────────┐      ┌─────────────────────┐
-        │  atctl (CLI) │      │  viewer / other apps │     front ends (thin)
+        │  atctl (CLI) │      │  future consumers    │     front ends (thin)
         └──────┬───────┘      └──────────┬──────────┘
                │     import / invoke      │
                └────────────┬─────────────┘
@@ -51,9 +51,10 @@ the files except through the engine.
                  └────────────────────┘
 ```
 **Every front end goes through the engine — and only the engine.** A front end
-never reads or writes files directly; it calls SDK functions. The same boundary
-lets new front ends (a viewer, or a web server exposing task operations over REST)
-sit on the engine without duplicating storage or validation logic.
+never reads or writes files directly; it calls SDK functions. The CLI (`atctl`) is
+the first and currently only consumer; the same boundary would let a future
+consumer (e.g. a viewer or an HTTP server) sit on the engine without duplicating
+storage or validation logic. Those are illustrations, not planned work — see §9.
 
 - **Engine (`sdk/tasks`)** — the only code that reads or writes issue files. It
   enforces the on-disk format, validates input, computes ready/blocked and derived
@@ -90,16 +91,46 @@ github.com/hk9890/agent-tasks            root module — the atctl CLI (cobra)
 
 ## 5. The engine
 
-`sdk/tasks` is organized by responsibility:
+`sdk/tasks` is divided into a **pure core** (no filesystem access) and an
+**imperative shell** that bridges the core to the `internal/vfs` disk seam.
+
+### Package layout
+
+| Package | Kind | Responsibility |
+|---|---|---|
+| `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
+| `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
+| `tasks/internal/vfs` | disk seam | **The only package that calls `os`/`syscall`.** `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
+
+### Pure-core files (no `os`, no `internal/vfs`)
 
 | File | Responsibility |
 |---|---|
 | `model.go` | `Issue`, `Comment`, `Ref`, `Detail`; status/type enums; priority bounds. |
+| `ids.go` | `parseIDNum` + `nextIDFromNames`: high-water ID allocation over a name list. |
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
-| `store.go` | Discovery, locking, atomic writes, CRUD, ID allocation. |
-| `ready.go` | Ready/blocked, cycle detection, filtering/listing, detail resolution. |
 | `validate.go` | Single-issue field invariants. |
-| `lock_unix.go` / `lock_other.go` | Advisory `flock` (unix) and a fallback. |
+| `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
+
+### Imperative-shell files (may import `internal/vfs`)
+
+| File | Responsibility |
+|---|---|
+| `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `nextIDFromNames` with the directory listing it reads via the seam. |
+| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+
+### vfs seam and os/syscall confinement
+
+`internal/vfs` is the **sole** location for `os`/`syscall` calls. Every other
+package (pure core and imperative shell alike) calls filesystem operations via
+the `vfs.FS` interface. This confinement is enforced at two levels:
+
+- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`.
+- **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
+  fails the build if any non-test, non-vfs file imports `os` or `syscall`;
+  `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
+  `internal/vfs` import.
 
 ---
 
@@ -108,11 +139,12 @@ github.com/hk9890/agent-tasks            root module — the atctl CLI (cobra)
 Every mutation follows the same path, which is where the "one writer" guarantee is
 enforced:
 
-1. **Acquire the project lock** (`flock`); concurrent writers serialize here.
+1. **Acquire the store lock** (`flock`); concurrent writers serialize here.
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
-4. **Write atomically**: temp file + `fsync` + `rename` over the target.
+4. **Write atomically**: temp file + `fsync` + `rename` over the target (the
+   append-only comment sidecar is the one exception — `O_APPEND` + `fsync`).
 5. **Release the lock.**
 
 Reads take a fresh snapshot of the directory and never hold the lock.
@@ -122,7 +154,7 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 ## 7. Core invariants
 
 - **One writer.** All file access funnels through the engine under an exclusive
-  per-project lock. This is the precondition for validation and atomicity.
+  store-wide lock. This is the precondition for validation and atomicity.
 - **Derived inverse edges.** Only `parent`, `blocked_by`, and `related` are stored,
   on the dependent issue. Children and "blocks" are always computed by scanning, so
   the on-disk graph cannot contradict itself.
@@ -134,15 +166,14 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 ---
 
 ## 8. Consumers
-- **`atctl`** — the agent/human CLI. Stateless; each invocation opens the store,
-  performs one operation, and exits.
-- **A viewer / workbench** — imports the engine and implements its own data layer
-  directly over the SDK types, with no subprocess and no serialization contract in
-  between. During local development it points at the engine with a `replace`
-  directive.
-- **A web server** — consumes the engine and exposes task operations over a REST
-  (or similar) HTTP API for remote or non-Go clients. Like every consumer it goes
-  through the SDK, never the files.
+- **`atctl`** — the agent/human CLI and the first (currently only) consumer to be
+  built. Stateless; each invocation opens the store, performs one operation, and
+  exits.
+- **Future consumers (illustrative, none planned).** Any Go program can import the
+  engine and work against the same files — for example a graphical viewer, or an
+  HTTP server exposing task operations to non-Go clients. If one is built it imports
+  the SDK like any other consumer (no subprocess, no wire protocol) and gets its own
+  spec — e.g. a REST spec — at that time.
 
 ---
 
@@ -153,9 +184,13 @@ Deliberately out of scope, because they are unused weight:
 - memories / notes-as-knowledge, "prime"-style context dumps;
 - external tracker integrations (Jira, Linear, GitHub);
 - a database or SQL backend; a sync engine or federation;
-- coordination gates, swarms, configurable status/type catalogs.
+- coordination gates, swarms, configurable status/type catalogs;
+- **multi-project workspaces** — a store tracks exactly one project, committed with
+  its repo; there is no enclosing workspace or `--project` selection;
+- a **REST / HTTP API** or other remote front end — a future possibility, not built;
+  if added it would import the SDK and get its own spec.
 
-A small **filter-expression language** for selecting issues (CLI spec §3.1) is in
+A small **filter-expression language** for selecting issues (QUERY-SPEC.md) is in
 scope; a general SQL/query engine backed by a database is not.
 
 The store is plain files under existing version control; anything an external

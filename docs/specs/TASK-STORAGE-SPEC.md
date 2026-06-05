@@ -28,38 +28,31 @@ format and schema of every file type, and the invariants every file must satisfy
 
 ## 2. Directory layout
 
-The store root is a `.tasks/` directory. It is a **workspace** that holds one or
-more **projects**, each in its own subdirectory named for its ID prefix.
+The store is a single `.tasks/` directory committed alongside the project it
+tracks — **one tracker per repository**. It holds that one project's issues
+directly; there is no enclosing workspace and no project subdirectories.
 
 ```
-.tasks/                          # workspace root
-├── dtt/                         # a project; directory name == ID prefix
-│   ├── config.yaml              # project config
-│   ├── .lock                    # advisory write lock (not an issue)
-│   ├── dtt-0001.md              # an active task file (filename == canonical ID)
-│   ├── dtt-0002.md
-│   ├── comments/                # comment sidecars for ALL issues, open or closed
-│   │   ├── dtt-0001.yml         #   (cold; never parsed by the hot scan)
-│   │   ├── dtt-0002.yml
-│   │   └── dtt-0003.yml         #   a closed issue keeps its sidecar here
-│   └── closed/                  # closed task files (cold, immutable)
-│       └── dtt-0003.md
-└── app/                         # a second, fully independent project
-    ├── config.yaml
-    └── app-0001.md
+.tasks/                          # store root (one project, committed with the repo)
+├── config.yaml                  # project config (carries the ID prefix)
+├── .lock                        # advisory write lock (not an issue)
+├── dtt-0001.md                  # an active task file (filename == canonical ID)
+├── dtt-0002.md
+├── comments/                    # comment sidecars for ALL issues, open or closed
+│   ├── dtt-0001.yml             #   (cold; never parsed by the hot scan)
+│   ├── dtt-0002.yml
+│   └── dtt-0003.yml             #   a closed issue keeps its sidecar here
+└── closed/                      # closed task files (cold, immutable)
+    └── dtt-0003.md
 ```
 
 Rules:
 
-- The **workspace** (`.tasks/`) contains only project directories. It has no files
-  of its own.
-- A **project directory** is the unit of isolation: its own config, its own lock,
-  its own ID space, its own hot/cold scan. Cross-project work never contends on a
-  shared lock.
-- The directory name **is** the prefix. `config.yaml`'s `prefix` must equal it.
-- The **hot set** is the project directory's top level: the `*.md` task files of
-  non-closed issues. `closed/` and `comments/` are subdirectories and are excluded
-  from the hot scan by construction (the scan ignores subdirectories).
+- The store holds **exactly one project**. The ID prefix comes from `config.yaml`,
+  not from the directory name (the directory is always `.tasks`).
+- The **hot set** is the store's top level: the `*.md` task files of non-closed
+  issues. `closed/` and `comments/` are subdirectories and are excluded from the
+  hot scan by construction (the scan ignores subdirectories).
 - A reader resolving a single issue or a reference may descend into `closed/`; the
   bulk "list active work" path never does.
 
@@ -70,13 +63,13 @@ Rules:
 - **Format:** `<prefix>-<NNNN>`, e.g. `dtt-0042`. `NNNN` is decimal, zero-padded to
   at least four digits, and grows past four when needed (`dtt-12345`).
 - **Full pattern:** `^[a-z][a-z0-9]*-[0-9]{4,}$`, max length 64.
-- **Prefix:** matches `^[a-z][a-z0-9]*$`, max length 32, equals the project
-  directory name.
+- **Prefix:** matches `^[a-z][a-z0-9]*$`, max length 32; declared in
+  `config.yaml`. Every issue ID in the store shares it.
 - **Canonical and stable.** An ID never changes. It appears in three places that
   must agree: the filename (`dtt-0042.md`), the frontmatter `id` field, and any
   references to it from other issues.
 - **Allocation:** `max(existing) + 1`, where `existing` is scanned across **all
-  partitions of the project** — the hot directory **and** `closed/` (and any
+  partitions of the store** — the hot directory **and** `closed/` (and any
   future cold partition). There is no counter file (it would be the worst git
   merge hotspot). Scanning closed issues for the high-water mark is mandatory:
   skipping it re-issues an ID already taken by a closed task.
@@ -94,20 +87,20 @@ an epic is just an issue that others name as `parent`.
 Five file types exist. Each section gives the path, purpose, format, schema, and a
 concrete example.
 
-### 4.1 Workspace
+### 4.1 Store root
 
 | | |
 |---|---|
 | **Path** | `.tasks/` |
-| **Role** | Marker directory that anchors store discovery and groups projects. |
-| **Contents** | Only project directories. No loose files. |
+| **Role** | Marker directory that anchors store discovery and holds the project. |
+| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/` and `closed/` subdirectories. |
 
 ### 4.2 Project config — `config.yaml`
 
 | | |
 |---|---|
-| **Path** | `.tasks/<prefix>/config.yaml` |
-| **Role** | Per-project configuration. One per project. |
+| **Path** | `.tasks/config.yaml` |
+| **Role** | Store configuration. Exactly one. |
 | **Format** | A single YAML document. |
 
 ```yaml
@@ -116,7 +109,7 @@ prefix: dtt
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max 32, equals the directory name. |
+| `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max 32. The ID prefix for every issue in the store. |
 
 Unknown keys must be ignored by readers, never rejected.
 
@@ -124,7 +117,7 @@ Unknown keys must be ignored by readers, never rejected.
 
 | | |
 |---|---|
-| **Path** | `.tasks/<prefix>/<id>.md` (active) or `.tasks/<prefix>/closed/<id>.md` (closed) |
+| **Path** | `.tasks/<id>.md` (active) or `.tasks/closed/<id>.md` (closed) |
 | **Role** | The unit of storage: exactly one issue per file. |
 | **Format** | A `---`-fenced YAML frontmatter block, then the markdown body. |
 
@@ -196,7 +189,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 
 | | |
 |---|---|
-| **Path** | `.tasks/<prefix>/comments/<id>.yml` |
+| **Path** | `.tasks/comments/<id>.yml` |
 | **Role** | The append-only comment log for one issue. Created lazily on first comment. |
 | **Format** | A **multi-document YAML stream**: one document per comment, in chronological order, separated by `---`. |
 
@@ -248,7 +241,10 @@ deleted: true
 
 1. **Append-only.** Every change — a new comment, an edit, or a delete — is a new
    document appended to the stream (`---\n` + the document). Existing documents are
-   never rewritten. Appending does not touch the task file.
+   never rewritten. The sidecar is the **one** file extended in place: it is grown
+   with an `O_APPEND` + `fsync` write under the store lock (§7), not the
+   temp-file + `rename` used for every other file (the single exception to §6).
+   Appending does not touch the task file.
 2. **Identity & ordering.** A comment's `id` is an opaque, stable random handle; it
    carries no ordering. Documents are stored in chronological **append order**, so
    position — not the id — gives sequence.
@@ -259,7 +255,9 @@ deleted: true
    is preserved); a reader resolves each `replaces` chain to its newest document and
    renders that as effective — the comment's current text, or nothing if the newest
    is a tombstone — treating superseded documents as history. `replaces` chains are
-   allowed (an edit of an edit, or a delete of an edit).
+   allowed (an edit of an edit, or a delete of an edit). If two documents `replaces`
+   the **same** id (e.g. concurrent edits merged from two branches), the one
+   appearing later in the stream wins — position gives sequence (rule 2).
 4. **Body sanitization is mandatory.** Before serialization the writer must
    normalize each body: convert CRLF/CR to LF, and strip trailing whitespace from
    every line. This forces YAML to emit a readable block scalar (`body: |`)
@@ -280,15 +278,15 @@ deleted: true
 
 | | |
 |---|---|
-| **Path** | `.tasks/<prefix>/.lock` |
-| **Role** | Advisory exclusive write lock for the project (§7). Not an issue; never parsed. |
+| **Path** | `.tasks/.lock` |
+| **Role** | Advisory exclusive write lock for the store (§7). Not an issue; never parsed. |
 | **Format** | Empty; only its `flock` state matters. |
 
 ---
 
 ## 5. Lifecycle, partitions, and immutability
 
-An issue is **active** while its file lives in the project's hot directory and
+An issue is **active** while its file lives in the store's hot directory and
 **closed** once it lives in `closed/`.
 
 - **Open / in_progress / blocked** issues are active; their files are mutable and
@@ -297,10 +295,12 @@ An issue is **active** while its file lives in the project's hot directory and
   `close_reason` if given), bump `updated`, then **move** the task `.md` into
   `closed/`. The comment sidecar stays in `comments/` (only the task file moves).
   The move is a git rename — history is preserved.
-- **Closed files are immutable.** Writes to anything under `closed/` are rejected,
-  with one exception: the comment sidecar remains append-only (§4.4.6).
+- **Closed files are immutable in place.** While a file resides in `closed/`, no
+  in-place write to it is allowed — the one exception is its append-only comment
+  sidecar (§4.4.6). Reopening is **not** an in-place edit: it moves the file out of
+  `closed/` first, then edits it in the hot directory (see below).
 - **Reopening** moves the file back to the hot directory, clears `closed` /
-  `close_reason`, sets a non-closed status, and re-enables writes.
+  `close_reason`, sets `status: open`, bumps `updated`, and re-enables writes.
 - Closed history may later be compacted/compressed; only the cold partition is
   ever a candidate, and only old entries, since compression forfeits per-file
   diffing and grep.
@@ -321,16 +321,17 @@ An issue is **active** while its file lives in the project's hot directory and
   optional fields omitted (never written as `null` / `[]` / `""`). String scalars
   that span multiple lines use block scalars.
 - **Atomic on disk:** every file write is temp-file + `fsync` + `rename` over the
-  target, so a reader never observes a torn file.
+  target, so a reader never observes a torn file. The **one** exception is the
+  comment sidecar (§4.4), which is append-only — grown with an `O_APPEND` + `fsync`
+  write rather than rewritten. Both forms happen under the store lock (§7).
 
 ---
 
 ## 7. Concurrency & durability
 
-- **Single writer per project.** Every mutation runs under an exclusive advisory
-  lock (`flock` on `.tasks/<prefix>/.lock`). Concurrent writers serialize; they
-  never interleave writes. Locks are per project, so unrelated projects proceed in
-  parallel.
+- **Single writer.** Every mutation runs under an exclusive advisory lock (`flock`
+  on `.tasks/.lock`). Concurrent writers serialize; they never interleave writes.
+  The lock covers the whole store, including comment-sidecar appends.
 - **Reads are lock-free.** Atomic renames make this safe.
 - **Throughput ceiling.** The write path `fsync`s inside the lock, so write
   throughput is bounded by `fsync` latency. In-lock work is kept minimal; the hot
@@ -377,7 +378,7 @@ A writer rejects, before anything touches disk:
 - references (`parent`, `blocked_by`, `related`) to IDs that exist in neither the
   hot directory nor `closed/`;
 - dependency cycles;
-- a `prefix` that does not match the project directory name;
+- an issue ID whose prefix does not match the store's configured `prefix`;
 - a comment body that would serialize as a double-quoted (escaped) scalar;
 - a comment with neither a `body` nor `deleted: true`;
 - a comment `replaces` that does not name an existing earlier comment in the same

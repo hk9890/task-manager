@@ -8,34 +8,28 @@ make test-sdk   # cd sdk && go test ./...
 make test-cli   # go test ./...   (root module)
 ```
 
-Both modules are tested separately because `sdk/` is its own Go module.
+`sdk/` is its own module, so the suites run separately.
 
 ## Pre-commit gate
-
-Before committing, run:
 
 ```bash
 make fmt vet test
 ```
 
-- `make fmt` — `gofmt -w` on `cmd`, `sdk/tasks`, `main.go`. Use `make fmt-check`
-  to fail (rather than rewrite) on unformatted files.
-- `make vet` — `go vet ./...` in both modules.
-- `make test` — both suites.
+Green before every commit. No CI yet — the gate is manual (`make fmt-check` to
+fail instead of rewrite).
 
-There is no CI configured; this gate is manual.
+## Conventions
 
-## Test conventions
+- Tests sit next to the code (`sdk/tasks/*_test.go`); use a temp store
+  (`Init(t.TempDir(), …)`), never a real `.tasks/`.
+- **Deterministic time:** override `Store.now`; never assert the wall clock.
+- Assert errors with `errors.Is` against the sentinels; validation failures are
+  `*ValidationError` with a `Field`.
 
-- Tests live next to the code as `sdk/tasks/*_test.go` (`store_test.go`,
-  `ready_test.go`, `frontmatter_test.go`).
-- Use a temp store: `newTestStore(t)` calls `Init(t.TempDir(), "agt")`, so tests
-  never touch a real `.tasks/`.
-- **Deterministic time.** Tests override `Store.now` with a fixed,
-  monotonically-ticking clock so timestamps are reproducible — never assert
-  against the wall clock.
-- Use the `mustCreate(t, s, in)` helper for fixtures.
-- Assert store errors with `errors.Is` against the exported sentinels
-  (`ErrNotFound`, `ErrStoreExists`, `ErrNoStore`, …).
-- Validation failures are `*ValidationError` carrying a `Field`; assert on that
-  field when testing rejection paths.
+## Spec conformance
+
+The CLI and SDK must match the specs in `docs/specs/`
+([CLI-SPEC](specs/CLI-SPEC.md), [SDK-SPEC](specs/SDK-SPEC.md),
+[TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md)). A behaviour change updates the
+spec in the same change; a mismatch is a bug.

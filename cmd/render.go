@@ -47,9 +47,11 @@ type refDTO struct {
 }
 
 type commentDTO struct {
-	Author  string    `json:"author,omitempty"`
-	Created time.Time `json:"created"`
-	Body    string    `json:"body"`
+	ID       string    `json:"id"`
+	Author   string    `json:"author,omitempty"`
+	Created  time.Time `json:"created"`
+	Replaces string    `json:"replaces,omitempty"`
+	Body     string    `json:"body,omitempty"`
 }
 
 type detailDTO struct {
@@ -106,7 +108,13 @@ func toDetailDTO(d *tasks.Detail) detailDTO {
 		out.ParentRef = &r
 	}
 	for _, c := range d.Comments {
-		out.Comments = append(out.Comments, commentDTO{Author: c.Author, Created: c.Created, Body: c.Body})
+		out.Comments = append(out.Comments, commentDTO{
+			ID:       c.ID,
+			Author:   c.Author,
+			Created:  c.Created,
+			Replaces: c.Replaces,
+			Body:     c.Body,
+		})
 	}
 	return out
 }
