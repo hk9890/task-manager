@@ -91,18 +91,46 @@ github.com/hk9890/agent-tasks            root module — the atctl CLI (cobra)
 
 ## 5. The engine
 
-`sdk/tasks` is organized by responsibility:
+`sdk/tasks` is divided into a **pure core** (no filesystem access) and an
+**imperative shell** that bridges the core to the `internal/vfs` disk seam.
+
+### Package layout
+
+| Package | Kind | Responsibility |
+|---|---|---|
+| `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
+| `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
+| `tasks/internal/vfs` | disk seam | **The only package that calls `os`/`syscall`.** `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
+
+### Pure-core files (no `os`, no `internal/vfs`)
 
 | File | Responsibility |
 |---|---|
 | `model.go` | `Issue`, `Comment`, `Ref`, `Detail`; status/type enums; priority bounds. |
+| `ids.go` | `parseIDNum` + `nextIDFromNames`: high-water ID allocation over a name list. |
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
-| `store.go` | Discovery, locking, atomic writes, CRUD, ID allocation. |
-| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
-| `query.go` | Filter-expression parsing + evaluation (QUERY-SPEC.md). |
-| `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
 | `validate.go` | Single-issue field invariants. |
-| `lock_unix.go` / `lock_other.go` | Advisory `flock` (unix) and a fallback. |
+| `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
+
+### Imperative-shell files (may import `internal/vfs`)
+
+| File | Responsibility |
+|---|---|
+| `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `nextIDFromNames` with the directory listing it reads via the seam. |
+| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+
+### vfs seam and os/syscall confinement
+
+`internal/vfs` is the **sole** location for `os`/`syscall` calls. Every other
+package (pure core and imperative shell alike) calls filesystem operations via
+the `vfs.FS` interface. This confinement is enforced at two levels:
+
+- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`.
+- **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
+  fails the build if any non-test, non-vfs file imports `os` or `syscall`;
+  `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
+  `internal/vfs` import.
 
 ---
 

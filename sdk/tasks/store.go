@@ -3,15 +3,15 @@ package tasks
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
 )
 
 const (
@@ -59,9 +59,48 @@ type Store struct {
 	root string // project root (the parent of the data dir)
 	dir  string // absolute path to the data directory (.tasks)
 	cfg  Config
+	fs   vfs.FS // disk seam; always vfs.NewOS() in production
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
+}
+
+// openWithFS is an unexported test hook that constructs a Store rooted at
+// root using the provided FS implementation. It does NOT read or create the
+// config — the caller must set s.cfg directly (or call readConfig through s.fs
+// after construction). This hook exists so tests can inject vfs.Mem or other
+// FS implementations without going through Init/Open.
+func openWithFS(root string, fs vfs.FS) *Store {
+	absRoot, _ := filepath.Abs(root)
+	return &Store{
+		root: absRoot,
+		dir:  filepath.Join(absRoot, DataDirName),
+		fs:   fs,
+		now:  defaultNow,
+	}
+}
+
+// InitWithVFS creates an initialised store at root using the provided FS seam
+// with the given ID prefix. It is intended for test helpers that need to
+// supply a custom FS (e.g. vfs.Mem) without going through the OS-backed Init.
+// The FS must already have root visible (MkdirAll is called internally).
+// Only packages under sdk/tasks/internal can call this because vfs.FS is
+// itself internal; outside callers use Init or Open.
+func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
+	prefix = strings.TrimSpace(prefix)
+	if !prefixRe.MatchString(prefix) {
+		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
+	}
+	dir := filepath.Join(root, DataDirName)
+	if err := fs.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	cfg := Config{Prefix: prefix}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, now: defaultNow}
+	if err := s.writeConfig(cfg); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // Init creates a new data directory under root with the given ID prefix and
@@ -75,25 +114,28 @@ func Init(root, prefix string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	fs := vfs.NewOS()
 	dir := filepath.Join(absRoot, DataDirName)
-	if _, err := os.Stat(dir); err == nil {
+	if _, err := fs.Stat(dir); err == nil {
 		return nil, ErrStoreExists
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := fs.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	if err := writeConfig(dir, cfg); err != nil {
+	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, now: defaultNow}
+	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
 	}
-	return &Store{root: absRoot, dir: dir, cfg: cfg, now: defaultNow}, nil
+	return s, nil
 }
 
 // Open locates the data directory by walking up from start (or the current
 // working directory if start is empty) and loads its config.
 func Open(start string) (*Store, error) {
+	fs := vfs.NewOS()
 	if start == "" {
-		wd, err := os.Getwd()
+		wd, err := fs.Getwd()
 		if err != nil {
 			return nil, err
 		}
@@ -105,12 +147,14 @@ func Open(start string) (*Store, error) {
 	}
 	for {
 		dir := filepath.Join(abs, DataDirName)
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			cfg, err := readConfig(dir)
+		if fi, err := fs.Stat(dir); err == nil && fi.IsDir() {
+			s := &Store{root: abs, dir: dir, fs: fs, now: defaultNow}
+			cfg, err := s.readConfig()
 			if err != nil {
 				return nil, err
 			}
-			return &Store{root: abs, dir: dir, cfg: cfg, now: defaultNow}, nil
+			s.cfg = cfg
+			return s, nil
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
@@ -129,16 +173,21 @@ func (s *Store) Dir() string { return s.dir }
 // Prefix returns the configured ID prefix.
 func (s *Store) Prefix() string { return s.cfg.Prefix }
 
-func writeConfig(dir string, cfg Config) error {
+// SetNow overrides the store's clock with fn. Intended for test helpers that
+// need deterministic timestamps across the store-creation boundary (e.g.
+// internal/storetest). Production code uses defaultNow.
+func (s *Store) SetNow(fn func() time.Time) { s.now = fn }
+
+func (s *Store) writeConfig(cfg Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, ConfigFileName), data, 0o644)
+	return s.fs.WriteAtomic(filepath.Join(s.dir, ConfigFileName), data, 0o644)
 }
 
-func readConfig(dir string) (Config, error) {
-	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+func (s *Store) readConfig() (Config, error) {
+	data, err := s.fs.ReadFile(filepath.Join(s.dir, ConfigFileName))
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
@@ -158,9 +207,9 @@ func (s *Store) filePath(id string) string {
 
 // Get loads a single issue by ID.
 func (s *Store) Get(id string) (*Issue, error) {
-	data, err := os.ReadFile(s.filePath(id))
+	data, err := s.fs.ReadFile(s.filePath(id))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if vfs.IsNotExist(err) {
 			return nil, errNotFound(id)
 		}
 		return nil, err
@@ -174,7 +223,7 @@ func (s *Store) Get(id string) (*Issue, error) {
 
 // All loads every issue in the store. Order is by ID for determinism.
 func (s *Store) All() ([]*Issue, error) {
-	entries, err := os.ReadDir(s.dir)
+	entries, err := s.fs.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +233,7 @@ func (s *Store) All() ([]*Issue, error) {
 		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, FileExt) {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.dir, name))
+		data, err := s.fs.ReadFile(filepath.Join(s.dir, name))
 		if err != nil {
 			return nil, err
 		}
@@ -211,60 +260,43 @@ func (s *Store) index() (map[string]*Issue, []*Issue, error) {
 	return m, all, nil
 }
 
-var idNumRe = regexp.MustCompile(`-(\d+)$`)
-
 // nextID allocates the next sequential ID by scanning existing files for the
 // highest number and adding one. There is no counter file, so the only way two
 // IDs collide is concurrent creation on different git branches.
+//
+// The computation is delegated to the pure nextIDFromNames function in ids.go;
+// this method is responsible only for reading the directory via the vfs seam.
 func (s *Store) nextID() (string, error) {
-	entries, err := os.ReadDir(s.dir)
+	entries, err := s.fs.ReadDir(s.dir)
 	if err != nil {
 		return "", err
 	}
-	max := 0
-	want := s.cfg.Prefix + "-"
-	for _, e := range entries {
-		name := strings.TrimSuffix(e.Name(), FileExt)
-		if !strings.HasPrefix(name, want) {
-			continue
-		}
-		m := idNumRe.FindStringSubmatch(name)
-		if m == nil {
-			continue
-		}
-		if n, err := strconv.Atoi(m[1]); err == nil && n > max {
-			max = n
-		}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
 	}
-	return fmt.Sprintf("%s-%04d", s.cfg.Prefix, max+1), nil
+	return nextIDFromNames(s.cfg.Prefix, names), nil
 }
 
-// writeIssue atomically writes an issue to disk (temp file + rename). The
+// writeIssue atomically writes an issue to disk via the FS seam. The
 // caller must hold the store lock.
 func (s *Store) writeIssue(iss *Issue) error {
 	data, err := Marshal(iss)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(s.dir, ".tmp-*")
+	return s.fs.WriteAtomic(s.filePath(iss.ID), data, 0o644)
+}
+
+// withLock runs fn while holding an exclusive advisory lock on the store, so
+// concurrent atctl processes cannot interleave writes.
+func (s *Store) withLock(fn func() error) error {
+	unlock, err := s.fs.Lock(filepath.Join(s.dir, lockFileName))
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if the rename succeeded
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, s.filePath(iss.ID))
+	defer unlock() //nolint:errcheck
+	return fn()
 }
 
 // CreateInput describes a new issue. Zero values fall back to sensible
