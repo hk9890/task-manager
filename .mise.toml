@@ -12,11 +12,8 @@ CGO_ENABLED = "0"
 
 [tasks.atctl]
 description = "Build atctl from the current source and run it in your shell's directory. Usage: mise run atctl -- <args>  (e.g. mise run atctl -- ready)"
-run = '''
-cd "$MISE_PROJECT_ROOT" && go build -o bin/atctl . || exit 1
-cd "${MISE_ORIGINAL_CWD:-$PWD}"
-exec "$MISE_PROJECT_ROOT/bin/atctl"
-'''
+# Single line so mise appends your args to the atctl invocation (not the build step).
+run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/atctl . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/atctl"'
 
 [tasks.build]
 description = "Build the atctl binary into ./bin"
