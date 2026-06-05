@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
 )
@@ -91,12 +93,21 @@ func TestOsFS_Lock_Serializes(t *testing.T) {
 
 	lockPath := filepath.Join(dir, ".lock")
 
-	// Acquire lock, do work, release — verify exclusive access via a counter.
-	var counter int
-	var mu sync.Mutex
-	const goroutines = 4
-	var wg sync.WaitGroup
+	// Overlap detector: each goroutine bumps `inside` on entry to the critical
+	// section. If Lock truly serializes writers, `inside` is always exactly 1
+	// in there, so inside.Add(1) returns 1. A no-op lock (zero mutual
+	// exclusion) lets goroutines overlap, so a later entrant sees inside > 1
+	// and flips `raced` — which is exactly what this test must catch.
+	//
+	// The detector uses atomics on purpose: the kernel flock's happens-before
+	// is invisible to Go's race detector, so an *unguarded plain* counter here
+	// would false-positive under `go test -race` even when the lock is correct.
+	var inside atomic.Int32
+	var raced atomic.Bool
+	var done atomic.Int32
 
+	const goroutines = 8
+	var wg sync.WaitGroup
 	errs := make(chan error, goroutines)
 
 	for i := 0; i < goroutines; i++ {
@@ -108,9 +119,13 @@ func TestOsFS_Lock_Serializes(t *testing.T) {
 				errs <- err
 				return
 			}
-			mu.Lock()
-			counter++
-			mu.Unlock()
+			if inside.Add(1) != 1 {
+				raced.Store(true)
+			}
+			// Widen the critical section so a missing lock reliably overlaps.
+			time.Sleep(time.Millisecond)
+			inside.Add(-1)
+			done.Add(1)
 			errs <- unlock()
 		}()
 	}
@@ -122,8 +137,11 @@ func TestOsFS_Lock_Serializes(t *testing.T) {
 			t.Errorf("Lock/unlock: %v", err)
 		}
 	}
-	if counter != goroutines {
-		t.Errorf("counter = %d, want %d", counter, goroutines)
+	if raced.Load() {
+		t.Error("two goroutines were inside the lock at once — Lock did not serialize")
+	}
+	if got := done.Load(); got != goroutines {
+		t.Errorf("done = %d, want %d", got, goroutines)
 	}
 }
 

@@ -35,11 +35,14 @@ jobs:
       - name: vet (root)
         run: go vet ./...
 
+      # -race needs CGO; ubuntu-latest ships a C compiler. The race detector
+      # guards the single-writer locking invariant (see the flock test, which
+      # is integration-tagged) and any other concurrent paths.
       - name: test (root)
-        run: go test ./...
+        run: CGO_ENABLED=1 go test -race ./...
 
       - name: test integration (root)
-        run: go test -tags integration ./...
+        run: CGO_ENABLED=1 go test -race -tags integration ./...
 
       # ── sdk module ────────────────────────────────────────────────────────
 
@@ -59,11 +62,11 @@ jobs:
 
       - name: test (sdk)
         working-directory: sdk
-        run: go test ./...
+        run: CGO_ENABLED=1 go test -race ./...
 
       - name: test integration (sdk)
         working-directory: sdk
-        run: go test -tags integration ./...
+        run: CGO_ENABLED=1 go test -race -tags integration ./...
 
       # ── binary ────────────────────────────────────────────────────────────
 

@@ -356,6 +356,12 @@ func TestClose_FaultInjection_RenameAfterWrite(t *testing.T) {
 	if got.ID != iss.ID {
 		t.Errorf("got wrong issue id %q", got.ID)
 	}
+	// And it reflects the closed state: step 3 wrote the closed content to the
+	// hot file before the rename failed, so Get returns the closed version.
+	// Asserting only the ID would pass even if recovery silently lost the close.
+	if got.Status != StatusClosed {
+		t.Errorf("status after failed Rename = %v, want closed (recovery via fall-through)", got.Status)
+	}
 }
 
 // TestUpdateStatus_ClosedRoutesThroughClose verifies that Update with
