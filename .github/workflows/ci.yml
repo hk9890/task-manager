@@ -72,3 +72,17 @@ jobs:
 
       - name: build atctl
         run: go build -o bin/atctl .
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up mise (pins go + golangci-lint 2.1.6)
+        uses: jdx/mise-action@v2
+
+      - name: golangci-lint (both modules)
+        run: mise run lint

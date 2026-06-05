@@ -92,7 +92,7 @@ func TestCompile_Malformed_ParseError(t *testing.T) {
 	}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
-			mustCompileFail(t, expr)
+			_ = mustCompileFail(t, expr)
 		})
 	}
 }
@@ -373,7 +373,7 @@ func TestEval_Text_Tilde_CaseInsensitive(t *testing.T) {
 
 // text == "x" is a parse error (only ~ is valid)
 func TestEval_Text_EqIsError(t *testing.T) {
-	mustCompileFail(t, `text == "x"`)
+	_ = mustCompileFail(t, `text == "x"`)
 }
 
 // ---- date fields: created, updated, closed ----------------------------------

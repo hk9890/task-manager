@@ -17,12 +17,12 @@ func (osFS) Lock(path string) (func() error, error) {
 		return nil, fmt.Errorf("vfs.Lock open: %w", err)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("vfs.Lock flock: %w", err)
 	}
 	unlock := func() error {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
-			f.Close()
+			_ = f.Close()
 			return fmt.Errorf("vfs.Lock unlock: %w", err)
 		}
 		return f.Close()

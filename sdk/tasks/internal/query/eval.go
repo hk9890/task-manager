@@ -302,16 +302,10 @@ func evalDateField(n *CmpNode, row Row, closedIsSpecial bool) bool {
 	}
 	fv, ok := fieldVal.(*DateValue)
 	if !ok {
-		if closedIsSpecial {
-			return false
-		}
-		return true
+		return !closedIsSpecial
 	}
 	if fv.T.IsZero() {
-		if closedIsSpecial {
-			return false
-		}
-		return true
+		return !closedIsSpecial
 	}
 	return cmpTime(fv.T, n.Op, dv.T)
 }

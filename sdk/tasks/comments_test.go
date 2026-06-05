@@ -286,7 +286,9 @@ func TestNewCommentID_Format(t *testing.T) {
 			t.Fatalf("id %q: want length 8, got %d", id, len(id))
 		}
 		for _, r := range id {
-			if !('0' <= r && r <= '9') && !('a' <= r && r <= 'z') {
+			isDigit := '0' <= r && r <= '9'
+			isLower := 'a' <= r && r <= 'z'
+			if !isDigit && !isLower {
 				t.Fatalf("id %q: contains invalid rune %q (want [0-9a-z])", id, r)
 			}
 		}
