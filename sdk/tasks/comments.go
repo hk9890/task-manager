@@ -34,11 +34,6 @@ const (
 	docSeparator = "---\n"
 )
 
-// commentsDirPath returns the path to the comments subdirectory.
-func (s *Store) commentsDirPath() string {
-	return filepath.Join(s.dir, commentsDirName)
-}
-
 // commentsPath returns the path to the sidecar file for issue id.
 func (s *Store) commentsPath(id string) string {
 	return filepath.Join(s.dir, commentsDirName, id+commentFileExt)
@@ -184,9 +179,7 @@ func splitDocStream(data []byte) []string {
 	startSep := []byte("---\n")
 
 	// Strip a leading "---\n" if present (standard for our sidecars).
-	if bytes.HasPrefix(data, startSep) {
-		data = data[len(startSep):]
-	}
+	data = bytes.TrimPrefix(data, startSep)
 
 	var parts []string
 	for {

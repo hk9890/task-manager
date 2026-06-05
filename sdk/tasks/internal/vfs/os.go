@@ -36,14 +36,14 @@ func (osFS) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	// Always clean up the temp file; the remove is a no-op if rename succeeded.
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("vfs.WriteAtomic write: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("vfs.WriteAtomic sync: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -66,11 +66,11 @@ func (osFS) Append(name string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("vfs.Append open: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("vfs.Append write: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("vfs.Append sync: %w", err)
 	}
 	return f.Close()
