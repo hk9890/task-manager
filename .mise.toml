@@ -1,0 +1,122 @@
+[tools]
+go = "1.26.3"
+"go:gotest.tools/gotestsum" = "1.13.0"
+"go:golang.org/x/tools/cmd/goimports" = "0.30.0"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "2.1.6"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.1.4"
+
+[env]
+CGO_ENABLED = "0"
+
+# ---- build -----------------------------------------------------------------
+
+[tasks.build]
+description = "Build the atctl binary into ./bin"
+run = """
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+PKG=github.com/hk9890/agent-tasks/cmd
+go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/atctl .
+"""
+
+# ---- format / vet / lint / tidy (both modules) -----------------------------
+
+[tasks.fmt]
+description = "Format Go source (goimports, both modules)"
+run = "goimports -local github.com/hk9890/agent-tasks -w cmd sdk/tasks main.go"
+
+[tasks."fmt:check"]
+description = "Fail if any file is not formatted"
+run = """
+OUT=$(goimports -local github.com/hk9890/agent-tasks -l cmd sdk/tasks main.go)
+if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
+"""
+
+[tasks.vet]
+description = "go vet (both modules)"
+run = """
+go vet ./...
+(cd sdk && go vet ./...)
+"""
+
+[tasks.lint]
+description = "golangci-lint at pinned version (both modules)"
+run = """
+golangci-lint run --timeout=5m ./...
+(cd sdk && golangci-lint run --timeout=5m ./...)
+"""
+
+[tasks.tidy]
+description = "go mod tidy (both modules)"
+run = """
+go mod tidy
+(cd sdk && go mod tidy)
+"""
+
+[tasks.vuln]
+description = "govulncheck (both modules)"
+run = """
+govulncheck ./...
+(cd sdk && govulncheck ./...)
+"""
+
+# ---- tests -----------------------------------------------------------------
+# L1 (pure) + L2 (store on vfs.Mem) run by default; L3 (real temp dir) + L4 (CLI)
+# are gated behind the `integration` build tag. See docs/implementation/TESTING-STRATEGY.md.
+
+[tasks.test]
+description = "L1 pure + L2 store-on-Mem — fast, both modules"
+run = """
+gotestsum --format pkgname-and-test-fails -- -race ./...
+(cd sdk && gotestsum --format pkgname-and-test-fails -- -race ./...)
+"""
+[tasks.test.env]
+CGO_ENABLED = "1"
+
+[tasks."test:sdk"]
+description = "SDK module tests only (fast)"
+dir = "sdk"
+run = "gotestsum --format pkgname-and-test-fails -- -race ./..."
+[tasks."test:sdk".env]
+CGO_ENABLED = "1"
+
+[tasks."test:cli"]
+description = "CLI module tests only (fast)"
+run = "gotestsum --format pkgname-and-test-fails -- -race ./..."
+[tasks."test:cli".env]
+CGO_ENABLED = "1"
+
+[tasks."test:integration"]
+description = "L3 real temp dir + L4 CLI (integration build tag, both modules)"
+run = """
+gotestsum --format pkgname-and-test-fails -- -race -tags=integration ./...
+(cd sdk && gotestsum --format pkgname-and-test-fails -- -race -tags=integration ./...)
+"""
+[tasks."test:integration".env]
+CGO_ENABLED = "1"
+
+[tasks."test:all"]
+description = "All layers (L1-L4, both modules)"
+depends = ["test", "test:integration"]
+
+[tasks."test:coverage"]
+description = "All layers with a coverage threshold (COVERAGE_THRESHOLD, default 75)"
+run = """
+go test -race -tags=integration -coverprofile=coverage.out -covermode=atomic ./...
+COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+echo "Total coverage: ${COVERAGE}% (threshold: ${COVERAGE_THRESHOLD:-75}%)"
+if [ "${COVERAGE%.*}" -lt "${COVERAGE_THRESHOLD:-75}" ]; then echo "FAIL: below threshold"; exit 1; fi
+"""
+[tasks."test:coverage".env]
+CGO_ENABLED = "1"
+
+# ---- gates -----------------------------------------------------------------
+
+[tasks.quality]
+description = "Fast pre-commit gate: vet + lint + L1/L2 tests"
+depends = ["vet", "lint", "test"]
+
+[tasks."quality:full"]
+description = "Pre-handoff gate: vet + lint + all layers"
+depends = ["vet", "lint", "test", "test:integration"]

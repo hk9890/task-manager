@@ -8,8 +8,9 @@ in beads-workbench, is the intended direction once CI is set up.)
 ## Versioning
 
 - Semantic version tags: `vX.Y.Z`.
-- `atctl --version` is stamped at build time via `-ldflags` into `cmd.Version` /
-  `Commit` / `Date` (see the `makefile`). Untagged local builds report `dev`.
+- `atctl version` prints the build metadata stamped via `-ldflags` into
+  `cmd.Version` / `Commit` / `Date` (see the `makefile`). Untagged local builds
+  report `dev`.
 - The SDK is a **separate Go module** (`sdk/`). Go consumers pin it with a
   module-path tag, `sdk/vX.Y.Z` (`go get …/sdk@vX.Y.Z`). Keep it in step with the
   CLI tag.

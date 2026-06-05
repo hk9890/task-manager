@@ -1,14 +1,16 @@
 # agent-tasks
 
-A lean, file-based task tracker for your repo — issues, dependencies, and
-ready-work, nothing else. No database: every task is a Markdown file under a
-`.tasks/` directory, versioned alongside your code. You work with it through
+A lean, file-based task tracker — issues, dependencies, and ready-work, and
+nothing else. No database: every task is a Markdown file under a `.tasks/`
+directory, versioned alongside your code. You work with it through
 **`atctl`**, the command-line tool.
 
 ## Install
 
+From a checkout of this repo (Go 1.26+):
+
 ```bash
-go install github.com/hk9890/agent-tasks@latest
+make install      # builds `atctl` and puts it on your $PATH
 ```
 
 ## Usage
@@ -26,4 +28,3 @@ atctl ready                              # the dependent is now ready
 ```
 
 Add `--json` to any command for machine-readable output.
-```

@@ -1,41 +1,53 @@
 # Coding
 
-Read [OVERVIEW.md](OVERVIEW.md) and the specs in `specs/` first.
+Read [OVERVIEW.md](OVERVIEW.md) and the specs in `specs/` first. For the package
+map and the test layers, read
+[implementation/PACKAGE-OVERVIEW.md](implementation/PACKAGE-OVERVIEW.md) and
+[implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
-## Build
+## Build & test (mise; `make` still works)
 
 ```bash
-make build      # -> ./bin/atctl    (make install onto $PATH)
-make fmt vet    # both modules; Go 1.26
+mise run build             # -> ./bin/atctl
+mise run fmt vet lint
+mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
+mise run test:integration  # L3 real temp dir + L4 CLI
+mise run quality           # vet + lint + test  (pre-commit gate)
 ```
 
 ## Single-writer rule
 
-`sdk/tasks` is the **only** package that may touch files under `.tasks/`. `cmd/`
-and every consumer go through the `Store` API — reading or writing issue files
-elsewhere bypasses validation, locking, and atomic writes.
-
-## Modules
-
-- Root (CLI) → SDK via `replace … => ./sdk`; `sdk/` is a separate, minimal-dep
-  module (only `yaml.v3`); `bench/` is standalone, outside build/test.
-- Run `make tidy` after changing imports.
+Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `cmd/`
+and every consumer go through the `Store` API. **Only `internal/vfs` may import
+`os`/`syscall`;** the pure core imports neither.
 
 ## Where changes go
 
-- **CLI command** → `cmd/` (wired in `root.go`); calls the `Store`, not the FS.
-- **Stored field/behaviour** → `sdk/tasks` (`model`/`frontmatter`/`validate`/
-  `store`), exposed via the JSON DTOs in `cmd/render.go`.
+| Change | Goes in |
+|---|---|
+| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS |
+| Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
+| Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
+| Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
+| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
 
-## Keep the specs in sync
+## How to test
+
+- Pure logic → **L1** (no FS). Store orchestration & error paths → **L2** on
+  `vfs.Mem` (with fault injection). Durability, `flock`, round-trip → **L3** real
+  temp dir. CLI → **L4**.
+- Build fixtures with `internal/storetest`; never hand-roll a real `.tasks/`.
+  Deterministic time via `Store.now`. Details in TESTING-STRATEGY.md.
+
+## Keep specs in sync
 
 A change to a CLI command/flag or a public `sdk/tasks` function/type/semantics
-**must update the matching spec in the same change** ([CLI-SPEC](specs/CLI-SPEC.md),
-[SDK-SPEC](specs/SDK-SPEC.md), [TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md)). A
-mismatch is a bug.
+**must update the matching spec in the same change** ([CLI](specs/CLI-SPEC.md),
+[SDK](specs/SDK-SPEC.md), [STORAGE](specs/TASK-STORAGE-SPEC.md),
+[QUERY](specs/QUERY-SPEC.md)). A structural change (packages, the `vfs` seam)
+updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
 
-## Invariants
+## Modules
 
-- Layered validation: self-contained in `validate.go`, referential in `store.go`.
-- Never persist derived edges; atomic writes only (lock + temp + fsync + rename);
-  timestamps UTC whole-seconds.
+Root (CLI) → SDK via `replace … => ./sdk`; `sdk/` is minimal-dep (only `yaml.v3`);
+`bench/` is standalone, outside build/test. Run `mise run tidy` after changing imports.
