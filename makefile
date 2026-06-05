@@ -1,6 +1,9 @@
 .PHONY: all build install test test-cli test-sdk vet fmt fmt-check lint clean tidy
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# Derive the CLI version from the most recent `v*` tag. Exclude the parallel
+# `sdk/*` module tags: both tag families land on the same release commit, so an
+# unscoped `git describe` would non-deterministically stamp the binary "sdk/vX.Y.Z".
+VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exclude "sdk/*" --always --dirty 2>/dev/null || echo "dev")
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
