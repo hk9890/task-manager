@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,14 @@ LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._/-]*$")
 
 def eprint(*a):
     print(*a, file=sys.stderr)
+
+
+def confirm(msg: str) -> bool:
+    """Ask a yes/no question on the terminal; default No (also on a closed stdin)."""
+    try:
+        return input(f"{msg} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
 
 
 def sanitize_label(label: str) -> str | None:
@@ -192,8 +201,9 @@ def main() -> int:
     ap.add_argument("--dir", default=".", help="target project dir holding .tasks (default: cwd)")
     ap.add_argument("--atctl", default=os.path.join(REPO_ROOT, "bin", "atctl"),
                     help="path to the atctl binary (default: <repo>/bin/atctl)")
-    ap.add_argument("--init", action="store_true", help="run `atctl init` in the target first")
-    ap.add_argument("--prefix", help="prefix for --init")
+    ap.add_argument("--prefix", help="ID prefix for the new store (atctl derives one if omitted)")
+    ap.add_argument("--yes", "-y", action="store_true",
+                    help="overwrite an existing .tasks store without prompting")
     ap.add_argument("--map-out", default=os.path.join(REPO_ROOT, "scripts", ".beads-import-map.json"))
     ap.add_argument("--dry-run", action="store_true", help="print actions without writing")
     args = ap.parse_args()
@@ -208,8 +218,21 @@ def main() -> int:
         return 0
 
     at = Atctl(args.atctl, args.dir, args.dry_run)
-    if args.init:
-        at.init(args.prefix)
+
+    # A fresh store is required (import is additive — re-importing into an existing
+    # store would duplicate). If one already exists, ask before wiping it.
+    tasks_dir = os.path.join(args.dir, ".tasks")
+    if os.path.isdir(tasks_dir):
+        abspath = os.path.abspath(tasks_dir)
+        if args.dry_run:
+            eprint(f"(dry-run) existing store at {abspath} would be deleted and re-imported")
+        elif args.yes or confirm(f"A .tasks store already exists at {abspath}.\nDelete it and re-import?"):
+            shutil.rmtree(tasks_dir)
+            eprint(f"Removed existing store at {abspath}.")
+        else:
+            eprint("Keeping the existing store — import aborted.")
+            return 0
+    at.init(args.prefix)
 
     # Pass 1 — create every issue (open), build the id map.
     idmap: dict[str, str] = {}
