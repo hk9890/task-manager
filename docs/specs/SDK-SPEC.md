@@ -164,11 +164,20 @@ fields are applied.
 
 ```go
 type Filter struct {
-    Expr          string    // filter expression — the selector (QUERY-SPEC.md)
-    IncludeClosed bool      // scope: include closed issues
+    Expr          string    // filter expression — the selector (QUERY-SPEC.md); closed-scope auto-detected
+    Statuses      []Status  // require one of these statuses (empty = all non-closed by default)
+    Types         []Type    // require one of these types (empty = all)
+    PriorityMin   *int      // minimum priority (inclusive; nil = no bound)
+    PriorityMax   *int      // maximum priority (inclusive; nil = no bound)
+    Assignee      string    // exact match on assignee (empty = all)
+    Labels        []string  // issue must carry every listed label (empty = all)
+    Text          string    // case-insensitive substring of ID, title, or body
+    IncludeClosed bool      // scope: include closed issues (reads closed/ partition)
+    OnlyReady     bool      // only issues that are open with no open blockers
+    OnlyBlocked   bool      // only issues with at least one open blocker
     Sort          SortField // presentation
     Reverse       bool
-    Limit         int
+    Limit         int       // 0 = no limit
 }
 
 type SortField string
@@ -178,6 +187,16 @@ const (
 )
 ```
 
+**Scope semantics (TASK-STORAGE-SPEC §5, QUERY-SPEC.md §5):**
+- By default (`IncludeClosed:false`, no closed-referencing `Expr`, no `StatusClosed` in `Statuses`)
+  only the hot (active) set is scanned. The `closed/` partition is never opened.
+- `IncludeClosed:true`: reads both hot and cold partitions.
+- `Statuses` contains `StatusClosed`: cold partition is auto-included.
+- `Expr` references closed work (e.g. `status == "closed"` or a `closed` date comparison):
+  cold partition is auto-included; `IncludeClosed` need not be set explicitly.
+- Callers must never rely on the cold partition being scanned silently — they must
+  explicitly opt in. `All()`, `Ready()`, `Blocked()`, and `Labels()` are always hot-only.
+
 ---
 
 ## 4. Store methods
@@ -186,7 +205,7 @@ const (
 
 ```go
 func (s *Store) Get(id string) (*Issue, error)        // one issue (falls through to closed/)
-func (s *Store) All() ([]*Issue, error)               // active set, sorted by ID
+func (s *Store) All() ([]*Issue, error)               // hot (active) set only, sorted by ID
 func (s *Store) Query(expr string) ([]*Issue, error)  // select by filter expression (QUERY-SPEC.md)
 func (s *Store) List(f Filter) ([]*Issue, error)      // Query + scope/sort/limit via Filter
 func (s *Store) Ready() ([]*Issue, error)             // open, no open blockers
@@ -203,14 +222,20 @@ type BlockedIssue struct {
 }
 ```
 
+- **`All`** returns only the hot (active) set — it never descends into `closed/` or
+  `comments/`. It is the cheapest scan: O(open issues), regardless of how many
+  closed issues exist. Use `List(Filter{IncludeClosed:true})` to read history.
 - **`Query`** / **`List`** parse and evaluate the **filter-expression language**;
   the engine is its sole implementation (the CLI just forwards a string). The
   grammar, fields, operators, and error semantics are defined in
   [QUERY-SPEC.md](QUERY-SPEC.md); a malformed expression returns a `*ParseError`
   (§6), not a match.
-- **`Query`** / **`List`** / **`Ready`** / **`Blocked`** read the active set by
-  default; passing `IncludeClosed` (or an expression that selects closed issues)
-  reads the cold partition too.
+- **`Query`** / **`List`** read the active set by default; passing
+  `IncludeClosed:true` **or** using an expression that references closed work
+  (e.g. `status == "closed"` or a `closed` date comparison) includes the cold
+  partition. See Filter scope semantics in §3.
+- **`Ready`** / **`Blocked`** / **`Labels`** are always hot-only. They are O(open)
+  and never read `closed/`. Use `List(Filter{IncludeClosed:true})` for history.
 - **`Detail`** resolves `ParentRef`, `BlockedBy`, `Related`, computes `Blocks` and
   `Children` by scanning, and loads `Comments` from the sidecar.
 - **`Comments`** / **`Detail.Comments`** return the **resolved effective log**: each
@@ -270,8 +295,14 @@ var (
     ErrAlreadyExists // issue already exists
     ErrNoStore       // no .tasks directory found
     ErrStoreExists   // .tasks directory already exists
+    ErrImmutable     // attempted in-place write to a closed issue (closed/ partition)
 )
 ```
+
+`ErrImmutable` is returned by `Update` and `Close` when the target issue lives in
+`closed/`. Use `Reopen` to restore mutability; `AddComment` / `EditComment` /
+`DeleteComment` are still allowed on closed issues (sidecar append is the one
+exception — see storage spec §5).
 
 Validation failures return a typed error carrying the offending field:
 

@@ -88,7 +88,7 @@ var closeReason string
 
 var closeCmd = &cobra.Command{
 	Use:   "close <id>",
-	Short: "Close an issue",
+	Short: "Close an issue: stamp close time, move to cold partition",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := openStore()
@@ -100,6 +100,26 @@ var closeCmd = &cobra.Command{
 			return err
 		}
 		return reportMutation(iss, "Closed")
+	},
+}
+
+var reopenCmd = &cobra.Command{
+	Use:   "reopen <id>",
+	Short: "Move a closed issue back to the active set",
+	Long: `Move a closed issue back to the active set: clear its closed timestamp and
+close_reason, set status to open, and move the file from closed/ back to the
+hot directory.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		iss, err := s.Reopen(args[0])
+		if err != nil {
+			return err
+		}
+		return reportMutation(iss, "Reopened")
 	},
 }
 
@@ -303,6 +323,8 @@ func init() {
 	uf.BoolVar(&updateFlags.clearLabels, "clear-labels", false, "remove all labels")
 
 	closeCmd.Flags().StringVar(&closeReason, "reason", "", "reason for closing")
+
+	rootCmd.AddCommand(reopenCmd)
 
 	depCmd.AddCommand(depAddCmd, depRmCmd)
 

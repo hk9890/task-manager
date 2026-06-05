@@ -9,6 +9,7 @@ import (
 )
 
 type filterFlags struct {
+	query       string   // filter expression (-q/--query); closed-scope auto-detected
 	statuses    []string
 	types       []string
 	priorityMin int
@@ -26,13 +27,18 @@ type filterFlags struct {
 
 func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	f := cmd.Flags()
+	// -q/--query: filter expression (QUERY-SPEC.md). Closed-referencing expressions
+	// automatically include the cold partition; --all is not required in that case.
+	f.StringVarP(&ff.query, "query", "q", "", "filter expression (QUERY-SPEC.md); closed-scope auto-detected")
 	f.StringSliceVar(&ff.statuses, "status", nil, "filter by status (repeatable/csv)")
 	f.StringSliceVar(&ff.types, "type", nil, "filter by type (repeatable/csv)")
 	f.IntVar(&ff.priorityMin, "priority-min", 0, "minimum priority (most urgent)")
 	f.IntVar(&ff.priorityMax, "priority-max", 0, "maximum priority (least urgent)")
 	f.StringVar(&ff.assignee, "assignee", "", "filter by assignee")
 	f.StringSliceVar(&ff.labels, "label", nil, "require label (repeatable; all must match)")
-	f.BoolVar(&ff.all, "all", false, "include closed issues")
+	// --all reads the cold partition (closed/) in addition to the hot set. When a
+	// closed-referencing -q expression is used, --all is not needed but harmless.
+	f.BoolVar(&ff.all, "all", false, "include closed issues (reads the cold partition)")
 	f.BoolVar(&ff.ready, "ready", false, "only ready issues")
 	f.BoolVar(&ff.blocked, "blocked", false, "only blocked issues")
 	f.StringVar(&ff.sort, "sort", "", "sort by: id|priority|created|updated|closed (default: priority)")
@@ -42,6 +48,7 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 
 func (ff *filterFlags) build(cmd *cobra.Command) tasks.Filter {
 	flt := tasks.Filter{
+		Expr:          ff.query,
 		Assignee:      ff.assignee,
 		Labels:        ff.labels,
 		Text:          ff.text,

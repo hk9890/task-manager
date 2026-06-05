@@ -22,7 +22,8 @@ const (
 	// FileExt is the extension of an issue file.
 	FileExt = ".md"
 
-	lockFileName = ".lock"
+	lockFileName  = ".lock"
+	closedDirName = "closed"
 )
 
 // Errors returned by the store. Callers should test with errors.Is.
@@ -31,6 +32,11 @@ var (
 	ErrAlreadyExists = errors.New("issue already exists")
 	ErrNoStore       = errors.New("no .tasks directory found")
 	ErrStoreExists   = errors.New(".tasks directory already exists")
+	// ErrImmutable is returned when a caller attempts an in-place write to a
+	// closed issue (which lives in closed/ and is immutable per TASK-STORAGE-SPEC §5).
+	// Reopen is the only permitted mutation for a closed issue; comment appends
+	// are also allowed (those go through the sidecar, not the task .md).
+	ErrImmutable = errors.New("issue is closed and immutable")
 )
 
 var prefixRe = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
@@ -205,9 +211,45 @@ func (s *Store) filePath(id string) string {
 	return filepath.Join(s.dir, id+FileExt)
 }
 
-// Get loads a single issue by ID.
+// closedFilePath returns the path to the .md file for id in the closed/ partition.
+func (s *Store) closedFilePath(id string) string {
+	return filepath.Join(s.closedDir(), id+FileExt)
+}
+
+// closedDir returns the absolute path to the closed/ subdirectory.
+func (s *Store) closedDir() string {
+	return filepath.Join(s.dir, closedDirName)
+}
+
+// isInClosed reports whether the issue with the given id lives in the closed/
+// partition (i.e. its .md is not in the hot directory).
+func (s *Store) isInClosed(id string) (bool, error) {
+	if _, err := s.fs.Stat(s.filePath(id)); err == nil {
+		return false, nil // found in hot dir
+	}
+	if _, err := s.fs.Stat(s.closedFilePath(id)); err == nil {
+		return true, nil // found in closed/
+	}
+	return false, errNotFound(id)
+}
+
+// Get loads a single issue by ID. It first looks in the hot directory and
+// falls through to closed/ when the file is absent from the hot set.
 func (s *Store) Get(id string) (*Issue, error) {
+	// Try the hot directory first.
 	data, err := s.fs.ReadFile(s.filePath(id))
+	if err == nil {
+		iss, err := Unmarshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", id, err)
+		}
+		return iss, nil
+	}
+	if !vfs.IsNotExist(err) {
+		return nil, err
+	}
+	// Fall through to closed/.
+	data, err = s.fs.ReadFile(s.closedFilePath(id))
 	if err != nil {
 		if vfs.IsNotExist(err) {
 			return nil, errNotFound(id)
@@ -247,7 +289,7 @@ func (s *Store) All() ([]*Issue, error) {
 	return issues, nil
 }
 
-// index loads all issues into a map keyed by ID.
+// index loads all hot (active) issues into a map keyed by ID.
 func (s *Store) index() (map[string]*Issue, []*Issue, error) {
 	all, err := s.All()
 	if err != nil {
@@ -260,21 +302,62 @@ func (s *Store) index() (map[string]*Issue, []*Issue, error) {
 	return m, all, nil
 }
 
+// allClosed loads all issues from the closed/ partition. Returns an empty
+// slice if closed/ does not exist.
+func (s *Store) allClosed() ([]*Issue, error) {
+	entries, err := s.fs.ReadDir(s.closedDir())
+	if err != nil {
+		if vfs.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var issues []*Issue
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, FileExt) {
+			continue
+		}
+		data, err := s.fs.ReadFile(filepath.Join(s.closedDir(), name))
+		if err != nil {
+			return nil, err
+		}
+		iss, err := Unmarshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse closed/%s: %w", name, err)
+		}
+		issues = append(issues, iss)
+	}
+	return issues, nil
+}
+
 // nextID allocates the next sequential ID by scanning existing files for the
 // highest number and adding one. There is no counter file, so the only way two
 // IDs collide is concurrent creation on different git branches.
 //
 // The computation is delegated to the pure nextIDFromNames function in ids.go;
-// this method is responsible only for reading the directory via the vfs seam.
+// this method is responsible for reading BOTH the hot directory AND the closed/
+// subdirectory via the vfs seam, then passing the union to nextIDFromNames.
+// If closed/ does not yet exist, it is treated as empty (TASK-STORAGE-SPEC §3).
 func (s *Store) nextID() (string, error) {
-	entries, err := s.fs.ReadDir(s.dir)
+	hotEntries, err := s.fs.ReadDir(s.dir)
 	if err != nil {
 		return "", err
 	}
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name()
+	names := make([]string, 0, len(hotEntries))
+	for _, e := range hotEntries {
+		names = append(names, e.Name())
 	}
+
+	// Also scan closed/ for the high-water mark. Absent dir → treat as empty.
+	closedEntries, err := s.fs.ReadDir(s.closedDir())
+	if err != nil && !vfs.IsNotExist(err) {
+		return "", fmt.Errorf("scan closed dir: %w", err)
+	}
+	for _, e := range closedEntries {
+		names = append(names, e.Name())
+	}
+
 	return nextIDFromNames(s.cfg.Prefix, names), nil
 }
 
@@ -374,13 +457,74 @@ type UpdateInput struct {
 }
 
 // Update applies a partial update to an issue.
+//
+// Status routing (TASK-STORAGE-SPEC §5 / CLI-SPEC §4):
+//   - Setting Status to StatusClosed routes through Close (moves .md to closed/).
+//   - Setting Status to a non-closed value on a closed issue routes through Reopen
+//     (moves .md back to hot dir), then applies the remaining field changes.
 func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
+	// Detect early lifecycle-routing cases that must run under a single lock.
+	// We acquire the lock once and handle all cases inside.
 	var updated *Issue
 	err := s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
 		}
+
+		// Determine whether this Update requests a lifecycle transition.
+		requestsClose := in.Status != nil && (*in.Status).IsClosed() && !iss.Status.IsClosed()
+		requestsReopen := in.Status != nil && !(*in.Status).IsClosed() && iss.Status.IsClosed()
+		isCurrentlyClosed := iss.Status.IsClosed()
+
+		if requestsClose {
+			// Route through the close flow: apply non-status field changes, then close.
+			// (No in-place write to hot dir is needed since Close does the write + move.)
+			applyNonStatusFields(iss, in)
+			iss.Updated = s.now()
+			if err := validateFields(iss); err != nil {
+				return err
+			}
+			if err := s.checkRefs(iss); err != nil {
+				return err
+			}
+			// Apply close fields and move.
+			s.applyStatus(iss, StatusClosed, "")
+			iss.Updated = s.now()
+			if err := s.closeMove(iss); err != nil {
+				return err
+			}
+			updated = iss
+			return nil
+		}
+
+		if requestsReopen {
+			// Route through the reopen flow.
+			reopened, err := s.reopenLocked(iss)
+			if err != nil {
+				return err
+			}
+			// Apply remaining (non-status) field changes to the reopened issue.
+			applyNonStatusFields(reopened, in)
+			reopened.Updated = s.now()
+			if err := validateFields(reopened); err != nil {
+				return err
+			}
+			if err := s.checkRefs(reopened); err != nil {
+				return err
+			}
+			if err := s.writeIssue(reopened); err != nil {
+				return err
+			}
+			updated = reopened
+			return nil
+		}
+
+		// Ordinary update: issue must be in the hot dir (mutable).
+		if isCurrentlyClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, id)
+		}
+
 		if in.Title != nil {
 			iss.Title = strings.TrimSpace(*in.Title)
 		}
@@ -418,6 +562,29 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 		return nil
 	})
 	return updated, err
+}
+
+// applyNonStatusFields applies all UpdateInput fields except Status to iss.
+func applyNonStatusFields(iss *Issue, in UpdateInput) {
+	if in.Title != nil {
+		iss.Title = strings.TrimSpace(*in.Title)
+	}
+	if in.Description != nil {
+		iss.Description = *in.Description
+	}
+	if in.Type != nil {
+		iss.Type = *in.Type
+	}
+	if in.Priority != nil {
+		iss.Priority = *in.Priority
+	}
+	if in.Assignee != nil {
+		iss.Assignee = *in.Assignee
+	}
+	if in.Parent != nil {
+		iss.Parent = *in.Parent
+	}
+	applyLabels(iss, in)
 }
 
 // applyStatus sets status and keeps the closed timestamp/reason consistent.
@@ -464,24 +631,139 @@ func applyLabels(iss *Issue, in UpdateInput) {
 	}
 }
 
-// Close marks an issue closed with an optional reason. It is idempotent:
-// closing an already-closed issue updates the reason but does not error.
+// Close stamps the issue closed and moves its .md to closed/.
+//
+// A closed issue is immutable in place (TASK-STORAGE-SPEC §5): calling Close
+// again on an already-closed issue returns ErrImmutable. Use Reopen to restore
+// mutability, or AddComment to append a post-close note.
 func (s *Store) Close(id, reason string) (*Issue, error) {
-	var closed *Issue
+	var out *Issue
 	err := s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
 		}
-		s.applyStatus(iss, StatusClosed, reason)
-		iss.Updated = s.now()
-		if err := s.writeIssue(iss); err != nil {
+		// Reject in-place writes to already-closed issues.
+		inClosed, err := s.isInClosed(id)
+		if err != nil {
 			return err
 		}
-		closed = iss
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, id)
+		}
+		s.applyStatus(iss, StatusClosed, reason)
+		iss.Updated = s.now()
+		if err := s.closeMove(iss); err != nil {
+			return err
+		}
+		out = iss
 		return nil
 	})
-	return closed, err
+	return out, err
+}
+
+// closeMove writes the issue to closed/ and removes its hot-dir file.
+// It must be called while holding the store lock.
+//
+// Sequence (no-torn-state guarantee):
+//   1. MkdirAll closed/ (idempotent).
+//   2. WriteAtomic to closed/<id>.md — if this fails, the hot-dir file is
+//      untouched and the caller sees an error with the issue still open.
+//   3. vfs.Rename hot/<id>.md → closed/<id>.md — atomic rename over the
+//      already-written closed file. This is the git rename that preserves
+//      file history. If it fails, closed/ has the new content and hot/ has
+//      the old; Get falls through to closed/ and returns the closed version —
+//      a recoverable inconsistency that resolves on the next successful close.
+//
+// In practice (real osFS), WriteAtomic + Rename together behave like a
+// single atomic move because WriteAtomic internally uses temp+rename within
+// closed/, and the final Rename from hot to closed is the git history anchor.
+func (s *Store) closeMove(iss *Issue) error {
+	// Step 1: ensure closed/ exists.
+	if err := s.fs.MkdirAll(s.closedDir(), 0o755); err != nil {
+		return fmt.Errorf("create closed dir: %w", err)
+	}
+	// Step 2: write the closed-state content directly to closed/<id>.md.
+	data, err := Marshal(iss)
+	if err != nil {
+		return err
+	}
+	closedPath := s.closedFilePath(iss.ID)
+	if err := s.fs.WriteAtomic(closedPath, data, 0o644); err != nil {
+		return err
+	}
+	// Step 3: rename the hot-dir file over the closed-dir file (git rename).
+	// This is a rename of the original hot file → closed, which git tracks as a
+	// rename. WriteAtomic in step 2 wrote the updated content; the rename in
+	// step 3 replaces it with the original-path-named file. To preserve both the
+	// updated content AND the git rename, we write the updated content to the
+	// hot-dir file first and then rename it over the closed/ file.
+	hotPath := s.filePath(iss.ID)
+	if err := s.fs.WriteAtomic(hotPath, data, 0o644); err != nil {
+		// Hot-dir write failed; closed/ already has the new content. Return the
+		// error; Get will fall through to closed/ and find the closed issue.
+		return err
+	}
+	return s.fs.Rename(hotPath, closedPath)
+}
+
+// Reopen moves a closed issue back to the active set, clears its closed
+// timestamp/reason, sets status open, and bumps updated.
+func (s *Store) Reopen(id string) (*Issue, error) {
+	var out *Issue
+	err := s.withLock(func() error {
+		iss, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+		// Must currently be closed.
+		inClosed, err := s.isInClosed(id)
+		if err != nil {
+			return err
+		}
+		if !inClosed {
+			// Not in closed/ — nothing to reopen (treat as a no-op or error).
+			// The spec says "Reopen moves it back"; if it's already in hot, we
+			// just return the issue unchanged (idempotent).
+			out = iss
+			return nil
+		}
+		reopened, err := s.reopenLocked(iss)
+		if err != nil {
+			return err
+		}
+		out = reopened
+		return nil
+	})
+	return out, err
+}
+
+// reopenLocked implements the Reopen logic assuming the caller already holds
+// the store lock and has verified the issue is in closed/. It moves the .md
+// back to the hot dir, clears close fields, sets status open, and bumps updated.
+func (s *Store) reopenLocked(iss *Issue) (*Issue, error) {
+	src := s.closedFilePath(iss.ID)
+	dst := s.filePath(iss.ID)
+
+	// Clear close fields and set status open.
+	iss.Status = StatusOpen
+	iss.Closed = time.Time{}
+	iss.CloseReason = ""
+	iss.Updated = s.now()
+
+	// Write the updated content to the closed-dir path first (still atomic).
+	data, err := Marshal(iss)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.fs.WriteAtomic(src, data, 0o644); err != nil {
+		return nil, err
+	}
+	// Then rename from closed/ back to hot dir.
+	if err := s.fs.Rename(src, dst); err != nil {
+		return nil, err
+	}
+	return iss, nil
 }
 
 // Comments returns the resolved effective comment log for an issue: each
@@ -503,25 +785,17 @@ func (s *Store) Comments(id string) ([]Comment, error) {
 // loadIssue reads an issue from the hot partition or closed/, returning
 // ErrNotFound if it does not exist in either.
 func (s *Store) loadIssue(id string) (*Issue, error) {
-	data, err := s.fs.ReadFile(s.filePath(id))
-	if err != nil {
-		if vfs.IsNotExist(err) {
-			return nil, errNotFound(id)
-		}
-		return nil, err
-	}
-	iss, err := Unmarshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", id, err)
-	}
-	return iss, nil
+	// Delegate to Get which already handles the hot → closed fall-through.
+	return s.Get(id)
 }
 
-// migrateInlineComments checks whether the issue .md at filePath still
+// migrateInlineComments checks whether the issue .md at issueFilePath still
 // contains old-style inline comments in its frontmatter. If it does, it
 // appends them to the sidecar and rewrites the issue .md without the
 // comments field. This is a one-time migration run on first sidecar touch.
 // The caller must hold the store lock.
+//
+// issueFilePath is the actual on-disk path to the .md file (hot or closed/).
 func (s *Store) migrateInlineComments(issueFilePath string) error {
 	data, err := s.fs.ReadFile(issueFilePath)
 	if err != nil {
@@ -554,24 +828,51 @@ func (s *Store) migrateInlineComments(issueFilePath string) error {
 		}
 	}
 
-	// Rewrite the issue .md without the comments field (Marshal now omits it).
-	return s.writeIssue(iss)
+	// Rewrite the issue .md to the same path (hot or closed/) without the
+	// inline comments field (Marshal now omits it). For closed files this is
+	// an internal migration-only rewrite, not a user mutation.
+	migrated, err := Marshal(iss)
+	if err != nil {
+		return err
+	}
+	return s.fs.WriteAtomic(issueFilePath, migrated, 0o644)
+}
+
+// issueFilePath returns the actual on-disk path for an issue's .md file,
+// checking the hot directory first and falling through to closed/.
+// Returns ErrNotFound if the issue does not exist in either partition.
+func (s *Store) issueFilePath(id string) (string, error) {
+	hotPath := s.filePath(id)
+	if _, err := s.fs.Stat(hotPath); err == nil {
+		return hotPath, nil
+	}
+	closedPath := s.closedFilePath(id)
+	if _, err := s.fs.Stat(closedPath); err == nil {
+		return closedPath, nil
+	}
+	return "", errNotFound(id)
 }
 
 // AddComment appends a new comment to the issue sidecar and returns the new
 // comment (including its freshly allocated random ID). The issue .md file is
 // NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
+// Comment appends are allowed on closed issues (TASK-STORAGE-SPEC §4.4.6).
 func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
-		// Verify the issue exists.
+		// Verify the issue exists (falls through to closed/).
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
 		}
 
-		// Migrate any legacy inline comments first.
-		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+		// Migrate any legacy inline comments first. Use the actual file path
+		// (hot or closed/) so migration works regardless of partition.
+		issPath, err := s.issueFilePath(id)
+		if err != nil {
+			return err
+		}
+		if err := s.migrateInlineComments(issPath); err != nil {
 			return fmt.Errorf("migrate inline comments: %w", err)
 		}
 
@@ -606,8 +907,12 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 			return err
 		}
 
-		// Migrate any legacy inline comments first.
-		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+		// Migrate any legacy inline comments first (works for hot or closed/).
+		issPath, err := s.issueFilePath(id)
+		if err != nil {
+			return err
+		}
+		if err := s.migrateInlineComments(issPath); err != nil {
 			return fmt.Errorf("migrate inline comments: %w", err)
 		}
 
@@ -651,8 +956,12 @@ func (s *Store) DeleteComment(id, commentID, author string) error {
 			return err
 		}
 
-		// Migrate any legacy inline comments first.
-		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+		// Migrate any legacy inline comments first (works for hot or closed/).
+		issPath, err := s.issueFilePath(id)
+		if err != nil {
+			return err
+		}
+		if err := s.migrateInlineComments(issPath); err != nil {
 			return fmt.Errorf("migrate inline comments: %w", err)
 		}
 
@@ -722,6 +1031,12 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 
 // checkRefs verifies that every referenced ID exists and that adding the
 // issue's blockers does not create a dependency cycle. Caller holds the lock.
+//
+// A reference is valid if the target ID is found in the hot (active) index OR
+// in the closed/ partition (checked via a cheap vfs.Stat — no parse needed).
+// A reference to an ID present in neither partition is a dangling reference
+// and is returned as a *ValidationError. This implements TASK-STORAGE-SPEC
+// §9/§10: closed refs are valid; dangling refs are always rejected.
 func (s *Store) checkRefs(iss *Issue) error {
 	idx, _, err := s.index()
 	if err != nil {
@@ -729,18 +1044,28 @@ func (s *Store) checkRefs(iss *Issue) error {
 	}
 	idx[iss.ID] = iss // include the (possibly new) issue itself
 
+	// refExists reports whether an ID is resolvable: either in the hot index
+	// or in the closed/ partition (via cheap Stat, no parse).
+	refExists := func(id string) bool {
+		if _, ok := idx[id]; ok {
+			return true
+		}
+		_, statErr := s.fs.Stat(s.closedFilePath(id))
+		return statErr == nil
+	}
+
 	if iss.Parent != "" {
-		if _, ok := idx[iss.Parent]; !ok {
+		if !refExists(iss.Parent) {
 			return invalid("parent", "referenced issue %q does not exist", iss.Parent)
 		}
 	}
 	for _, id := range iss.BlockedBy {
-		if _, ok := idx[id]; !ok {
+		if !refExists(id) {
 			return invalid("blocked_by", "referenced issue %q does not exist", id)
 		}
 	}
 	for _, id := range iss.Related {
-		if _, ok := idx[id]; !ok {
+		if !refExists(id) {
 			return invalid("related", "referenced issue %q does not exist", id)
 		}
 	}

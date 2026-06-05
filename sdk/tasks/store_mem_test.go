@@ -97,6 +97,115 @@ func TestMemStore_All(t *testing.T) {
 	}
 }
 
+// TestNextID_HighWaterAcrossClosedPartition is the regression test for the
+// nextID bug (at-zib.2.1): when a high-numbered issue file exists in the
+// closed/ subdirectory, the next Create must allocate a strictly greater ID
+// rather than re-issuing one already in use.
+//
+// This is an L2 test: it uses vfs.Mem so no real disk is touched.
+func TestNextID_HighWaterAcrossClosedPartition(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll hot: %v", err)
+	}
+	// Simulate a high-numbered file already living in closed/ so that the hot
+	// dir has no files (nextID would return agt-0001 without the fix).
+	closedDir := "/.tasks/closed"
+	if err := m.MkdirAll(closedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll closed: %v", err)
+	}
+	// Write a fake closed issue file with a high number.
+	if err := m.WriteAtomic(closedDir+"/agt-0042.md", []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic closed file: %v", err)
+	}
+
+	s := openWithFS("/", m)
+	s.cfg = Config{Prefix: "agt"}
+	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time {
+		tick = tick.Add(time.Second)
+		return tick
+	}
+
+	// The hot directory has no issues — but closed/ has agt-0042. The next
+	// allocated ID must be strictly greater than 42.
+	id, err := s.nextID()
+	if err != nil {
+		t.Fatalf("nextID: %v", err)
+	}
+	if id != "agt-0043" {
+		t.Errorf("nextID = %q, want agt-0043 (high-water from closed/ not respected)", id)
+	}
+}
+
+// TestNextID_HighWaterClosedDirAbsent verifies that nextID works correctly
+// when the closed/ directory does not exist yet (treat absent as empty).
+//
+// This is an L2 test: uses vfs.Mem.
+func TestNextID_HighWaterClosedDirAbsent(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// Write one issue in the hot dir; closed/ does not exist.
+	if err := m.WriteAtomic("/.tasks/agt-0005.md", []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	s := openWithFS("/", m)
+	s.cfg = Config{Prefix: "agt"}
+	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time {
+		tick = tick.Add(time.Second)
+		return tick
+	}
+
+	id, err := s.nextID()
+	if err != nil {
+		t.Fatalf("nextID: %v", err)
+	}
+	if id != "agt-0006" {
+		t.Errorf("nextID = %q, want agt-0006", id)
+	}
+}
+
+// TestNextID_HotHigherThanClosed verifies that when the hot dir has a higher
+// number than closed/, the hot dir wins.
+//
+// This is an L2 test: uses vfs.Mem.
+func TestNextID_HotHigherThanClosed(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := m.MkdirAll("/.tasks/closed", 0o755); err != nil {
+		t.Fatalf("MkdirAll closed: %v", err)
+	}
+	// Hot dir has agt-0100; closed/ has agt-0042.
+	if err := m.WriteAtomic("/.tasks/agt-0100.md", []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic hot: %v", err)
+	}
+	if err := m.WriteAtomic("/.tasks/closed/agt-0042.md", []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic closed: %v", err)
+	}
+
+	s := openWithFS("/", m)
+	s.cfg = Config{Prefix: "agt"}
+	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time {
+		tick = tick.Add(time.Second)
+		return tick
+	}
+
+	id, err := s.nextID()
+	if err != nil {
+		t.Fatalf("nextID: %v", err)
+	}
+	if id != "agt-0101" {
+		t.Errorf("nextID = %q, want agt-0101 (hot dir wins)", id)
+	}
+}
+
 // TestMemStore_FailOn_RenameOnClose_NoTornState is the key L2 fault-injection
 // test from the acceptance criteria: a forced Rename failure during a
 // WriteAtomic call (which uses Rename internally) leaves the issue untouched —

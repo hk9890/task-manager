@@ -5,6 +5,7 @@
 package tasks_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/hk9890/agent-tasks/sdk/tasks"
@@ -15,6 +16,9 @@ import (
 // with the storetest builder (real TempDir backend) and asserts All() / Ready().
 // This proves durability: the fixture is written to a real temp directory via
 // the osFS seam (real fsync/flock/rename).
+//
+// After at-zib.2.2: All() returns only the hot (active) set; tst-0004 lives
+// in closed/ and is accessible via Get().
 func TestStoretest_L3_AllAndReady(t *testing.T) {
 	store := storetest.New(t).
 		Issue("tst-0001", storetest.Open).
@@ -27,8 +31,14 @@ func TestStoretest_L3_AllAndReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("All(): %v", err)
 	}
-	if len(all) != 4 {
-		t.Errorf("All() = %d issues, want 4", len(all))
+	// All() is hot-only; tst-0004 (closed) is in closed/, not in All().
+	if len(all) != 3 {
+		t.Errorf("All() = %d issues, want 3 (closed issue is in closed/ partition)", len(all))
+	}
+
+	// Get() falls through to closed/.
+	if _, err := store.Get("tst-0004"); err != nil {
+		t.Errorf("Get(tst-0004) from closed/ failed: %v", err)
 	}
 
 	ready, err := store.Ready()
@@ -46,6 +56,7 @@ func TestStoretest_L3_AllAndReady(t *testing.T) {
 
 // TestStoretest_L3_EquivalentToMem is the cross-backend equivalence test:
 // the same fixture built into Mem and TempDir must yield the same All()/Ready().
+// After at-zib.2.2: All() is hot-only, and Get() falls through to closed/.
 func TestStoretest_L3_EquivalentToMem(t *testing.T) {
 	b := storetest.New(t).
 		Issue("tst-0001", storetest.Open, storetest.Priority(1)).
@@ -65,6 +76,7 @@ func TestStoretest_L3_EquivalentToMem(t *testing.T) {
 		t.Fatalf("TempDir All(): %v", err)
 	}
 
+	// Both backends: All() is hot-only (3 issues; tst-0004 is in closed/).
 	if len(memAll) != len(diskAll) {
 		t.Fatalf("All() count: mem=%d disk=%d", len(memAll), len(diskAll))
 	}
@@ -83,6 +95,17 @@ func TestStoretest_L3_EquivalentToMem(t *testing.T) {
 		}
 	}
 
+	// tst-0004 must be findable via Get in both backends (falls through to closed/).
+	for _, st := range []*tasks.Store{memStore, diskStore} {
+		iss, err := st.Get("tst-0004")
+		if err != nil {
+			t.Fatalf("Get(tst-0004): %v", err)
+		}
+		if iss.Status != tasks.StatusClosed {
+			t.Errorf("tst-0004 status = %v, want closed", iss.Status)
+		}
+	}
+
 	memReady, err := memStore.Ready()
 	if err != nil {
 		t.Fatalf("Mem Ready(): %v", err)
@@ -98,6 +121,40 @@ func TestStoretest_L3_EquivalentToMem(t *testing.T) {
 		if memReady[i].ID != diskReady[i].ID {
 			t.Errorf("[%d] Ready ID: mem=%q disk=%q", i, memReady[i].ID, diskReady[i].ID)
 		}
+	}
+}
+
+// TestNextID_L3_HighWaterAcrossClosedPartition is the L3 regression test for
+// at-zib.2.1: a high-numbered file placed directly in the closed/ subdirectory
+// (real temp dir, osFS) must be included in the high-water mark so the next
+// Create allocates a strictly greater ID.
+func TestNextID_L3_HighWaterAcrossClosedPartition(t *testing.T) {
+	root := t.TempDir()
+	s, err := tasks.Init(root, "tst")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Manually create a closed/ dir and place a high-numbered file there.
+	// (At-zib.2.2 will wire the real Close→move flow; here we seed it directly
+	// so the test is self-contained and does not depend on at-zib.2.2.)
+	closedDir := root + "/.tasks/closed"
+	if err := os.MkdirAll(closedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll closed: %v", err)
+	}
+	highFile := closedDir + "/tst-0099.md"
+	if err := os.WriteFile(highFile, []byte("---\nid: tst-0099\ntitle: old\nstatus: closed\ntype: task\npriority: 2\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nclosed: 2026-01-01T00:00:00Z\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// The hot directory has no active issues. Without the fix nextID returns
+	// tst-0001; with the fix it must return tst-0100.
+	iss, err := s.Create(tasks.CreateInput{Title: "new issue after closed"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if iss.ID != "tst-0100" {
+		t.Errorf("Create().ID = %q, want tst-0100 (high-water from closed/ not respected)", iss.ID)
 	}
 }
 

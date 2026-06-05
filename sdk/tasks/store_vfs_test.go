@@ -82,12 +82,17 @@ func TestOpenWithFS_AllOps(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// All
+	// All is hot-only after at-zib.2.2 (closed issue is in closed/ partition).
 	all, err := s2.All()
 	if err != nil {
 		t.Fatalf("All: %v", err)
 	}
-	if len(all) != 2 {
-		t.Errorf("len(All) = %d, want 2", len(all))
+	if len(all) != 1 {
+		t.Errorf("len(All) = %d, want 1 (a is closed, b is active)", len(all))
+	}
+
+	// a is still accessible via Get (falls through to closed/).
+	if _, err := s2.Get(a.ID); err != nil {
+		t.Fatalf("Get closed issue: %v", err)
 	}
 }
