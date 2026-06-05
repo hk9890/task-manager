@@ -217,6 +217,8 @@ argument or `--file`.
 
 - Empty bodies are rejected. Bodies are sanitized (trailing whitespace stripped,
   CRLF normalized) so they store as readable block scalars.
+- **Output (JSON):** `commentDTO` for the new comment (including its `id`), so
+  callers can use the id for a later `comment edit` or `comment rm`.
 
 ### `atctl comment edit <id> <comment-id> [body] [options]`
 
@@ -224,11 +226,22 @@ Append a revision that supersedes an earlier comment (`replaces`). The original
 stays in the log; readers render the newest revision. Same body source/options as
 `comment add`. The body must be non-empty — use `comment rm` to delete.
 
+| Option | Default | Meaning |
+|---|---|---|
+| `--author <a>` | `$USER` | Comment author. |
+| `--file <path>` | — | Read the body from a file (`-` = stdin). |
+
+- **Output (JSON):** `commentDTO` for the new revision comment.
+
 ### `atctl comment rm <id> <comment-id> [--author <a>]`
 
 Delete a comment: append a tombstone that retracts the target (`replaces` it with
 no body). The original stays in the log as history; the resolved view omits it.
 Idempotent.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--author <a>` | `$USER` | Author of the tombstone record. |
 
 ---
 

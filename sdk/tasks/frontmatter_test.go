@@ -26,9 +26,6 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 		Updated:     updated,
 		Closed:      closed,
 		CloseReason: "shipped",
-		Comments: []Comment{
-			{Author: "hans", Created: updated, Body: "decided to follow the rail"},
-		},
 		Description: "## Description\nDrilling a related issue should navigate fully.",
 	}
 
@@ -63,9 +60,8 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	if out.Parent != "agt-0007" || len(out.Related) != 1 {
 		t.Errorf("parent/related mismatch: %q / %v", out.Parent, out.Related)
 	}
-	if len(out.Comments) != 1 || out.Comments[0].Body != "decided to follow the rail" {
-		t.Errorf("comments mismatch: %+v", out.Comments)
-	}
+	// Comments are no longer in frontmatter; they live in the sidecar.
+	// Just verify description round-trips correctly.
 	if out.Description != in.Description {
 		t.Errorf("description mismatch:\nwant %q\ngot  %q", in.Description, out.Description)
 	}

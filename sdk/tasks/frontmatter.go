@@ -15,6 +15,8 @@ const fence = "---"
 // frontmatter is the on-disk YAML shape. It is kept separate from Issue so we
 // control field order, omitempty behaviour, and the fact that Description is
 // stored as the markdown body rather than a YAML field.
+//
+// No comments in frontmatter — comments live in the sidecar (TASK-STORAGE-SPEC §4.3/§4.4).
 type frontmatter struct {
 	ID          string     `yaml:"id"`
 	Title       string     `yaml:"title"`
@@ -30,11 +32,25 @@ type frontmatter struct {
 	Updated     time.Time  `yaml:"updated"`
 	Closed      *time.Time `yaml:"closed,omitempty"`
 	CloseReason string     `yaml:"close_reason,omitempty"`
-	Comments    []Comment  `yaml:"comments,omitempty"`
+}
+
+// legacyFrontmatter extends frontmatter to read (but not write) the old inline
+// comments field, used during migration of pre-sidecar issue files.
+type legacyFrontmatter struct {
+	frontmatter `yaml:",inline"`
+	Comments    []legacyComment `yaml:"comments,omitempty"`
+}
+
+// legacyComment is the old inline comment shape stored in frontmatter.
+type legacyComment struct {
+	Author  string `yaml:"author,omitempty"`
+	Created string `yaml:"created"`
+	Body    string `yaml:"body,omitempty"`
 }
 
 // Marshal renders an issue to its on-disk file bytes: a YAML frontmatter block
-// followed by the markdown description body.
+// followed by the markdown description body. Comments are NOT written to the
+// frontmatter; they live in the sidecar (TASK-STORAGE-SPEC §4.3/§4.4).
 func Marshal(iss *Issue) ([]byte, error) {
 	fm := frontmatter{
 		ID:          iss.ID,
@@ -50,7 +66,6 @@ func Marshal(iss *Issue) ([]byte, error) {
 		Created:     iss.Created,
 		Updated:     iss.Updated,
 		CloseReason: iss.CloseReason,
-		Comments:    iss.Comments,
 	}
 	if !iss.Closed.IsZero() {
 		c := iss.Closed
@@ -81,13 +96,24 @@ func Marshal(iss *Issue) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// Unmarshal parses on-disk file bytes back into an Issue.
+// Unmarshal parses on-disk file bytes back into an Issue. Any legacy inline
+// comments in the frontmatter are silently ignored (use unmarshalWithLegacy
+// to retrieve them for migration).
 func Unmarshal(data []byte) (*Issue, error) {
+	iss, _, err := unmarshalWithLegacy(data)
+	return iss, err
+}
+
+// unmarshalWithLegacy parses on-disk file bytes into an Issue and also returns
+// any legacy inline comments that were embedded in the frontmatter. The second
+// return value is non-nil only for files that predate the sidecar migration.
+// After migration, the comments field is absent and legacyComments is nil.
+func unmarshalWithLegacy(data []byte) (*Issue, []legacyComment, error) {
 	text := string(data)
 	text = strings.TrimPrefix(text, "\uFEFF") // tolerate a UTF-8 BOM
 
 	if !strings.HasPrefix(text, fence) {
-		return nil, fmt.Errorf("missing frontmatter: file must start with %q", fence)
+		return nil, nil, fmt.Errorf("missing frontmatter: file must start with %q", fence)
 	}
 
 	// Strip the opening fence line, then split on the closing fence.
@@ -96,17 +122,19 @@ func Unmarshal(data []byte) (*Issue, error) {
 
 	idx := strings.Index(rest, "\n"+fence)
 	if idx < 0 {
-		return nil, fmt.Errorf("unterminated frontmatter: no closing %q", fence)
+		return nil, nil, fmt.Errorf("unterminated frontmatter: no closing %q", fence)
 	}
 	yamlPart := rest[:idx]
 	body := rest[idx+len("\n"+fence):]
 	body = strings.TrimPrefix(body, "\n") // drop the newline after the closing fence
 
-	var fm frontmatter
-	if err := yaml.Unmarshal([]byte(yamlPart), &fm); err != nil {
-		return nil, fmt.Errorf("parse frontmatter: %w", err)
+	// Use legacyFrontmatter to capture old inline comments if present.
+	var lfm legacyFrontmatter
+	if err := yaml.Unmarshal([]byte(yamlPart), &lfm); err != nil {
+		return nil, nil, fmt.Errorf("parse frontmatter: %w", err)
 	}
 
+	fm := lfm.frontmatter
 	iss := &Issue{
 		ID:          fm.ID,
 		Title:       fm.Title,
@@ -121,11 +149,10 @@ func Unmarshal(data []byte) (*Issue, error) {
 		Created:     fm.Created,
 		Updated:     fm.Updated,
 		CloseReason: fm.CloseReason,
-		Comments:    fm.Comments,
 		Description: strings.TrimSpace(body),
 	}
 	if fm.Closed != nil {
 		iss.Closed = *fm.Closed
 	}
-	return iss, nil
+	return iss, lfm.Comments, nil
 }

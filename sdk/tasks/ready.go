@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -76,7 +77,8 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 }
 
 // Detail loads an issue and resolves both its outgoing references and its
-// derived inverse edges (children, blocks).
+// derived inverse edges (children, blocks). It also loads the comment sidecar
+// lazily and populates Detail.Comments with the resolved effective log.
 func (s *Store) Detail(id string) (*Detail, error) {
 	idx, all, err := s.index()
 	if err != nil {
@@ -116,6 +118,12 @@ func (s *Store) Detail(id string) (*Detail, error) {
 			}
 		}
 	}
+	// Load comments from the sidecar (lazy; zero cost for All/Ready/List).
+	stream, err := readCommentStream(s.fs, s.commentsPath(id))
+	if err != nil {
+		return nil, fmt.Errorf("load comments for %s: %w", id, err)
+	}
+	d.Comments = resolveComments(stream)
 	return d, nil
 }
 

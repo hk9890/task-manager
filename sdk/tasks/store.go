@@ -484,27 +484,197 @@ func (s *Store) Close(id, reason string) (*Issue, error) {
 	return closed, err
 }
 
-// AddComment appends an immutable comment to an issue.
-func (s *Store) AddComment(id, author, body string) (*Issue, error) {
-	var out *Issue
+// Comments returns the resolved effective comment log for an issue: each
+// replaces-chain collapsed to its newest document, tombstoned comments omitted.
+// The on-disk stream keeps full history; this returns the current view.
+// All() / Ready() / List() never read sidecars; Comments() loads it lazily.
+func (s *Store) Comments(id string) ([]Comment, error) {
+	// Verify the issue exists first.
+	if _, err := s.loadIssue(id); err != nil {
+		return nil, err
+	}
+	stream, err := readCommentStream(s.fs, s.commentsPath(id))
+	if err != nil {
+		return nil, err
+	}
+	return resolveComments(stream), nil
+}
+
+// loadIssue reads an issue from the hot partition or closed/, returning
+// ErrNotFound if it does not exist in either.
+func (s *Store) loadIssue(id string) (*Issue, error) {
+	data, err := s.fs.ReadFile(s.filePath(id))
+	if err != nil {
+		if vfs.IsNotExist(err) {
+			return nil, errNotFound(id)
+		}
+		return nil, err
+	}
+	iss, err := Unmarshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", id, err)
+	}
+	return iss, nil
+}
+
+// migrateInlineComments checks whether the issue .md at filePath still
+// contains old-style inline comments in its frontmatter. If it does, it
+// appends them to the sidecar and rewrites the issue .md without the
+// comments field. This is a one-time migration run on first sidecar touch.
+// The caller must hold the store lock.
+func (s *Store) migrateInlineComments(issueFilePath string) error {
+	data, err := s.fs.ReadFile(issueFilePath)
+	if err != nil {
+		return err
+	}
+	iss, legacy, err := unmarshalWithLegacy(data)
+	if err != nil {
+		return err
+	}
+	if len(legacy) == 0 {
+		return nil // nothing to migrate
+	}
+
+	// Append legacy comments to the sidecar, in order.
+	sidecarPath := s.commentsPath(iss.ID)
+	for _, lc := range legacy {
+		created, tsErr := parseTimestamp(lc.Created)
+		if tsErr != nil {
+			// Use a fallback time if the timestamp is unparseable.
+			created = s.now()
+		}
+		c := Comment{
+			ID:      newCommentID(),
+			Author:  lc.Author,
+			Created: created,
+			Body:    sanitizeCommentBody(lc.Body),
+		}
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			return fmt.Errorf("migrate comment to sidecar: %w", err)
+		}
+	}
+
+	// Rewrite the issue .md without the comments field (Marshal now omits it).
+	return s.writeIssue(iss)
+}
+
+// AddComment appends a new comment to the issue sidecar and returns the new
+// comment (including its freshly allocated random ID). The issue .md file is
+// NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
+func (s *Store) AddComment(id, author, body string) (*Comment, error) {
+	var out *Comment
+	err := s.withLock(func() error {
+		// Verify the issue exists.
+		iss, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+
+		// Migrate any legacy inline comments first.
+		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+			return fmt.Errorf("migrate inline comments: %w", err)
+		}
+
+		body = sanitizeCommentBody(body)
+		c := Comment{
+			ID:      newCommentID(),
+			Author:  author,
+			Created: s.now(),
+			Body:    body,
+		}
+		if err := validateCommentDoc(c); err != nil {
+			return err
+		}
+
+		if err := appendCommentDoc(s.fs, s.commentsPath(iss.ID), c); err != nil {
+			return err
+		}
+		out = &c
+		return nil
+	})
+	return out, err
+}
+
+// EditComment appends a revision to the issue sidecar with Replaces set to
+// commentID, and returns the new effective comment. The issue .md file is NOT
+// rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
+func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
+	var out *Comment
 	err := s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
 		}
-		iss.Comments = append(iss.Comments, Comment{
-			Author:  author,
-			Created: s.now(),
-			Body:    strings.TrimSpace(body),
-		})
-		iss.Updated = s.now()
-		if err := s.writeIssue(iss); err != nil {
+
+		// Migrate any legacy inline comments first.
+		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+			return fmt.Errorf("migrate inline comments: %w", err)
+		}
+
+		// Read the current stream to validate that the target comment exists.
+		sidecarPath := s.commentsPath(iss.ID)
+		stream, err := readCommentStream(s.fs, sidecarPath)
+		if err != nil {
 			return err
 		}
-		out = iss
+		if err := validateReplaces(commentID, stream); err != nil {
+			return err
+		}
+
+		body = sanitizeCommentBody(body)
+		c := Comment{
+			ID:       newCommentID(),
+			Author:   author,
+			Created:  s.now(),
+			Replaces: commentID,
+			Body:     body,
+		}
+		if err := validateCommentDoc(c); err != nil {
+			return err
+		}
+
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			return err
+		}
+		out = &c
 		return nil
 	})
 	return out, err
+}
+
+// DeleteComment appends a tombstone to the issue sidecar with Replaces set to
+// commentID and Deleted: true. The issue .md file is NOT rewritten.
+func (s *Store) DeleteComment(id, commentID, author string) error {
+	return s.withLock(func() error {
+		iss, err := s.Get(id)
+		if err != nil {
+			return err
+		}
+
+		// Migrate any legacy inline comments first.
+		if err := s.migrateInlineComments(s.filePath(id)); err != nil {
+			return fmt.Errorf("migrate inline comments: %w", err)
+		}
+
+		sidecarPath := s.commentsPath(iss.ID)
+		stream, err := readCommentStream(s.fs, sidecarPath)
+		if err != nil {
+			return err
+		}
+		if err := validateReplaces(commentID, stream); err != nil {
+			return err
+		}
+
+		c := Comment{
+			ID:       newCommentID(),
+			Author:   author,
+			Created:  s.now(),
+			Replaces: commentID,
+			Deleted:  true,
+		}
+
+		return appendCommentDoc(s.fs, sidecarPath, c)
+	})
 }
 
 // AddDep records that dependent is blocked by blocker.

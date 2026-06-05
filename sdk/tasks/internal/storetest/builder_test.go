@@ -75,24 +75,26 @@ func TestBuilder_MemAndTempDir_EquivalentReady(t *testing.T) {
 }
 
 // TestBuilder_Comment verifies that Comment() adds a comment to an issue.
+// Comments are now stored in the sidecar, not on the Issue struct.
 func TestBuilder_Comment(t *testing.T) {
 	b := storetest.New(t).
 		Issue("tst-0001").
 		Comment("tst-0001", "hans", "first note")
 
 	store := b.Mem()
-	iss, err := store.Get("tst-0001")
+	// Comments live in the sidecar; use store.Comments() to retrieve them.
+	comments, err := store.Comments("tst-0001")
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("Comments: %v", err)
 	}
-	if len(iss.Comments) != 1 {
-		t.Fatalf("expected 1 comment, got %d", len(iss.Comments))
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
 	}
-	if iss.Comments[0].Body != "first note" {
-		t.Errorf("comment body = %q, want %q", iss.Comments[0].Body, "first note")
+	if comments[0].Body != "first note" {
+		t.Errorf("comment body = %q, want %q", comments[0].Body, "first note")
 	}
-	if iss.Comments[0].Author != "hans" {
-		t.Errorf("comment author = %q, want %q", iss.Comments[0].Author, "hans")
+	if comments[0].Author != "hans" {
+		t.Errorf("comment author = %q, want %q", comments[0].Author, "hans")
 	}
 }
 

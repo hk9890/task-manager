@@ -211,7 +211,7 @@ func (b *Builder) materialize(s *tasks.Store) {
 		}
 	}
 
-	// Pass 3: add comments.
+	// Pass 3: add comments (AddComment now returns *Comment, not *Issue).
 	for _, cs := range b.comments {
 		if _, err := s.AddComment(cs.issueID, cs.author, cs.body); err != nil {
 			b.t.Fatalf("storetest: AddComment(%q): %v", cs.issueID, err)

@@ -52,15 +52,17 @@ func TestStoretest_L2_Comment(t *testing.T) {
 		Comment("tst-0001", "alice", "looks good").
 		Mem()
 
-	iss, err := store.Get("tst-0001")
+	// Comments are now in the sidecar, not on the Issue.
+	// Use store.Comments() to retrieve them.
+	comments, err := store.Comments("tst-0001")
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatalf("Comments: %v", err)
 	}
-	if len(iss.Comments) != 1 {
-		t.Fatalf("expected 1 comment, got %d", len(iss.Comments))
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
 	}
-	if iss.Comments[0].Author != "alice" || iss.Comments[0].Body != "looks good" {
-		t.Errorf("comment = %+v", iss.Comments[0])
+	if comments[0].Author != "alice" || comments[0].Body != "looks good" {
+		t.Errorf("comment = %+v", comments[0])
 	}
 }
 
