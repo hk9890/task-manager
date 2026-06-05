@@ -52,11 +52,11 @@ func TestQuery_MalformedExpr_ParseError(t *testing.T) {
 		Mem()
 
 	cases := []string{
-		`foobar == "x"`,      // unknown field
-		`status < "open"`,    // bad operator for enum
-		`priority == 5`,      // priority out of range
-		`(status == "open"`,  // unbalanced paren
-		`text == "x"`,        // text only allows ~
+		`foobar == "x"`,     // unknown field
+		`status < "open"`,   // bad operator for enum
+		`priority == 5`,     // priority out of range
+		`(status == "open"`, // unbalanced paren
+		`text == "x"`,       // text only allows ~
 	}
 
 	for _, expr := range cases {
@@ -232,7 +232,7 @@ func TestQuery_TextExpr(t *testing.T) {
 
 func TestQuery_ReadyPredicate(t *testing.T) {
 	store := storetest.New(t).
-		Issue("tst-0001", storetest.Open). // ready (no blockers)
+		Issue("tst-0001", storetest.Open).                                  // ready (no blockers)
 		Issue("tst-0002", storetest.Open, storetest.BlockedBy("tst-0001")). // not ready
 		Mem()
 
@@ -248,7 +248,7 @@ func TestQuery_ReadyPredicate(t *testing.T) {
 
 func TestQuery_BlockedPredicate(t *testing.T) {
 	store := storetest.New(t).
-		Issue("tst-0001", storetest.Open). // not blocked
+		Issue("tst-0001", storetest.Open).                                  // not blocked
 		Issue("tst-0002", storetest.Open, storetest.BlockedBy("tst-0001")). // blocked
 		Mem()
 

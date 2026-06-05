@@ -29,7 +29,7 @@ import (
 //   - "open-p1":    open, bug,   priority 1, assignee "hans", label "area:ui"
 //   - "open-p2":    open, chore, priority 2, assignee "hans"
 //   - "open-task":  open, task,  priority 2 (not a bug/chore; no match for
-//                   assignee hans && (bug||chore)); tests negative
+//     assignee hans && (bug||chore)); tests negative
 //   - "child":      open, task,  priority 2, parent = open-p0.ID
 //   - "blocker":    open, task,  priority 1 (will block "blocked-iss")
 //   - "blocked-iss": open, task, priority 3, blocked_by = blocker.ID
@@ -400,11 +400,11 @@ func TestL4_MalformedExpr_ExitOne(t *testing.T) {
 	root, _ := queryFixture(t)
 
 	malformed := []string{
-		`foobar == "x"`,    // unknown field
-		`status < "open"`,  // bad operator for enum
-		`priority == 5`,    // priority out of range
+		`foobar == "x"`,     // unknown field
+		`status < "open"`,   // bad operator for enum
+		`priority == 5`,     // priority out of range
 		`(status == "open"`, // unbalanced paren
-		`text == "x"`,      // text only allows ~
+		`text == "x"`,       // text only allows ~
 	}
 
 	for _, expr := range malformed {

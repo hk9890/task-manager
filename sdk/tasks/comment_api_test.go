@@ -24,9 +24,9 @@ import (
 func TestValidateCommentBody_DoubleQuotedRejected(t *testing.T) {
 	// A body with embedded NUL or control chars forces double-quoting.
 	badBodies := []string{
-		"line1\x00line2",                // NUL character
-		"line with \x01 control char",   // SOH
-		"text\x1b[0mescaped",           // ESC sequence
+		"line1\x00line2",              // NUL character
+		"line with \x01 control char", // SOH
+		"text\x1b[0mescaped",          // ESC sequence
 	}
 	for _, body := range badBodies {
 		if err := validateCommentBody(body); err == nil {

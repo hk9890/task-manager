@@ -470,4 +470,3 @@ func TestCommentsPath(t *testing.T) {
 		t.Errorf("commentsPath = %q, want %q", got, want)
 	}
 }
-

@@ -67,7 +67,7 @@ const (
 // record of decisions and progress. Each comment is stored as one YAML document
 // in the issue's sidecar file (.tasks/comments/<id>.yml).
 type Comment struct {
-	ID       string    `yaml:"id,omitempty"`       // opaque random token, ^[0-9a-z]{8}$
+	ID       string    `yaml:"id,omitempty"` // opaque random token, ^[0-9a-z]{8}$
 	Author   string    `yaml:"author,omitempty"`
 	Created  time.Time `yaml:"created"`
 	Replaces string    `yaml:"replaces,omitempty"` // ID of an earlier comment this supersedes

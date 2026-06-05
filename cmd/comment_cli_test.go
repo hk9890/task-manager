@@ -1,11 +1,12 @@
 //go:build integration
 
 // L4 CLI tests for the comment commands:
-//   atctl comment add   → prints commentDTO (with id field)
-//   atctl comment edit  → EditComment
-//   atctl comment rm    → DeleteComment (idempotent)
-//   atctl show --json   → detailDTO.comments is resolved commentDTO[]
-//   atctl show (human)  → renders the resolved comment log
+//
+//	atctl comment add   → prints commentDTO (with id field)
+//	atctl comment edit  → EditComment
+//	atctl comment rm    → DeleteComment (idempotent)
+//	atctl show --json   → detailDTO.comments is resolved commentDTO[]
+//	atctl show (human)  → renders the resolved comment log
 package cmd_test
 
 import (
@@ -507,7 +508,8 @@ func TestL4_ShowJSON_CommentReplaces(t *testing.T) {
 // ── full lifecycle ────────────────────────────────────────────────────────────
 
 // TestL4_CommentLifecycle_EndToEnd is a full lifecycle test:
-//   add → edit → rm, verified via show --json at each step.
+//
+//	add → edit → rm, verified via show --json at each step.
 func TestL4_CommentLifecycle_EndToEnd(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 

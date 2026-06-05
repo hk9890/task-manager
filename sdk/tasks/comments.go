@@ -62,53 +62,44 @@ type commentOnDisk struct {
 func marshalCommentDoc(c Comment) []byte {
 	created := c.Created.UTC().Format("2006-01-02T15:04:05Z")
 
-	var buf bytes.Buffer
-	if !c.Deleted && c.Body != "" {
-		// Build a yaml.Node tree so we can force LiteralStyle on the body.
-		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		addScalar := func(key, val string) {
-			root.Content = append(root.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Value: key},
-				&yaml.Node{Kind: yaml.ScalarNode, Value: val},
-			)
-		}
+	// Build a yaml.Node tree for every doc so all scalars (the ISO-8601 created
+	// timestamp included) emit unquoted, and the body can force LiteralStyle.
+	// Struct encoding would quote created as a yaml.v3 !!timestamp.
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	addScalar := func(key, val string) {
 		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "id"},
-			&yaml.Node{Kind: yaml.ScalarNode, Value: c.ID},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: val},
 		)
-		if c.Author != "" {
-			addScalar("author", c.Author)
-		}
-		addScalar("created", created)
-		if c.Replaces != "" {
-			addScalar("replaces", c.Replaces)
-		}
+	}
+	addScalar("id", c.ID)
+	if c.Author != "" {
+		addScalar("author", c.Author)
+	}
+	addScalar("created", created)
+	if c.Replaces != "" {
+		addScalar("replaces", c.Replaces)
+	}
+	if c.Deleted {
+		// Tombstone: deleted: true, no body.
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "deleted"},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
+		)
+	} else {
 		root.Content = append(root.Content,
 			&yaml.Node{Kind: yaml.ScalarNode, Value: "body"},
 			&yaml.Node{Kind: yaml.ScalarNode, Value: c.Body, Style: yaml.LiteralStyle},
 		)
-		enc := yaml.NewEncoder(&buf)
-		enc.SetIndent(2)
-		if err := enc.Encode(root); err != nil {
-			panic(fmt.Sprintf("marshalCommentDoc node encode: %v", err))
-		}
-		_ = enc.Close()
-	} else {
-		// Tombstone or bodyless doc: use struct encoding (no block-scalar needed).
-		d := commentOnDisk{
-			ID:       c.ID,
-			Author:   c.Author,
-			Created:  created,
-			Replaces: c.Replaces,
-			Deleted:  c.Deleted,
-		}
-		enc := yaml.NewEncoder(&buf)
-		enc.SetIndent(2)
-		if err := enc.Encode(d); err != nil {
-			panic(fmt.Sprintf("marshalCommentDoc struct encode: %v", err))
-		}
-		_ = enc.Close()
 	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
+		panic(fmt.Sprintf("marshalCommentDoc node encode: %v", err))
+	}
+	_ = enc.Close()
 
 	// Prepend the document separator.
 	out := make([]byte, 0, len(docSeparator)+buf.Len())

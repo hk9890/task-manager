@@ -32,13 +32,13 @@ import (
 type fieldKind int
 
 const (
-	fieldEnum    fieldKind = iota // status, type
-	fieldInt                      // priority
-	fieldString                   // assignee, parent, label
-	fieldStrSet                   // label (same ops as string)
-	fieldText                     // text (only ~)
-	fieldDate                     // created, updated, closed
-	fieldBool                     // ready, blocked (bare only)
+	fieldEnum   fieldKind = iota // status, type
+	fieldInt                     // priority
+	fieldString                  // assignee, parent, label
+	fieldStrSet                  // label (same ops as string)
+	fieldText                    // text (only ~)
+	fieldDate                    // created, updated, closed
+	fieldBool                    // ready, blocked (bare only)
 )
 
 type fieldInfo struct {

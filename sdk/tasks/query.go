@@ -46,9 +46,9 @@ func compileExpr(expr string) (query.Predicate, error) {
 //   - "updated"  → *DateValue(iss.Updated)
 //   - "closed"   → *DateValue(iss.Closed)  (zero means not closed)
 type issueRow struct {
-	iss        *Issue
-	isReady    bool
-	isBlocked  bool
+	iss       *Issue
+	isReady   bool
+	isBlocked bool
 }
 
 // newIssueRow builds an issueRow for iss. ready and blocked are pre-computed

@@ -14,10 +14,10 @@ import (
 )
 
 // TestL3_Close_MoveAndReload verifies the full close lifecycle on a real disk:
-//   1. Close moves .md to closed/.
-//   2. A fresh Open + Get still finds the issue.
-//   3. A second Open + Reopen moves it back.
-//   4. After Reopen, Update works again.
+//  1. Close moves .md to closed/.
+//  2. A fresh Open + Get still finds the issue.
+//  3. A second Open + Reopen moves it back.
+//  4. After Reopen, Update works again.
 func TestL3_Close_MoveAndReload(t *testing.T) {
 	root := t.TempDir()
 	s, err := tasks.Init(root, "tst")

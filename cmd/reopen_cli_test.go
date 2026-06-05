@@ -1,9 +1,10 @@
 //go:build integration
 
 // L4 CLI tests for:
-//   atctl reopen <id>
-//   atctl update --status closed  (routes through Close)
-//   atctl update --status open    (routes through Reopen on a closed issue)
+//
+//	atctl reopen <id>
+//	atctl update --status closed  (routes through Close)
+//	atctl update --status open    (routes through Reopen on a closed issue)
 package cmd_test
 
 import (

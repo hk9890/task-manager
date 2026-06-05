@@ -666,14 +666,14 @@ func (s *Store) Close(id, reason string) (*Issue, error) {
 // It must be called while holding the store lock.
 //
 // Sequence (no-torn-state guarantee):
-//   1. MkdirAll closed/ (idempotent).
-//   2. WriteAtomic to closed/<id>.md — if this fails, the hot-dir file is
-//      untouched and the caller sees an error with the issue still open.
-//   3. vfs.Rename hot/<id>.md → closed/<id>.md — atomic rename over the
-//      already-written closed file. This is the git rename that preserves
-//      file history. If it fails, closed/ has the new content and hot/ has
-//      the old; Get falls through to closed/ and returns the closed version —
-//      a recoverable inconsistency that resolves on the next successful close.
+//  1. MkdirAll closed/ (idempotent).
+//  2. WriteAtomic to closed/<id>.md — if this fails, the hot-dir file is
+//     untouched and the caller sees an error with the issue still open.
+//  3. vfs.Rename hot/<id>.md → closed/<id>.md — atomic rename over the
+//     already-written closed file. This is the git rename that preserves
+//     file history. If it fails, closed/ has the new content and hot/ has
+//     the old; Get falls through to closed/ and returns the closed version —
+//     a recoverable inconsistency that resolves on the next successful close.
 //
 // In practice (real osFS), WriteAtomic + Rename together behave like a
 // single atomic move because WriteAtomic internally uses temp+rename within

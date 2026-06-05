@@ -33,9 +33,9 @@ func (r *fakeRow) Blocked() bool { return r.blocked }
 
 // helpers to build rows
 
-func strVal(s string) *query.StringValue    { return &query.StringValue{S: s} }
-func intVal(n int) *query.IntValue          { return &query.IntValue{N: n} }
-func dateVal(t time.Time) *query.DateValue  { return &query.DateValue{T: t} }
+func strVal(s string) *query.StringValue   { return &query.StringValue{S: s} }
+func intVal(n int) *query.IntValue         { return &query.IntValue{N: n} }
+func dateVal(t time.Time) *query.DateValue { return &query.DateValue{T: t} }
 func setVal(labels ...string) *query.StringSetValue {
 	return &query.StringSetValue{Members: labels}
 }
@@ -85,9 +85,9 @@ func TestCompile_Empty_AlwaysTrue(t *testing.T) {
 
 func TestCompile_Malformed_ParseError(t *testing.T) {
 	cases := []string{
-		`foobar == "x"`,  // unknown field
-		`status < "open"`, // bad operator for enum
-		`priority == 5`,   // priority out of range
+		`foobar == "x"`,     // unknown field
+		`status < "open"`,   // bad operator for enum
+		`priority == 5`,     // priority out of range
 		`(status == "open"`, // unbalanced paren
 	}
 	for _, expr := range cases {

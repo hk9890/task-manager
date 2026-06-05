@@ -6,23 +6,23 @@ import "strings"
 type tokenKind int
 
 const (
-	tokEOF       tokenKind = iota
-	tokWord                // bareword [A-Za-z0-9_:./@-]+
-	tokNumber              // decimal integer
-	tokString              // double-quoted string (already unescaped in .Val)
-	tokLParen              // (
-	tokRParen              // )
-	tokNot                 // !
-	tokAnd                 // &&
-	tokOr                  // ||
-	tokEqEq                // ==
-	tokNotEq               // !=
-	tokLT                  // <
-	tokLE                  // <=
-	tokGT                  // >
-	tokGE                  // >=
-	tokTilde               // ~
-	tokError               // lexer error
+	tokEOF    tokenKind = iota
+	tokWord             // bareword [A-Za-z0-9_:./@-]+
+	tokNumber           // decimal integer
+	tokString           // double-quoted string (already unescaped in .Val)
+	tokLParen           // (
+	tokRParen           // )
+	tokNot              // !
+	tokAnd              // &&
+	tokOr               // ||
+	tokEqEq             // ==
+	tokNotEq            // !=
+	tokLT               // <
+	tokLE               // <=
+	tokGT               // >
+	tokGE               // >=
+	tokTilde            // ~
+	tokError            // lexer error
 )
 
 // token is a single lexical token.
