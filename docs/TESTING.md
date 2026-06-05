@@ -16,8 +16,10 @@ make test-cli   # go test ./...   (root module)
 make fmt vet test
 ```
 
-Green before every commit. No CI yet — the gate is manual (`make fmt-check` to
-fail instead of rewrite).
+Green before every commit (`make fmt-check` fails instead of rewriting). CI
+(`.github/workflows/ci.yml`) re-runs the gate on every push and pull request —
+fmt-check, vet, test, and integration tests for both modules, plus a build — so
+the same checks are enforced automatically.
 
 ## Conventions
 

@@ -24,7 +24,7 @@ atctl <command> [subcommand] [args] [flags]
 
 - **Human (default):** compact, aligned tables for lists; a labelled block for a
   single issue.
-- **JSON (`--json`):** stable, `snake_case` shapes (§5). Pretty-printed, HTML
+- **JSON (`--json`):** stable, `snake_case` shapes (§6). Pretty-printed, HTML
   escaping disabled. This is the contract for agents and tools.
 
 ### Exit codes
@@ -70,7 +70,7 @@ blocked-by, related, plus derived **blocks** and **children**), the description
 body, and comments (the **resolved** log — edits applied, deleted comments
 removed; see storage spec §4.4).
 
-- **Output (JSON):** `detailDTO` (§5).
+- **Output (JSON):** `detailDTO` (§6).
 
 ### `atctl list [-q <expr>] [options]`
 
