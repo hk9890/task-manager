@@ -249,6 +249,33 @@ func TestAddDepAndCycle(t *testing.T) {
 	}
 }
 
+// TestAddDep_TransitiveCycle covers the multi-hop cycle that the direct 2-node
+// case in TestAddDepAndCycle never reaches: a -> b -> c -> a. Closing the loop
+// must exercise findCycle's gray back-edge / stack-slicing branch.
+func TestAddDep_TransitiveCycle(t *testing.T) {
+	s := newTestStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b"})
+	c := mustCreate(t, s, CreateInput{Title: "c"})
+
+	// A valid deep chain a -> b -> c (a blocked by b, b blocked by c) is fine.
+	if err := s.AddDep(a.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDep(b.ID, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Closing the loop transitively (c blocked by a) forms a 3-node cycle and
+	// must be rejected — this is the boundary the direct 2-node case misses.
+	if err := s.AddDep(c.ID, a.ID); err == nil {
+		t.Error("expected transitive cycle a -> b -> c -> a to be rejected")
+	}
+	// The rejected edge must not have been persisted.
+	if reloaded, _ := s.Get(c.ID); len(reloaded.BlockedBy) != 0 {
+		t.Errorf("rejected cycle edge leaked: c.BlockedBy = %v, want empty", reloaded.BlockedBy)
+	}
+}
+
 func TestRemoveDep(t *testing.T) {
 	s := newTestStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
