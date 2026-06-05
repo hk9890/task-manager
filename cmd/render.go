@@ -128,11 +128,11 @@ func printIssueTable(issues []*tasks.Issue) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tP\tTYPE\tSTATUS\tTITLE")
+	_, _ = fmt.Fprintln(w, "ID\tP\tTYPE\tSTATUS\tTITLE")
 	for _, i := range issues {
-		fmt.Fprintf(w, "%s\tP%d\t%s\t%s\t%s\n", i.ID, i.Priority, i.Type, i.Status, i.Title)
+		_, _ = fmt.Fprintf(w, "%s\tP%d\t%s\t%s\t%s\n", i.ID, i.Priority, i.Type, i.Status, i.Title)
 	}
-	w.Flush()
+	_ = w.Flush()
 }
 
 // printDetail renders a full issue for human reading.
