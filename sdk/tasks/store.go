@@ -403,6 +403,7 @@ type CreateInput struct {
 	Type        Type
 	Priority    *int
 	Assignee    string
+	Creator     string
 	Labels      []string
 	Parent      string
 	BlockedBy   []string
@@ -425,6 +426,7 @@ func (s *Store) Create(in CreateInput) (*Issue, error) {
 			Type:        in.Type,
 			Priority:    PriorityDefault,
 			Assignee:    in.Assignee,
+			Creator:     strings.TrimSpace(in.Creator),
 			Labels:      dedupe(in.Labels),
 			Parent:      in.Parent,
 			BlockedBy:   dedupe(in.BlockedBy),

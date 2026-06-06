@@ -99,14 +99,14 @@ func TestMarshal_TruncatesSubSecondTimestamps(t *testing.T) {
 	closedSubSecond := time.Date(2026, 6, 6, 9, 0, 0, 999999999, time.UTC)
 
 	iss := &Issue{
-		ID:      "tst-0001",
-		Title:   "ts truncation test",
-		Status:  StatusClosed,
-		Type:    TypeTask,
+		ID:       "tst-0001",
+		Title:    "ts truncation test",
+		Status:   StatusClosed,
+		Type:     TypeTask,
 		Priority: 2,
-		Created: subSecond,
-		Updated: subSecond,
-		Closed:  closedSubSecond,
+		Created:  subSecond,
+		Updated:  subSecond,
+		Closed:   closedSubSecond,
 	}
 
 	data, err := Marshal(iss)

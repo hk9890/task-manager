@@ -44,9 +44,9 @@ func FuzzFrontmatterUnmarshal(f *testing.F) {
 		"",
 		"just plain text",
 		"---\nid: [unclosed\n---\n",
-		"---\nid: tst-0001\n",  // unterminated
+		"---\nid: tst-0001\n", // unterminated
 		"\xEF\xBB\xBF",        // BOM only
-		"---",                  // fence without newline
+		"---",                 // fence without newline
 		"---\n---",            // empty frontmatter no trailing newline
 	}
 
@@ -60,8 +60,8 @@ func FuzzFrontmatterUnmarshal(f *testing.F) {
 	// ── additional raw byte seeds for coverage ───────────────────────────────
 	f.Add([]byte(nil))
 	f.Add([]byte{})
-	f.Add([]byte("---\n---\n"))           // empty frontmatter block
-	f.Add([]byte("---\n\n---\n"))         // only newline in frontmatter
+	f.Add([]byte("---\n---\n"))                                      // empty frontmatter block
+	f.Add([]byte("---\n\n---\n"))                                    // only newline in frontmatter
 	f.Add([]byte("---\n" + string(make([]byte, 65536)) + "\n---\n")) // very large body
 
 	f.Fuzz(func(t *testing.T, data []byte) {

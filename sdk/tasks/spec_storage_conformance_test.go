@@ -37,8 +37,9 @@ import (
 
 // TestSpec_Storage_FrontmatterFieldOrder verifies that Marshal emits fields in
 // the normative order specified by TASK-STORAGE-SPEC §4.3:
-//   id, title, status, type, priority, assignee?, labels?, parent?,
-//   blocked_by?, related?, created, updated, closed?, close_reason?
+//
+//	id, title, status, type, priority, assignee?, labels?, parent?,
+//	blocked_by?, related?, created, updated, closed?, close_reason?
 //
 // The order is load-bearing: readers that reconstruct history from diffs depend
 // on stable ordering.
@@ -54,6 +55,7 @@ func TestSpec_Storage_FrontmatterFieldOrder(t *testing.T) {
 		Type:        TypeBug,
 		Priority:    1,
 		Assignee:    "hans",
+		Creator:     "alice",
 		Labels:      []string{"area:db"},
 		Parent:      "tst-0007",
 		BlockedBy:   []string{"tst-0040"},
@@ -89,7 +91,7 @@ func TestSpec_Storage_FrontmatterFieldOrder(t *testing.T) {
 	// Build the ordered list of field name prefixes from the spec table.
 	wantOrder := []string{
 		"id:", "title:", "status:", "type:", "priority:",
-		"assignee:", "labels:", "parent:", "blocked_by:", "related:",
+		"assignee:", "creator:", "labels:", "parent:", "blocked_by:", "related:",
 		"created:", "updated:", "closed:", "close_reason:",
 	}
 
@@ -139,7 +141,7 @@ func TestSpec_Storage_OmitemptyOptionalFields(t *testing.T) {
 	body := string(data)
 
 	// These optional fields must NOT appear when empty.
-	absent := []string{"assignee:", "labels:", "parent:", "blocked_by:", "related:", "close_reason:", "closed:"}
+	absent := []string{"assignee:", "creator:", "labels:", "parent:", "blocked_by:", "related:", "close_reason:", "closed:"}
 	for _, field := range absent {
 		if strings.Contains(body, field) {
 			t.Errorf("optional field %q should be absent for a minimal issue, but found in:\n%s", field, body)
@@ -155,14 +157,14 @@ func TestSpec_Storage_ClosedFieldPresentWhenClosed(t *testing.T) {
 
 	// Closed issue: closed field must appear.
 	closedIss := &Issue{
-		ID:      "tst-0001",
-		Title:   "closed issue",
-		Status:  StatusClosed,
-		Type:    TypeTask,
+		ID:       "tst-0001",
+		Title:    "closed issue",
+		Status:   StatusClosed,
+		Type:     TypeTask,
 		Priority: 2,
-		Created: now,
-		Updated: now,
-		Closed:  now,
+		Created:  now,
+		Updated:  now,
+		Closed:   now,
 	}
 	data, err := Marshal(closedIss)
 	if err != nil {
@@ -174,13 +176,13 @@ func TestSpec_Storage_ClosedFieldPresentWhenClosed(t *testing.T) {
 
 	// Open issue: closed field must be absent.
 	openIss := &Issue{
-		ID:      "tst-0002",
-		Title:   "open issue",
-		Status:  StatusOpen,
-		Type:    TypeTask,
+		ID:       "tst-0002",
+		Title:    "open issue",
+		Status:   StatusOpen,
+		Type:     TypeTask,
 		Priority: 2,
-		Created: now,
-		Updated: now,
+		Created:  now,
+		Updated:  now,
 		// Closed is zero.
 	}
 	data2, err := Marshal(openIss)
@@ -225,14 +227,14 @@ func TestSpec_Storage_TimestampFormat(t *testing.T) {
 	now := time.Date(2026, 6, 5, 14, 30, 45, 0, time.UTC)
 
 	iss := &Issue{
-		ID:      "tst-0001",
-		Title:   "ts format test",
-		Status:  StatusClosed,
-		Type:    TypeTask,
+		ID:       "tst-0001",
+		Title:    "ts format test",
+		Status:   StatusClosed,
+		Type:     TypeTask,
 		Priority: 2,
-		Created: now,
-		Updated: now,
-		Closed:  now,
+		Created:  now,
+		Updated:  now,
+		Closed:   now,
 	}
 	data, err := Marshal(iss)
 	if err != nil {
@@ -438,6 +440,7 @@ func TestSpec_Storage_SidecarPathUnchangedAfterClose(t *testing.T) {
 // TestSpec_Storage_ClosedLayout verifies the partition layout:
 //   - active .md in .tasks/<id>.md
 //   - after close: .md in .tasks/closed/<id>.md, hot-dir file absent
+//
 // TASK-STORAGE-SPEC §2, §5.
 func TestSpec_Storage_ClosedLayout(t *testing.T) {
 	m := vfs.NewMem()

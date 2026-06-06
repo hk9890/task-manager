@@ -52,6 +52,7 @@ var knownFields = map[string]fieldInfo{
 	"type":     {kind: fieldEnum, allowOps: []string{"==", "!="}},
 	"priority": {kind: fieldInt, allowOps: []string{"==", "!=", "<", "<=", ">", ">="}},
 	"assignee": {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
+	"creator":  {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
 	"parent":   {kind: fieldString, allowOps: []string{"==", "!="}},
 	"label":    {kind: fieldStrSet, allowOps: []string{"==", "!=", "~"}},
 	"text":     {kind: fieldText, allowOps: []string{"~"}},

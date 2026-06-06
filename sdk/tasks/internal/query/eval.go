@@ -140,7 +140,7 @@ func evalBare(n *BareNode, row Row) bool {
 // Per-field semantics follow QUERY-SPEC.md §2.
 func evalCmp(n *CmpNode, row Row) bool {
 	switch n.Field {
-	case "status", "type", "assignee", "parent":
+	case "status", "type", "assignee", "creator", "parent":
 		return evalStringField(n, row)
 	case "label":
 		return evalLabelField(n, row)

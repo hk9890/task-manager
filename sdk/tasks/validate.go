@@ -11,6 +11,7 @@ import (
 const (
 	maxTitleLen    = 200
 	maxAssigneeLen = 128
+	maxCreatorLen  = 128
 	maxLabelLen    = 64
 	maxLabels      = 64
 	maxBlockedBy   = 256
@@ -95,6 +96,17 @@ func validateFields(iss *Issue) error {
 	}
 	if hasControlChar(iss.Assignee) {
 		return invalid("assignee", "must not contain control characters")
+	}
+
+	// creator: 0-128 chars; single line; no control characters.
+	if len([]rune(iss.Creator)) > maxCreatorLen {
+		return invalid("creator", "must be at most %d characters, got %d", maxCreatorLen, len([]rune(iss.Creator)))
+	}
+	if strings.ContainsRune(iss.Creator, '\n') {
+		return invalid("creator", "must be a single line (no newline characters)")
+	}
+	if hasControlChar(iss.Creator) {
+		return invalid("creator", "must not contain control characters")
 	}
 
 	// labels: 0-64 items; each 1-64 chars matching ^[a-z0-9][a-z0-9:._/-]*$; unique.

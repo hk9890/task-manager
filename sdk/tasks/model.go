@@ -89,6 +89,7 @@ type Issue struct {
 	Type     Type
 	Priority int
 	Assignee string
+	Creator  string
 	Labels   []string
 
 	Parent    string   // ID of the grouping/epic issue, if any

@@ -24,6 +24,7 @@ type frontmatter struct {
 	Type        Type       `yaml:"type"`
 	Priority    int        `yaml:"priority"`
 	Assignee    string     `yaml:"assignee,omitempty"`
+	Creator     string     `yaml:"creator,omitempty"`
 	Labels      []string   `yaml:"labels,omitempty"`
 	Parent      string     `yaml:"parent,omitempty"`
 	BlockedBy   []string   `yaml:"blocked_by,omitempty"`
@@ -68,6 +69,7 @@ func Marshal(iss *Issue) ([]byte, error) {
 		Type:        iss.Type,
 		Priority:    iss.Priority,
 		Assignee:    iss.Assignee,
+		Creator:     iss.Creator,
 		Labels:      iss.Labels,
 		Parent:      iss.Parent,
 		BlockedBy:   iss.BlockedBy,
@@ -151,6 +153,7 @@ func unmarshalWithLegacy(data []byte) (*Issue, []legacyComment, error) {
 		Type:        fm.Type,
 		Priority:    fm.Priority,
 		Assignee:    fm.Assignee,
+		Creator:     fm.Creator,
 		Labels:      fm.Labels,
 		Parent:      fm.Parent,
 		BlockedBy:   fm.BlockedBy,
