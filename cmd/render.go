@@ -28,6 +28,7 @@ type issueDTO struct {
 	Type        string     `json:"type"`
 	Priority    int        `json:"priority"`
 	Assignee    string     `json:"assignee,omitempty"`
+	Creator     string     `json:"creator,omitempty"`
 	Labels      []string   `json:"labels,omitempty"`
 	Parent      string     `json:"parent,omitempty"`
 	BlockedBy   []string   `json:"blocked_by,omitempty"`
@@ -68,7 +69,7 @@ type detailDTO struct {
 func toIssueDTO(i *tasks.Issue) issueDTO {
 	d := issueDTO{
 		ID: i.ID, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
-		Priority: i.Priority, Assignee: i.Assignee, Labels: i.Labels,
+		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator, Labels: i.Labels,
 		Parent: i.Parent, BlockedBy: i.BlockedBy, Related: i.Related,
 		Created: i.Created, Updated: i.Updated, CloseReason: i.CloseReason,
 	}
