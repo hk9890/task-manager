@@ -363,7 +363,20 @@ func (s *Store) nextID() (string, error) {
 
 // writeIssue atomically writes an issue to disk via the FS seam. The
 // caller must hold the store lock.
+//
+// Defense-in-depth (TASK-STORAGE-SPEC §5): if the issue's id already exists
+// in closed/, writing to the hot dir would either duplicate it across both
+// partitions or silently resurrect it. We detect this here as a belt-and-
+// braces guard; callers are expected to check isInClosed before reaching this
+// point, but this prevents any future caller from bypassing that check.
 func (s *Store) writeIssue(iss *Issue) error {
+	inClosed, err := s.isInClosed(iss.ID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if inClosed {
+		return fmt.Errorf("%w: %s", ErrImmutable, iss.ID)
+	}
 	data, err := Marshal(iss)
 	if err != nil {
 		return err
@@ -993,6 +1006,14 @@ func (s *Store) AddDep(dependent, blocker string) error {
 		if err != nil {
 			return err
 		}
+		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
+		inClosed, err := s.isInClosed(dependent)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
+		}
 		if dependent == blocker {
 			return invalid("blocked_by", "issue cannot block itself")
 		}
@@ -1016,6 +1037,14 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 		iss, err := s.Get(dependent)
 		if err != nil {
 			return err
+		}
+		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
+		inClosed, err := s.isInClosed(dependent)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
 		}
 		kept := iss.BlockedBy[:0]
 		for _, b := range iss.BlockedBy {
