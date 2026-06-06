@@ -26,9 +26,10 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// Only inspect .go files; skip test files; skip the vfs package itself.
+		// Only inspect .go files; skip test files; skip the vfs package itself and
+		// the storetest package (test-only support package; may use os like vfs).
 		if d.IsDir() {
-			if d.Name() == "vfs" {
+			if d.Name() == "vfs" || d.Name() == "storetest" {
 				return filepath.SkipDir
 			}
 			return nil
