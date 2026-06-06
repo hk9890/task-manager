@@ -346,10 +346,13 @@ func TestParse_Error_MalformedValue_PriorityNotInt(t *testing.T) {
 	}
 }
 
-func TestParse_Error_MalformedValue_PriorityOutOfRange(t *testing.T) {
-	pe := mustFail(t, `priority == 5`)
-	if pe.Pos < 0 {
-		t.Errorf("Pos=%d want >= 0", pe.Pos)
+// TestParse_Priority_OutOfRange verifies that priority values > 4 are now
+// accepted (QUERY-SPEC §2/§3/§4: priority is a non-negative integer with no
+// upper bound). Out-of-range bounds evaluate normally at query time.
+func TestParse_Priority_OutOfRange(t *testing.T) {
+	// priority == 5 and priority == 7 must parse without error.
+	for _, expr := range []string{`priority == 5`, `priority == 7`, `priority < 100`} {
+		mustParse(t, expr)
 	}
 }
 
@@ -710,5 +713,76 @@ func TestParse_PureNumberIsStillNumber(t *testing.T) {
 	cmp := n.(*query.CmpNode)
 	if _, ok := cmp.Value.(*query.IntValue); !ok {
 		t.Errorf("expected IntValue for pure digit, got %T", cmp.Value)
+	}
+}
+
+// ---- at-dny.8: priority non-negative + cold-scope predicate precision -------
+
+// TestParse_Priority_AboveRange verifies that priority values > 4 now parse
+// without error (QUERY-SPEC §2/§3/§4: non-negative integer, no upper bound).
+// Out-of-range bounds evaluate normally: priority < 5 matches every issue,
+// priority == 7 matches none.
+func TestParse_Priority_AboveRange(t *testing.T) {
+	cases := []string{
+		`priority == 5`,
+		`priority == 7`,
+		`priority < 5`,
+		`priority >= 10`,
+		`priority != 99`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			mustParse(t, expr)
+		})
+	}
+}
+
+// TestParse_Priority_NegativeStillRejected verifies that a negative priority
+// literal (when somehow constructible) is still rejected. The grammar cannot
+// lex a negative literal, but the guard is kept defensively. A minus sign
+// before a number is two tokens; the parser sees a dangling minus.
+func TestParse_Priority_NegativeStillRejected(t *testing.T) {
+	// "-1" is lexed as a minus operator then "1"; the parser sees an unexpected
+	// token after the expression and returns a ParseError.
+	pe := mustFail(t, `priority == -1`)
+	if pe.Pos < 0 {
+		t.Errorf("Pos=%d want >= 0", pe.Pos)
+	}
+}
+
+// TestReferencesClosedWork_StatusEq verifies that status == "closed" is
+// recognized as referencing closed work (QUERY-SPEC §5).
+func TestReferencesClosedWork_StatusEq(t *testing.T) {
+	if !query.ReferencesClosedWork(`status == "closed"`) {
+		t.Error(`ReferencesClosedWork("status == \"closed\"") want true`)
+	}
+}
+
+// TestReferencesClosedWork_StatusNeq verifies that status != "closed" does
+// NOT count as referencing closed work (QUERY-SPEC §5: != selects active work
+// and must not auto-scan the cold partition).
+func TestReferencesClosedWork_StatusNeq(t *testing.T) {
+	if query.ReferencesClosedWork(`status != "closed"`) {
+		t.Error(`ReferencesClosedWork("status != \"closed\"") want false`)
+	}
+}
+
+// TestReferencesClosedWork_ClosedDateAnyOp verifies that any comparison
+// against the "closed" date field (any operator) counts as referencing closed
+// work (QUERY-SPEC §5).
+func TestReferencesClosedWork_ClosedDateAnyOp(t *testing.T) {
+	cases := []string{
+		`closed > "2026-01-01"`,
+		`closed < "2026-01-01"`,
+		`closed >= "2026-01-01T00:00:00Z"`,
+		`closed == "2026-01-01"`,
+		`closed != "2026-01-01"`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			if !query.ReferencesClosedWork(expr) {
+				t.Errorf("ReferencesClosedWork(%q) want true (closed date field)", expr)
+			}
+		})
 	}
 }

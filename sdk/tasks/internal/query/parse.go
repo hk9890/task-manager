@@ -338,8 +338,13 @@ func (p *parser) parseIntValue(tok token) (Value, *ParseError) {
 	if err != nil {
 		return nil, parseErr(tok.Pos, "invalid integer %q", tok.Val)
 	}
-	if n < 0 || n > 4 {
-		return nil, parseErr(tok.Pos, "priority must be 0–4, got %d", n)
+	// QUERY-SPEC §2/§3/§4: priority is a non-negative integer with no upper
+	// bound. Out-of-range bounds (e.g. priority < 5, priority == 7) evaluate
+	// normally: the first matches every issue, the second matches none.
+	// The grammar `number = digit {digit}` cannot produce a negative literal,
+	// but we keep this guard defensively.
+	if n < 0 {
+		return nil, parseErr(tok.Pos, "priority must be a non-negative integer, got %d", n)
 	}
 	return &IntValue{N: n}, nil
 }
@@ -408,13 +413,15 @@ func nodeReferencesClosedWork(n Node) bool {
 	case *BinNode:
 		return nodeReferencesClosedWork(v.Left) || nodeReferencesClosedWork(v.Right)
 	case *CmpNode:
-		// status == "closed" (or != "closed")
+		// QUERY-SPEC §5: a status comparison counts as referencing closed work
+		// ONLY for positive equality (status == "closed"). The != operator
+		// selects active work and must NOT auto-scan the cold partition.
 		if v.Field == "status" {
-			if sv, ok := v.Value.(*StringValue); ok && sv.S == "closed" {
+			if sv, ok := v.Value.(*StringValue); ok && sv.S == "closed" && v.Op == "==" {
 				return true
 			}
 		}
-		// any comparison against the "closed" date field
+		// any comparison against the "closed" date field (any operator) counts
 		if v.Field == "closed" {
 			return true
 		}

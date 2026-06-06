@@ -402,7 +402,6 @@ func TestL4_MalformedExpr_ExitOne(t *testing.T) {
 	malformed := []string{
 		`foobar == "x"`,     // unknown field
 		`status < "open"`,   // bad operator for enum
-		`priority == 5`,     // priority out of range
 		`(status == "open"`, // unbalanced paren
 		`text == "x"`,       // text only allows ~
 	}

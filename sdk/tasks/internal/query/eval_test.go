@@ -87,7 +87,6 @@ func TestCompile_Malformed_ParseError(t *testing.T) {
 	cases := []string{
 		`foobar == "x"`,     // unknown field
 		`status < "open"`,   // bad operator for enum
-		`priority == 5`,     // priority out of range
 		`(status == "open"`, // unbalanced paren
 	}
 	for _, expr := range cases {
@@ -677,5 +676,44 @@ func TestCompile_ParseError_Message(t *testing.T) {
 	pe := mustCompileFail(t, `foobar`)
 	if pe.Message == "" {
 		t.Error("ParseError.Message should not be empty")
+	}
+}
+
+// ---- at-dny.8: priority non-negative integer (no upper bound) ---------------
+
+// TestEval_Priority_AboveRange_Eq7MatchesNone verifies that priority == 7
+// parses without error and matches no issue whose priority is in [0, 4].
+// (QUERY-SPEC §2/§4: out-of-range bound evaluates normally — no ParseError.)
+func TestEval_Priority_AboveRange_Eq7MatchesNone(t *testing.T) {
+	p := mustCompile(t, `priority == 7`)
+	for i := 0; i <= 4; i++ {
+		r := row(map[string]query.Value{"priority": intVal(i)}, false, false)
+		if p.Match(r) {
+			t.Errorf("priority == 7: unexpected match for priority %d", i)
+		}
+	}
+}
+
+// TestEval_Priority_AboveRange_LT5MatchesAll verifies that priority < 5
+// parses without error and matches every issue whose priority is in [0, 4].
+func TestEval_Priority_AboveRange_LT5MatchesAll(t *testing.T) {
+	p := mustCompile(t, `priority < 5`)
+	for i := 0; i <= 4; i++ {
+		r := row(map[string]query.Value{"priority": intVal(i)}, false, false)
+		if !p.Match(r) {
+			t.Errorf("priority < 5: expected match for priority %d", i)
+		}
+	}
+}
+
+// TestEval_Priority_ValidRange_Unchanged verifies that the in-range values
+// 0–4 still parse and evaluate correctly (regression guard).
+func TestEval_Priority_ValidRange_Unchanged(t *testing.T) {
+	for i := 0; i <= 4; i++ {
+		p := mustCompile(t, "priority == "+string(rune('0'+i)))
+		r := row(map[string]query.Value{"priority": intVal(i)}, false, false)
+		if !p.Match(r) {
+			t.Errorf("priority == %d: expected match for same priority", i)
+		}
 	}
 }
