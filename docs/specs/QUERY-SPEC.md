@@ -34,7 +34,7 @@ comparison = field , op , value ;
 op         = "==" | "!=" | "<" | "<=" | ">" | ">=" | "~" ;
 
 bool_field = "ready" | "blocked" ;
-field      = "status" | "type" | "priority" | "assignee" | "parent"
+field      = "status" | "type" | "priority" | "assignee" | "creator" | "parent"
            | "label"  | "text" | "created"  | "updated"  | "closed" ;
 
 value      = number | string | bareword ;
@@ -64,6 +64,7 @@ operator a field does not support is a parse error (§4).
 | `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` |
 | `priority` | int | `==` `!=` `<` `<=` `>` `>=` | `0`–`4` |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |
+| `creator` | string | `==` `!=` `~` | quoted or bareword |
 | `parent` | issue ID | `==` `!=` | an issue ID, e.g. `"dtt-0007"`; `==` may be `""` (no parent) |
 | `label` | string set | `==` `!=` `~` | quoted or bareword |
 | `text` | virtual string | `~` | quoted or bareword |
@@ -78,6 +79,7 @@ operator a field does not support is a parse error (§4).
 - **enum / `priority` / `parent`** — `==` / `!=` compare the field value directly.
   `priority` also supports the ordering operators (numeric).
 - **`assignee`** — `==` / `!=` exact; `~` case-insensitive substring.
+- **`creator`** — same as `assignee`: `==` / `!=` exact; `~` case-insensitive substring.
 - **`label`** — the issue carries a *set* of labels. `label == "x"` is true iff the
   set contains exactly `"x"` (membership); `label != "x"` is its negation;
   `label ~ "x"` is true iff some label contains the case-insensitive substring `x`.
@@ -159,6 +161,7 @@ type == bug && label ~ "area:db"
 ready && priority <= 2
 text ~ "drill" && !blocked
 assignee == "hans" && (type == bug || type == chore)
+creator == "ada" && status == "open"
 closed > "2026-01-01"
 parent == "dtt-0007"
 ```
@@ -172,3 +175,11 @@ operator, or a new bare predicate is an **additive** change (an expression valid
 today stays valid). Removing or repurposing one is breaking and is versioned with
 the SDK module. The grammar is intentionally frozen at this shape — selection only;
 no ordering, projection, or aggregation is ever added here (those stay caller-side).
+
+**Structured construction.** Callers that build expressions from typed inputs should
+use the SDK's `Criteria.Build` (SDK-SPEC.md §3) rather than concatenating strings:
+it is the canonical producer of this syntax and the single owner of value
+quoting/escaping and precedence. It only *produces* an expression — evaluation stays
+in the one engine. Ordering, limit, offset, and the total match count are
+presentation concerns handled caller-side (`Filter` / `Page`), never part of this
+grammar.

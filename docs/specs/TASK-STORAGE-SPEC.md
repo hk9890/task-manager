@@ -129,6 +129,7 @@ status: in_progress
 type: bug
 priority: 1
 assignee: hans
+creator: hans
 labels: [area:details, triage:fix-as-is]
 parent: dtt-0007
 blocked_by: [dtt-0040]
@@ -151,6 +152,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `type` | enum | yes | always |
 | `priority` | int | yes | always |
 | `assignee` | string | no | non-empty |
+| `creator` | string | no | non-empty |
 | `labels` | [string] | no | non-empty |
 | `parent` | string | no | non-empty |
 | `blocked_by` | [string] | no | non-empty |
@@ -170,6 +172,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`. |
 | `priority` | integer `0`–`4` (0 = critical … 4 = trivial); default `2`. |
 | `assignee` | 0–128 chars; single line; no control characters. |
+| `creator` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
 | `labels` | 0–64 items; each 1–64 chars matching `^[a-z0-9][a-z0-9:._/-]*$`; unique. |
 | `parent` | a valid ID (§3); must reference an existing issue; not self. |
 | `blocked_by` | 0–256 items; each a valid ID; unique; no self; no cycles. |

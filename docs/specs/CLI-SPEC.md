@@ -154,6 +154,7 @@ Create a new issue and allocate its ID.
 | `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore`. |
 | `--priority <n>` | `2` | `0` (critical) … `4` (trivial). |
 | `--assignee <a>` | empty | Assignee. |
+| `--creator <a>` | `$USER` | Creator — who filed the issue; recorded once at creation. |
 | `--label <l>` | — | Label; repeatable. |
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
@@ -184,6 +185,7 @@ as-is.
 - Setting `--status closed` transitions the issue to closed (stamps the close time
   and moves it to the cold partition) but records **no** reason — use `close
   --reason` for that. Moving away from `closed` reopens (status → `open`).
+- `creator` is provenance — set once at `create` and not editable here.
 - **Output:** the updated `issueDTO`.
 
 ### `atctl close <id> [--reason <r>]`
@@ -266,7 +268,7 @@ nested in others:
 ```json
 {
   "id": "dtt-0042", "title": "…", "status": "open", "type": "bug",
-  "priority": 1, "assignee": "hans", "labels": ["area:x"],
+  "priority": 1, "assignee": "hans", "creator": "hans", "labels": ["area:x"],
   "parent": "dtt-0007", "blocked_by": ["dtt-0040"], "related": ["dtt-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-04T09:00:00Z",
   "closed": "2026-06-05T08:00:00Z", "close_reason": "fixed"
@@ -294,7 +296,7 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 ```
 atctl init     [--prefix X]
 atctl create   --title T [--description[-file] --type --priority --assignee
-                          --label… --parent --blocked-by… --related…]
+                          --creator --label… --parent --blocked-by… --related…]
 atctl show     <id>
 atctl list     [-q <expr>] [--all --sort --reverse --limit]
 atctl search   <text> [--all --sort --reverse --limit]
