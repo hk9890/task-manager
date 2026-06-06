@@ -94,7 +94,7 @@ func scaling(recs []rec, idset map[string]bool, work string) {
 	var total, escaped, block int
 	t0 := time.Now()
 	for _, r := range recs {
-		data, err := tasks.Marshal(issueOf(r, idset, true))
+		data, err := tasks.Marshal(issueOf(r, idset))
 		must(err)
 		must(os.WriteFile(filepath.Join(dir, r.ID+".md"), data, 0o644))
 		sizes = append(sizes, len(data))
@@ -195,7 +195,7 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 	os.RemoveAll(rootA)
 	stA, _ := tasks.Init(rootA, "dtt")
 	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset, true))
+		d, _ := tasks.Marshal(issueOf(r, idset))
 		os.WriteFile(filepath.Join(stA.Dir(), r.ID+".md"), d, 0o644)
 	}
 	bA, nA := dirBytes(stA.Dir())
@@ -209,7 +209,7 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 	os.MkdirAll(side, 0o755)
 	var sb, sc int
 	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset, false))
+		d, _ := tasks.Marshal(issueOf(r, idset))
 		os.WriteFile(filepath.Join(stB.Dir(), r.ID+".md"), d, 0o644)
 		if len(r.Comments) > 0 {
 			var b strings.Builder
@@ -232,7 +232,7 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 	closed := filepath.Join(stC.Dir(), "closed")
 	os.MkdirAll(closed, 0o755)
 	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset, false))
+		d, _ := tasks.Marshal(issueOf(r, idset))
 		dest := stC.Dir()
 		if mapStatus(r.Status) == tasks.StatusClosed {
 			dest = closed
@@ -379,7 +379,7 @@ func synth(n int) []rec {
 	return out
 }
 
-func issueOf(r rec, idset map[string]bool, withComments bool) *tasks.Issue {
+func issueOf(r rec, idset map[string]bool) *tasks.Issue {
 	iss := &tasks.Issue{
 		ID: r.ID, Title: r.Title, Status: mapStatus(r.Status), Type: mapType(r.IssueType),
 		Priority: clampPrio(r.Priority), Assignee: r.Owner, Labels: r.Labels,
@@ -398,11 +398,8 @@ func issueOf(r rec, idset map[string]bool, withComments bool) *tasks.Issue {
 	if i := strings.LastIndex(r.ID, "."); i > 0 && idset[r.ID[:i]] {
 		iss.Parent = r.ID[:i]
 	}
-	if withComments {
-		for _, c := range r.Comments {
-			iss.Comments = append(iss.Comments, tasks.Comment{Author: c.Author, Created: ts(c.Created), Body: strings.TrimSpace(c.Text)})
-		}
-	}
+	// Comments are stored in the sidecar (Issue has no Comments field since the
+	// sidecar migration). Inline-comment benchmarking is no longer applicable.
 	return iss
 }
 
