@@ -147,24 +147,47 @@ func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
 	// The spec says "reject in-place write"; we test that it errors, not the exact type.
 }
 
-// TestClose_ImmutableInPlace_CloseEditRejected verifies that calling Close
-// again (which would be an in-place edit) on an already-closed issue is also
-// rejected. Note: the old behaviour was idempotent; the new spec says
-// in-place writes to closed/ are forbidden — re-close must error.
-func TestClose_ImmutableInPlace_CloseEditRejected(t *testing.T) {
+// TestClose_Idempotent verifies that calling Close again on an already-closed
+// issue is a successful no-op (CLI-SPEC §"atctl close": "Idempotent").
+// The returned issue must still be closed, the original close_reason is
+// preserved (not overwritten), and no ErrImmutable is returned.
+func TestClose_Idempotent(t *testing.T) {
 	s := newMemStoreForClose(t)
 
 	iss, err := s.Create(CreateInput{Title: "close twice"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.Close(iss.ID, "first"); err != nil {
+	first, err := s.Close(iss.ID, "first")
+	if err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
-	// Second Close on an already-closed issue: must error.
-	_, err = s.Close(iss.ID, "second")
-	if err == nil {
-		t.Fatal("re-closing an already-closed issue must error (immutable in place)")
+	if first.Status != StatusClosed {
+		t.Fatalf("status after first Close = %v, want closed", first.Status)
+	}
+
+	// Second Close on an already-closed issue: must succeed (no-op).
+	second, err := s.Close(iss.ID, "second")
+	if err != nil {
+		t.Fatalf("second Close (re-close) must succeed (idempotent), got: %v", err)
+	}
+	if second.Status != StatusClosed {
+		t.Errorf("status after re-close = %v, want closed", second.Status)
+	}
+	// Original close_reason must be preserved (new reason is ignored on re-close).
+	if second.CloseReason != "first" {
+		t.Errorf("close_reason after re-close = %q, want %q (original preserved)", second.CloseReason, "first")
+	}
+
+	// The file must still be only in closed/ (no spurious hot-dir write).
+	m := s.fs.(*vfs.Mem)
+	hotPath := "/.tasks/" + iss.ID + ".md"
+	if _, err := m.ReadFile(hotPath); err == nil {
+		t.Errorf("hot-dir file %s must not exist after re-close", hotPath)
+	}
+	closedPath := "/.tasks/closed/" + iss.ID + ".md"
+	if _, err := m.ReadFile(closedPath); err != nil {
+		t.Errorf("closed/ file %s must exist after re-close: %v", closedPath, err)
 	}
 }
 

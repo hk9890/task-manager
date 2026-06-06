@@ -646,9 +646,17 @@ func applyLabels(iss *Issue, in UpdateInput) {
 
 // Close stamps the issue closed and moves its .md to closed/.
 //
-// A closed issue is immutable in place (TASK-STORAGE-SPEC §5): calling Close
-// again on an already-closed issue returns ErrImmutable. Use Reopen to restore
-// mutability, or AddComment to append a post-close note.
+// Idempotent (CLI-SPEC §"atctl close", SDK-SPEC §4): if the issue is already
+// closed, Close returns a successful no-op — the existing closed issue is
+// returned and no file write occurs. The supplied reason is silently ignored
+// on a re-close; the original close_reason from the first Close call is
+// preserved. This keeps the "closed issues are immutable in place"
+// (TASK-STORAGE-SPEC §5) invariant intact — no hot-dir write is attempted.
+//
+// To change the close_reason of an already-closed issue, Reopen it first,
+// then Close again with the new reason.
+//
+// Use Reopen to restore mutability, or AddComment to append a post-close note.
 func (s *Store) Close(id, reason string) (*Issue, error) {
 	var out *Issue
 	err := s.withLock(func() error {
@@ -656,13 +664,16 @@ func (s *Store) Close(id, reason string) (*Issue, error) {
 		if err != nil {
 			return err
 		}
-		// Reject in-place writes to already-closed issues.
+		// If the issue is already closed, return a successful no-op.
+		// No in-place write to closed/ is attempted, preserving the immutability
+		// invariant (TASK-STORAGE-SPEC §5).
 		inClosed, err := s.isInClosed(id)
 		if err != nil {
 			return err
 		}
 		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, id)
+			out = iss
+			return nil
 		}
 		s.applyStatus(iss, StatusClosed, reason)
 		iss.Updated = s.now()
