@@ -321,9 +321,13 @@ An issue is **active** while its file lives in the store's hot directory and
   optional fields omitted (never written as `null` / `[]` / `""`). String scalars
   that span multiple lines use block scalars.
 - **Atomic on disk:** every file write is temp-file + `fsync` + `rename` over the
-  target, so a reader never observes a torn file. The **one** exception is the
-  comment sidecar (§4.4), which is append-only — grown with an `O_APPEND` + `fsync`
-  write rather than rewritten. Both forms happen under the store lock (§7).
+  target, followed by an `fsync` of the parent directory so the new directory
+  entry (the rename, or a newly created file) is itself durable across a crash —
+  a reader never observes a torn file, and a survived rename never reverts. The
+  **one** exception is the comment sidecar (§4.4), which is append-only — grown
+  with an `O_APPEND` + `fsync` write rather than rewritten (a newly created
+  sidecar still triggers a parent-dir `fsync`). Both forms happen under the store
+  lock (§7).
 
 ---
 

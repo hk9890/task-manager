@@ -293,8 +293,9 @@ var (
 )
 ```
 
-`ErrImmutable` is returned by `Update` (ordinary field edits) when the target
-issue lives in `closed/`. `Close` is idempotent: calling it on an already-closed
+`ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`, and
+`RemoveDep` when the target issue lives in `closed/` (closed issues are immutable
+in place — see storage spec §5). `Close` is idempotent: calling it on an already-closed
 issue returns the existing issue and `nil` (no-op; no in-place write to `closed/`
 is attempted). Use `Reopen` to restore mutability; `AddComment` / `EditComment` /
 `DeleteComment` are still allowed on closed issues (sidecar append is the one
