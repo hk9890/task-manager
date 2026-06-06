@@ -33,6 +33,10 @@ var createCmd = &cobra.Command{
 			return err
 		}
 
+		if cmd.Flags().Changed("description") && cmd.Flags().Changed("description-file") {
+			return fmt.Errorf("--description and --description-file are mutually exclusive")
+		}
+
 		desc := createFlags.description
 		if createFlags.descriptionFile != "" {
 			b, err := readFileOrStdin(createFlags.descriptionFile)

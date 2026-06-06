@@ -35,6 +35,29 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 		f := cmd.Flags()
+
+		if f.Changed("description") && f.Changed("description-file") {
+			return fmt.Errorf("--description and --description-file are mutually exclusive")
+		}
+
+		// Detect whether any mutating flag was passed; if none, bail out early to
+		// avoid a no-op write that bumps updated and churns the file.
+		mutatingFlags := []string{
+			"title", "description", "description-file", "status", "type",
+			"priority", "assignee", "parent",
+			"add-label", "remove-label", "set-labels", "clear-labels",
+		}
+		anyChanged := false
+		for _, name := range mutatingFlags {
+			if f.Changed(name) {
+				anyChanged = true
+				break
+			}
+		}
+		if !anyChanged {
+			return fmt.Errorf("no update flags provided; nothing to change")
+		}
+
 		in := tasks.UpdateInput{
 			AddLabels:    updateFlags.addLabels,
 			RemoveLabels: updateFlags.removeLabels,
@@ -190,6 +213,9 @@ var commentAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if cmd.Flags().Changed("file") && len(args) == 2 {
+			return fmt.Errorf("body argument and --file are mutually exclusive")
+		}
 		var body string
 		switch {
 		case commentFlags.file != "":
@@ -235,6 +261,9 @@ var commentEditCmd = &cobra.Command{
 		s, err := openStore()
 		if err != nil {
 			return err
+		}
+		if cmd.Flags().Changed("file") && len(args) == 3 {
+			return fmt.Errorf("body argument and --file are mutually exclusive")
 		}
 		var body string
 		switch {

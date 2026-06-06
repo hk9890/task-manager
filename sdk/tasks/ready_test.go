@@ -1,6 +1,9 @@
 package tasks
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestReadyAndBlocked(t *testing.T) {
 	s := newTestStore(t)
@@ -136,6 +139,67 @@ func TestListFilters(t *testing.T) {
 	limited, _ := s.List(Filter{IncludeClosed: true, Limit: 2})
 	if len(limited) != 2 {
 		t.Errorf("limit wrong: %v", ids(limited))
+	}
+}
+
+// TestSortCreatedTieBreakByID verifies that SortCreated uses ID as a tie-break
+// when two issues have identical Created timestamps, producing deterministic order.
+func TestSortCreatedTieBreakByID(t *testing.T) {
+	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	a := &Issue{ID: "agt-0001", Created: ts, Updated: ts}
+	b := &Issue{ID: "agt-0002", Created: ts, Updated: ts}
+	c := &Issue{ID: "agt-0003", Created: ts, Updated: ts}
+
+	// Shuffle order to confirm sort is not relying on input order.
+	issues := []*Issue{c, a, b}
+	sortIssues(issues, SortCreated)
+
+	wantIDs := []string{"agt-0001", "agt-0002", "agt-0003"}
+	for i, iss := range issues {
+		if iss.ID != wantIDs[i] {
+			t.Errorf("SortCreated tie-break: position %d = %q, want %q; full: %v",
+				i, iss.ID, wantIDs[i], ids(issues))
+		}
+	}
+}
+
+// TestSortUpdatedTieBreakByID verifies that SortUpdated uses ID as a tie-break
+// when two issues have identical Updated timestamps.
+func TestSortUpdatedTieBreakByID(t *testing.T) {
+	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	a := &Issue{ID: "agt-0001", Updated: ts}
+	b := &Issue{ID: "agt-0002", Updated: ts}
+	c := &Issue{ID: "agt-0003", Updated: ts}
+
+	issues := []*Issue{c, a, b}
+	sortIssues(issues, SortUpdated)
+
+	wantIDs := []string{"agt-0001", "agt-0002", "agt-0003"}
+	for i, iss := range issues {
+		if iss.ID != wantIDs[i] {
+			t.Errorf("SortUpdated tie-break: position %d = %q, want %q; full: %v",
+				i, iss.ID, wantIDs[i], ids(issues))
+		}
+	}
+}
+
+// TestSortClosedTieBreakByID verifies that SortClosed uses ID as a tie-break
+// when two issues have identical Closed timestamps.
+func TestSortClosedTieBreakByID(t *testing.T) {
+	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	a := &Issue{ID: "agt-0001", Closed: ts}
+	b := &Issue{ID: "agt-0002", Closed: ts}
+	c := &Issue{ID: "agt-0003", Closed: ts}
+
+	issues := []*Issue{c, a, b}
+	sortIssues(issues, SortClosed)
+
+	wantIDs := []string{"agt-0001", "agt-0002", "agt-0003"}
+	for i, iss := range issues {
+		if iss.ID != wantIDs[i] {
+			t.Errorf("SortClosed tie-break: position %d = %q, want %q; full: %v",
+				i, iss.ID, wantIDs[i], ids(issues))
+		}
 	}
 }
 

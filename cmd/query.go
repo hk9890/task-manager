@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -81,13 +82,14 @@ var listCmd = &cobra.Command{
 var searchFilter filterFlags
 
 var searchCmd = &cobra.Command{
-	Use:   "search <text>",
-	Short: "Search issues by text (ID, title, description)",
+	Use:   "search <text> [more words...]",
+	Short: "Search issues by text (ID, title, description); multiple words are joined",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Translate the search text into a text ~ "<text>" expression.
-		// If the user also passed -q, combine them with &&.
-		textExpr := fmt.Sprintf(`text ~ %q`, args[0])
+		// Join all positional arguments with spaces so `search foo bar` searches
+		// for the phrase "foo bar" rather than silently dropping "bar".
+		// Translate into a text ~ "<text>" expression; combine with -q if given.
+		textExpr := fmt.Sprintf(`text ~ %q`, strings.Join(args, " "))
 		if searchFilter.query != "" {
 			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
 		} else {
@@ -149,9 +151,9 @@ var blockedCmd = &cobra.Command{
 			return nil
 		}
 		for _, b := range blocked {
-			fmt.Printf("%s  P%d  %s\n", b.Issue.ID, b.Issue.Priority, b.Issue.Title)
+			fmt.Printf("%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
 			for _, r := range b.BlockedBy {
-				fmt.Printf("    blocked by %s (%s)  %s\n", r.ID, r.Status, r.Title)
+				fmt.Printf("  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
 			}
 		}
 		return nil

@@ -13,10 +13,10 @@ import (
 // A blocker present in the hot index (idx) is open if its status is not closed.
 // A blocker absent from the hot index is checked against the closed/ partition
 // via a cheap vfs.Stat: if found there it is resolved (closed); if found in
-// neither partition it is dangling — also treated as resolved here because
-// dangling refs are rejected at write time by checkRefs and should not arise
-// during ordinary ready/blocked computation. This satisfies TASK-STORAGE-SPEC
-// §9: "A blocker that exists in closed/ counts as resolved."
+// neither partition it is dangling — treated as unresolved to surface the
+// inconsistency (dangling refs are rejected at write time by checkRefs and
+// should not arise during ordinary ready/blocked computation). This satisfies
+// TASK-STORAGE-SPEC §9: "A blocker that exists in closed/ counts as resolved."
 func openBlockers(idx map[string]*Issue, closedStat func(id string) bool, iss *Issue) []string {
 	var open []string
 	for _, b := range iss.BlockedBy {
@@ -407,11 +407,29 @@ func sortIssues(issues []*Issue, field SortField) {
 	case SortPriority:
 		sort.Slice(issues, func(i, j int) bool { return less(issues[i], issues[j]) })
 	case SortCreated:
-		sort.Slice(issues, func(i, j int) bool { return issues[i].Created.After(issues[j].Created) })
+		sort.Slice(issues, func(i, j int) bool {
+			a, b := issues[i], issues[j]
+			if !a.Created.Equal(b.Created) {
+				return a.Created.After(b.Created)
+			}
+			return a.ID < b.ID
+		})
 	case SortUpdated:
-		sort.Slice(issues, func(i, j int) bool { return issues[i].Updated.After(issues[j].Updated) })
+		sort.Slice(issues, func(i, j int) bool {
+			a, b := issues[i], issues[j]
+			if !a.Updated.Equal(b.Updated) {
+				return a.Updated.After(b.Updated)
+			}
+			return a.ID < b.ID
+		})
 	case SortClosed:
-		sort.Slice(issues, func(i, j int) bool { return issues[i].Closed.After(issues[j].Closed) })
+		sort.Slice(issues, func(i, j int) bool {
+			a, b := issues[i], issues[j]
+			if !a.Closed.Equal(b.Closed) {
+				return a.Closed.After(b.Closed)
+			}
+			return a.ID < b.ID
+		})
 	default:
 		sortByWork(issues)
 	}
