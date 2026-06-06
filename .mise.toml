@@ -49,6 +49,29 @@ go vet ./...
 (cd sdk && go vet ./...)
 """
 
+[tasks."build:all"]
+description = "Compile every module (root, sdk, bench) — catches excluded-module rot"
+run = """
+go build ./...
+(cd sdk && go build ./...)
+(cd bench && go build ./...)
+"""
+
+[tasks."vet:all"]
+description = "go vet every module (root, sdk, bench)"
+run = """
+go vet ./...
+(cd sdk && go vet ./...)
+(cd bench && go vet ./...)
+"""
+
+[tasks."test:fuzz"]
+description = "Run fuzz seed corpora for the sdk module (no-ops cleanly if no fuzz targets exist yet)"
+dir = "sdk"
+run = "go test -run=Fuzz ./..."
+[tasks."test:fuzz".env]
+CGO_ENABLED = "1"
+
 [tasks.lint]
 description = "golangci-lint at pinned version (both modules)"
 run = """
@@ -123,9 +146,9 @@ CGO_ENABLED = "1"
 # ---- gates -----------------------------------------------------------------
 
 [tasks.quality]
-description = "Fast pre-commit gate: vet + lint + L1/L2 tests"
-depends = ["vet", "lint", "test"]
+description = "Fast pre-commit gate: vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
+depends = ["vet:all", "build:all", "lint", "test", "test:fuzz"]
 
 [tasks."quality:full"]
-description = "Pre-handoff gate: vet + lint + all layers"
-depends = ["vet", "lint", "test", "test:integration"]
+description = "Pre-handoff gate: vet + lint + all layers + build/vet all modules + fuzz seeds"
+depends = ["vet:all", "build:all", "lint", "test", "test:integration", "test:fuzz"]
