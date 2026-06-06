@@ -133,7 +133,7 @@ func readClosedIssues(s *tasks.Store, closedDir string) ([]*tasks.Issue, error) 
 		id := strings.TrimSuffix(name, ".md")
 		iss, err := s.Get(id)
 		if err != nil {
-			return nil, fmt.Errorf("Get %q from closed/: %w", id, err)
+			return nil, fmt.Errorf("get %q from closed/: %w", id, err)
 		}
 		issues = append(issues, iss)
 	}

@@ -79,14 +79,8 @@ func TestResolveComments_SelfReplaceTombstone(t *testing.T) {
 // TestResolveComments_Fork verifies that when two docs replace the same target,
 // the later one wins (existing semantics per TASK-STORAGE-SPEC §4.4 rule 3).
 func TestResolveComments_Fork(t *testing.T) {
+	// A fork: two docs replace the same real target "origorig".
 	stream := []Comment{
-		{ID: "origorig", Created: cycleTS, Body: "original\n"},
-		{ID: "edit0001", Created: cycleTS.Add(time.Second), Replaces: "origorg", Body: "edit 1\n"},
-		{ID: "edit0002", Created: cycleTS.Add(2 * time.Second), Replaces: "origorg", Body: "edit 2\n"},
-	}
-	// Note: "origorg" is intentionally a dangling target (not "origorg" != "origorigd").
-	// Use a proper fork targeting the real ID:
-	stream = []Comment{
 		{ID: "origorig", Created: cycleTS, Body: "original\n"},
 		{ID: "edit0001", Created: cycleTS.Add(time.Second), Replaces: "origorig", Body: "edit 1\n"},
 		{ID: "edit0002", Created: cycleTS.Add(2 * time.Second), Replaces: "origorig", Body: "edit 2\n"},
