@@ -291,7 +291,19 @@ type Filter struct {
 	IncludeClosed bool      // when true, read closed/ in addition to the hot set
 	Sort          SortField // presentation order
 	Reverse       bool      // reverse the sort order
-	Limit         int       // 0 = no limit
+	Offset        int       // matches to skip after sort/reverse, before Limit (0 = none); negatives clamp to 0
+	Limit         int       // 0 = no limit; negatives clamp to 0
+}
+
+// Page is a windowed List result plus the total number of matches in scope
+// (before Offset/Limit) — the value a paging viewer needs to size a scrollbar.
+//
+// The window and the total come from one directory snapshot (SDK-SPEC §4).
+// Paging is NOT isolated across calls: a store mutated between page fetches can
+// skip or repeat an item at a window boundary.
+type Page struct {
+	Issues []*Issue // the window: matches[Offset : Offset+Limit] (matches[Offset:] when Limit==0)
+	Total  int      // total matches in scope, before Offset/Limit
 }
 
 // SortField names the orderings List understands.
@@ -323,19 +335,11 @@ func (s *Store) Query(expr string) ([]*Issue, error) {
 	return s.List(Filter{Expr: expr})
 }
 
-// List returns issues matching the filter in the requested order.
-//
-// Scope (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
-//   - Default: hot (active) set only — closed/ is never opened.
-//   - IncludeClosed:true: hot + cold partitions.
-//   - f.Expr references closed work (status=="closed" or closed field comparison):
-//     cold partition is auto-included.
-//
-// Callers must never depend on the cold partition being scanned silently —
-// always set IncludeClosed or use an expression that opts in explicitly.
-//
-// A malformed f.Expr returns a *ParseError and nothing is read from disk.
-func (s *Store) List(f Filter) ([]*Issue, error) {
+// listMatches returns all matching issues for the filter after selection,
+// sort, and reverse — but before offset/limit are applied. It is the shared
+// core used by both List and ListPage. A *ParseError is returned for a
+// malformed f.Expr before any disk access.
+func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 	// Compile the expression first — return *ParseError before touching disk.
 	pred, err := compileExpr(f.Expr)
 	if err != nil {
@@ -359,6 +363,21 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 			return nil, err
 		}
 		all = append(all, closed...)
+
+		// Cross-partition read dedup (SDK-SPEC §7, TASK-STORAGE-SPEC §7):
+		// a concurrent close/reopen (a cross-partition move) can briefly make
+		// an issue visible in both the hot set and closed/. Dedup by ID, letting
+		// the hot entry win, so the same issue never appears twice.
+		seen := make(map[string]struct{}, len(all))
+		deduped := all[:0]
+		for _, iss := range all {
+			if _, ok := seen[iss.ID]; ok {
+				continue
+			}
+			seen[iss.ID] = struct{}{}
+			deduped = append(deduped, iss)
+		}
+		all = deduped
 	}
 
 	// Rebuild idx from all (including closed if loaded).
@@ -372,7 +391,7 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 	// already contains closed issues (Stat would be redundant but harmless).
 	closedStat := s.closedStatFn()
 
-	var out []*Issue
+	var matches []*Issue
 	for _, iss := range all {
 		// Scope guard: exclude closed issues unless the caller opted in.
 		if iss.Status.IsClosed() && !needClosed {
@@ -385,19 +404,98 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 			continue
 		}
 
-		out = append(out, iss)
+		matches = append(matches, iss)
 	}
 
-	sortIssues(out, f.Sort)
+	sortIssues(matches, f.Sort)
 	if f.Reverse {
-		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-			out[i], out[j] = out[j], out[i]
+		for i, j := 0, len(matches)-1; i < j; i, j = i+1, j-1 {
+			matches[i], matches[j] = matches[j], matches[i]
 		}
 	}
-	if f.Limit > 0 && len(out) > f.Limit {
-		out = out[:f.Limit]
+	return matches, nil
+}
+
+// List returns issues matching the filter in the requested order.
+//
+// Scope (TASK-STORAGE-SPEC §5, SDK-SPEC §4, QUERY-SPEC.md §5):
+//   - Default: hot (active) set only — closed/ is never opened.
+//   - IncludeClosed:true: hot + cold partitions.
+//   - f.Expr references closed work (status=="closed" or closed field comparison):
+//     cold partition is auto-included.
+//
+// Callers must never depend on the cold partition being scanned silently —
+// always set IncludeClosed or use an expression that opts in explicitly.
+//
+// A malformed f.Expr returns a *ParseError and nothing is read from disk.
+//
+// Offset and Limit are applied after sort/reverse; negative values clamp to 0.
+func (s *Store) List(f Filter) ([]*Issue, error) {
+	matches, err := s.listMatches(f)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+
+	// Clamp negative offset/limit to 0.
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := f.Limit
+	if limit < 0 {
+		limit = 0
+	}
+
+	// Apply offset.
+	if offset >= len(matches) {
+		return nil, nil
+	}
+	matches = matches[offset:]
+
+	// Apply limit.
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches, nil
+}
+
+// ListPage runs the same selection/sort/paging as List and additionally returns
+// Total — the count of all matches in scope before Offset/Limit are applied.
+// The window and total come from one directory snapshot (SDK-SPEC §4).
+//
+// Paging is NOT isolated across calls: a store mutated between page fetches can
+// skip or repeat an item at a window boundary.
+//
+// Negative Offset/Limit clamp to 0. When Offset >= Total, Issues is empty and
+// Total still reflects the actual count of matches in scope.
+func (s *Store) ListPage(f Filter) (Page, error) {
+	matches, err := s.listMatches(f)
+	if err != nil {
+		return Page{}, err
+	}
+	total := len(matches)
+
+	// Clamp negative offset/limit to 0.
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := f.Limit
+	if limit < 0 {
+		limit = 0
+	}
+
+	// Apply offset.
+	if offset >= len(matches) {
+		return Page{Total: total}, nil
+	}
+	matches = matches[offset:]
+
+	// Apply limit.
+	if limit > 0 && len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return Page{Issues: matches, Total: total}, nil
 }
 
 func sortIssues(issues []*Issue, field SortField) {
