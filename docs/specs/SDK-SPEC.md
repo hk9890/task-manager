@@ -65,14 +65,19 @@ type Issue struct {
     Updated     time.Time
     Closed      time.Time // zero value == not closed
     CloseReason string
+
+    Description string   // the markdown body, stored verbatim after the frontmatter
 }
 
 func (i *Issue) IsClosed() bool
 ```
 
 Only the outgoing edges (`Parent`, `BlockedBy`, `Related`) are stored. Inverse
-edges are derived (see `Detail`). Comments are **not** carried on `Issue`; they
-live in the sidecar and are loaded on demand (§4, `Detail` / `Comments`).
+edges are derived (see `Detail`). `Description` is the issue's markdown body
+(everything after the frontmatter); it round-trips through `Marshal` / `Unmarshal`
+and is the text the `text` query field searches (QUERY-SPEC.md §2). Comments are
+**not** carried on `Issue`; they live in the sidecar and are loaded on demand
+(§4, `Detail` / `Comments`).
 
 ### `Comment`
 
