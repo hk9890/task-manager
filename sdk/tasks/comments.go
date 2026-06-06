@@ -396,8 +396,13 @@ func validateCommentDoc(c Comment) error {
 }
 
 // validateReplaces checks that the given replaces ID (if non-empty) names an
-// existing comment in stream (TASK-STORAGE-SPEC §10). The stream is the current
-// raw append-order stream for the issue.
+// existing **earlier** comment in the stream (TASK-STORAGE-SPEC §4.4/§10).
+//
+// stream is the raw append-order stream at the point the new document is being
+// added — i.e. the pre-append contents of the sidecar. Every document in
+// stream is by definition earlier than the document about to be appended, so
+// any ID found in stream satisfies the "earlier in the stream" requirement.
+// An ID not found in stream is not earlier and is therefore rejected.
 //
 // This is a PURE function.
 func validateReplaces(replacesID string, stream []Comment) error {
@@ -409,5 +414,5 @@ func validateReplaces(replacesID string, stream []Comment) error {
 			return nil
 		}
 	}
-	return invalid("replaces", "comment %q does not exist in the issue's comment stream", replacesID)
+	return invalid("replaces", "comment %q does not exist as an earlier comment in the issue's comment stream", replacesID)
 }

@@ -378,6 +378,58 @@ func TestEval_Text_EqIsError(t *testing.T) {
 
 // ---- date fields: created, updated, closed ----------------------------------
 
+// TestEval_Created_AbsentReturnsFalse verifies that every comparison against
+// the "created" field returns false when the field is absent or zero
+// (QUERY-SPEC §2 — consistent with the closed field absence semantics).
+func TestEval_Created_AbsentReturnsFalse(t *testing.T) {
+	ops := []string{`created > "2026-01-01"`, `created < "2026-01-01"`, `created == "2026-01-01"`, `created != "2026-01-01"`, `created >= "2026-01-01"`, `created <= "2026-01-01"`}
+	for _, expr := range ops {
+		t.Run(expr, func(t *testing.T) {
+			p := mustCompile(t, expr)
+			// Row with no "created" field (absent).
+			absent := row(map[string]query.Value{}, false, false)
+			if p.Match(absent) {
+				t.Errorf("%s: expected false for absent created field, got true", expr)
+			}
+			// Row with zero-time created (also treated as unset).
+			zero := row(map[string]query.Value{"created": dateVal(time.Time{})}, false, false)
+			if p.Match(zero) {
+				t.Errorf("%s: expected false for zero-time created field, got true", expr)
+			}
+		})
+	}
+}
+
+// TestEval_Updated_AbsentReturnsFalse verifies that every comparison against
+// the "updated" field returns false when the field is absent or zero.
+func TestEval_Updated_AbsentReturnsFalse(t *testing.T) {
+	ops := []string{`updated > "2026-01-01"`, `updated < "2026-01-01"`, `updated == "2026-01-01"`}
+	for _, expr := range ops {
+		t.Run(expr, func(t *testing.T) {
+			p := mustCompile(t, expr)
+			absent := row(map[string]query.Value{}, false, false)
+			if p.Match(absent) {
+				t.Errorf("%s: expected false for absent updated field, got true", expr)
+			}
+			zero := row(map[string]query.Value{"updated": dateVal(time.Time{})}, false, false)
+			if p.Match(zero) {
+				t.Errorf("%s: expected false for zero-time updated field, got true", expr)
+			}
+		})
+	}
+}
+
+// TestEval_Created_MatchWhenSet verifies that created comparisons work
+// normally when the field has a non-zero value (regression guard).
+func TestEval_Created_MatchWhenSet(t *testing.T) {
+	createdAt := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	p := mustCompile(t, `created > "2026-01-01"`)
+	match := row(map[string]query.Value{"created": dateVal(createdAt)}, false, false)
+	if !p.Match(match) {
+		t.Error("created > 2026-01-01: expected true when created is set to later date")
+	}
+}
+
 func TestEval_Created_GT(t *testing.T) {
 	t0, _ := time.Parse("2006-01-02", "2026-01-01")
 	t1, _ := time.Parse("2006-01-02", "2026-06-01")

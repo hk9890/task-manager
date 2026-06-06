@@ -51,7 +51,16 @@ type legacyComment struct {
 // Marshal renders an issue to its on-disk file bytes: a YAML frontmatter block
 // followed by the markdown description body. Comments are NOT written to the
 // frontmatter; they live in the sidecar (TASK-STORAGE-SPEC §4.3/§4.4).
+//
+// Timestamps (Created, Updated, Closed) are truncated to whole seconds in UTC
+// before serialization, as required by TASK-STORAGE-SPEC §6.
 func Marshal(iss *Issue) ([]byte, error) {
+	// Truncate timestamps to whole seconds in UTC (TASK-STORAGE-SPEC §6).
+	// This prevents sub-second noise or non-UTC offsets from appearing in
+	// the on-disk representation when SDK callers build Issues from time.Now().
+	created := iss.Created.UTC().Truncate(time.Second)
+	updated := iss.Updated.UTC().Truncate(time.Second)
+
 	fm := frontmatter{
 		ID:          iss.ID,
 		Title:       iss.Title,
@@ -63,12 +72,12 @@ func Marshal(iss *Issue) ([]byte, error) {
 		Parent:      iss.Parent,
 		BlockedBy:   iss.BlockedBy,
 		Related:     iss.Related,
-		Created:     iss.Created,
-		Updated:     iss.Updated,
+		Created:     created,
+		Updated:     updated,
 		CloseReason: iss.CloseReason,
 	}
 	if !iss.Closed.IsZero() {
-		c := iss.Closed
+		c := iss.Closed.UTC().Truncate(time.Second)
 		fm.Closed = &c
 	}
 

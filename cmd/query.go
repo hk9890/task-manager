@@ -34,17 +34,45 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	f.IntVar(&ff.limit, "limit", 0, "maximum number of results (0 = all)")
 }
 
+// validSortValues lists the sort field values accepted by --sort.
+// The empty string means the default work-order (priority then created).
+var validSortValues = map[string]bool{
+	"":         true, // default: work-order
+	"work":     true,
+	"id":       true,
+	"priority": true,
+	"created":  true,
+	"updated":  true,
+	"closed":   true,
+}
+
+// validateSort returns an error if the sort value is not in the accepted set.
+func validateSort(s string) error {
+	if validSortValues[s] {
+		return nil
+	}
+	return fmt.Errorf("invalid --sort value %q: must be one of work, id, priority, created, updated, closed", s)
+}
+
 func (ff *filterFlags) build() tasks.Filter {
+	// Map the CLI "work" alias to the SDK's empty-string sentinel.
+	sortVal := ff.sort
+	if sortVal == "work" {
+		sortVal = ""
+	}
 	return tasks.Filter{
 		Expr:          ff.query,
 		IncludeClosed: ff.all,
-		Sort:          tasks.SortField(ff.sort),
+		Sort:          tasks.SortField(sortVal),
 		Reverse:       ff.reverse,
 		Limit:         ff.limit,
 	}
 }
 
 func runList(cmd *cobra.Command, ff *filterFlags) error {
+	if err := validateSort(ff.sort); err != nil {
+		return err
+	}
 	s, err := openStore()
 	if err != nil {
 		return err

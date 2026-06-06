@@ -84,7 +84,10 @@ operator a field does not support is a parse error (§4).
 - **`text`** — a virtual field: the case-insensitive concatenation of the issue's
   `id`, `title`, and description body. Only `~` (substring) is defined.
 - **`created` / `updated` / `closed`** — chronological comparison (§3). On an issue
-  with no `closed` timestamp, every `closed` comparison is false.
+  with no `closed` timestamp, every `closed` comparison is false. Likewise, on
+  an issue with no `created` or `updated` value (absent or zero), every
+  `created` / `updated` comparison is false — a missing timestamp has no value
+  that can satisfy any ordering bound.
 - **`ready` / `blocked`** — computed predicates with the meanings fixed by the
   storage spec (TASK-STORAGE-SPEC.md §9): `ready` = open with no open blocker;
   `blocked` = non-closed with ≥1 open blocker.

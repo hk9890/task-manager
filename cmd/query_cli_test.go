@@ -466,6 +466,51 @@ func TestL4_Search_MultiWordJoined(t *testing.T) {
 	}
 }
 
+// ── --sort validation ─────────────────────────────────────────────────────────
+
+// TestL4_InvalidSort_ExitOne verifies that an invalid --sort value causes
+// atctl list to exit with code 1 and print an error on stderr. Valid values
+// are: work, id, priority, created, updated, closed (empty defaults to work).
+func TestL4_InvalidSort_ExitOne(t *testing.T) {
+	root, _ := queryFixture(t)
+
+	invalidSorts := []string{"bogus", "title", "date", "PRIORITY", "work_order"}
+	for _, s := range invalidSorts {
+		t.Run(s, func(t *testing.T) {
+			_, stderr, code := atctl(t, root, "list", "--sort", s)
+			if code != 1 {
+				t.Errorf("list --sort %q: expected exit 1, got %d", s, code)
+			}
+			if !strings.Contains(stderr, s) {
+				t.Errorf("list --sort %q: stderr should mention the invalid value; got: %q", s, stderr)
+			}
+			// Error message should list valid values.
+			if !strings.Contains(stderr, "work") {
+				t.Errorf("list --sort %q: stderr should mention valid values; got: %q", s, stderr)
+			}
+		})
+	}
+}
+
+// TestL4_ValidSort_Succeeds verifies that all documented --sort values are accepted.
+func TestL4_ValidSort_Succeeds(t *testing.T) {
+	root, _ := queryFixture(t)
+
+	validSorts := []string{"", "work", "id", "priority", "created", "updated"}
+	for _, s := range validSorts {
+		t.Run("sort="+s, func(t *testing.T) {
+			args := []string{"--json", "list"}
+			if s != "" {
+				args = append(args, "--sort", s)
+			}
+			_, _, code := atctl(t, root, args...)
+			if code != 0 {
+				t.Errorf("list --sort %q: expected exit 0, got %d", s, code)
+			}
+		})
+	}
+}
+
 // ── blocked output format ──────────────────────────────────────────────────────
 
 // TestL4_Blocked_HumanFormat verifies that `atctl blocked` (human output)

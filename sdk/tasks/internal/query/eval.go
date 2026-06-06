@@ -44,8 +44,9 @@ func (*StringSetValue) valueMarker() {}
 //   - DateValue     — created, updated, closed (zero T means "not set")
 //   - StringSetValue — label (the full label set)
 //
-// For the "closed" field a present DateValue with a zero T is treated as
-// "not closed", identical to (nil, false).
+// For date fields (created, updated, closed): a present DateValue with a zero
+// T is treated as "not set", identical to (nil, false) — every comparison
+// returns false.
 type Row interface {
 	// Field returns the value of the named field and whether it is set.
 	Field(name string) (Value, bool)
@@ -289,9 +290,15 @@ func cmpInt(a int, op string, b int) bool {
 }
 
 // evalDateField handles created, updated, and closed fields.
-// For closed (closedIsSpecial=true): if the field is absent or the time is
-// zero, every comparison returns false (QUERY-SPEC §2: "On an issue with no
-// closed timestamp, every closed comparison is false.").
+//
+// Absence / zero semantics (QUERY-SPEC §2):
+//   - "closed": if the field is absent or the time is zero, every comparison
+//     returns false ("On an issue with no closed timestamp, every closed
+//     comparison is false.").
+//   - "created" / "updated": if the field is absent or the time is zero, every
+//     ordering comparison (==, !=, <, <=, >, >=) returns false. A missing
+//     created/updated has no value to satisfy any bound. This is consistent with
+//     how the closed field handles absence. (closedIsSpecial=false path)
 func evalDateField(n *CmpNode, row Row, closedIsSpecial bool) bool {
 	dv, ok := n.Value.(*DateValue)
 	if !ok {
@@ -299,17 +306,16 @@ func evalDateField(n *CmpNode, row Row, closedIsSpecial bool) bool {
 	}
 	fieldVal, present := row.Field(n.Field)
 	if !present {
-		if closedIsSpecial {
-			return false
-		}
-		return true // no created/updated is unusual but not an explicit false
+		// Absent field: no value can satisfy any comparison → false.
+		return false
 	}
 	fv, ok := fieldVal.(*DateValue)
 	if !ok {
-		return !closedIsSpecial
+		return false
 	}
 	if fv.T.IsZero() {
-		return !closedIsSpecial
+		// Zero time is treated as "not set" → false for all comparisons.
+		return false
 	}
 	return cmpTime(fv.T, n.Op, dv.T)
 }
