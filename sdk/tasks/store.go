@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -66,6 +67,13 @@ type Store struct {
 	dir  string // absolute path to the data directory (.tasks)
 	cfg  Config
 	fs   vfs.FS // disk seam; always vfs.NewOS() in production
+
+	// mu serializes writes within a single process. It is acquired by withLock
+	// before the advisory flock, so concurrent goroutines in one embedder never
+	// interleave their mutations even when flock would allow it (flock is per-
+	// process on Linux/macOS). Reads remain lock-free (SDK-SPEC §1/§7,
+	// ARCHITECTURE-SPEC §6/§7, TASK-STORAGE-SPEC §7).
+	mu sync.Mutex
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
@@ -384,9 +392,23 @@ func (s *Store) writeIssue(iss *Issue) error {
 	return s.fs.WriteAtomic(s.filePath(iss.ID), data, 0o644)
 }
 
-// withLock runs fn while holding an exclusive advisory lock on the store, so
-// concurrent atctl processes cannot interleave writes.
+// withLock runs fn while holding both the in-process mutex and the advisory
+// flock, so writers serialize across goroutines within one process AND across
+// concurrent atctl processes on the same host.
+//
+// Lock order (must be consistent everywhere to avoid deadlock):
+//  1. s.mu  — in-process mutex (acquired first)
+//  2. flock — cross-process advisory lock (acquired second)
+//
+// All public mutation methods call withLock exactly once at their outermost
+// level. Internal helpers (writeIssue, closeMove, reopenLocked, checkRefs,
+// migrateInlineComments) run inside the fn closure — they must NOT call
+// withLock themselves, or the non-reentrant Mutex will deadlock.
+// Reads (Get, All, Comments, …) are intentionally lock-free.
 func (s *Store) withLock(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	unlock, err := s.fs.Lock(filepath.Join(s.dir, lockFileName))
 	if err != nil {
 		return err
