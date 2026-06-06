@@ -202,47 +202,77 @@ func (s *Store) Detail(id string) (*Detail, error) {
 
 // findCycle returns a human-readable cycle path if following BlockedBy edges
 // from start leads back into the current traversal, or "" if acyclic.
+//
+// Implementation: iterative 3-color DFS using an explicit frame stack to avoid
+// stack overflow on deep dependency chains. Each frame records the node being
+// visited and the index of the next blocker edge to process, faithfully
+// simulating the original recursive descent without goroutine-stack recursion.
 func findCycle(idx map[string]*Issue, start string) string {
 	const (
 		white = 0
 		gray  = 1
 		black = 2
 	)
-	color := map[string]int{}
-	var stack []string
 
-	var visit func(id string) []string
-	visit = func(id string) []string {
-		iss, ok := idx[id]
-		if !ok {
-			return nil
-		}
-		color[id] = gray
-		stack = append(stack, id)
-		for _, b := range iss.BlockedBy {
+	// dfsFrame holds the state for one DFS call.
+	type dfsFrame struct {
+		id       string
+		edgeIdx  int // index into idx[id].BlockedBy; next edge to process
+	}
+
+	color := map[string]int{}
+	// path mirrors the "stack" in the original recursive version: it holds the
+	// sequence of gray nodes on the current DFS path.
+	var path []string
+
+	// Seed the worklist with the starting node.
+	if _, ok := idx[start]; !ok {
+		return ""
+	}
+
+	worklist := []dfsFrame{{id: start, edgeIdx: 0}}
+	color[start] = gray
+	path = append(path, start)
+
+	for len(worklist) > 0 {
+		top := &worklist[len(worklist)-1]
+		iss := idx[top.id]
+
+		if top.edgeIdx < len(iss.BlockedBy) {
+			b := iss.BlockedBy[top.edgeIdx]
+			top.edgeIdx++
+
 			switch color[b] {
 			case gray:
-				// Found a back-edge: slice the stack from b onward.
-				for i, s := range stack {
+				// Back-edge found: reconstruct the cycle path from b onward.
+				for i, s := range path {
 					if s == b {
-						return append(append([]string{}, stack[i:]...), b)
+						cycle := append(append([]string{}, path[i:]...), b)
+						return strings.Join(cycle, " -> ")
 					}
 				}
-				return []string{b, b}
+				// b is gray but not in path (should not happen in a well-formed
+				// graph, but be defensive).
+				return strings.Join([]string{b, b}, " -> ")
 			case white:
-				if c := visit(b); c != nil {
-					return c
+				if _, ok := idx[b]; ok {
+					// Push a new frame for b.
+					color[b] = gray
+					path = append(path, b)
+					worklist = append(worklist, dfsFrame{id: b, edgeIdx: 0})
 				}
+				// If b is not in idx, skip (same as the recursive version's
+				// early return nil when iss is absent).
 			}
+			// black: already fully explored, skip.
+		} else {
+			// All edges from top.id have been processed — pop the frame.
+			worklist = worklist[:len(worklist)-1]
+			path = path[:len(path)-1]
+			color[top.id] = black
 		}
-		stack = stack[:len(stack)-1]
-		color[id] = black
-		return nil
 	}
 
-	if c := visit(start); c != nil {
-		return strings.Join(c, " -> ")
-	}
 	return ""
 }
 

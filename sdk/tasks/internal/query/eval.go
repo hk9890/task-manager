@@ -94,6 +94,10 @@ func (p *compiledPredicate) Match(row Row) bool {
 }
 
 // evalNode dispatches on node type.
+//
+// Recursion depth: evalNode mirrors the AST structure built by the parser.
+// Parse caps expression nesting at maxExprDepth (256) levels, so any tree that
+// passed Parse cannot be deeper than that. No separate depth cap is needed here.
 func evalNode(n Node, row Row) bool {
 	switch v := n.(type) {
 	case *TrueNode:

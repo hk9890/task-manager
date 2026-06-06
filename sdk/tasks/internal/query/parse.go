@@ -85,15 +85,24 @@ var validTypeValues = map[string]bool{
 
 // ---- parser -----------------------------------------------------------------
 
+// maxExprDepth is the maximum allowed nesting depth for parenthesised
+// sub-expressions. Expressions deeper than this return a *ParseError instead
+// of causing an uncatchable stack overflow (fatal error). 256 levels is far
+// beyond any real query while still being safe for any goroutine stack size.
+const maxExprDepth = 256
+
 type parser struct {
 	tokens []token
 	pos    int // index into tokens
 	src    string
+	depth  int // current parenthesis nesting depth
 }
 
 // Parse parses the filter expression and returns the AST root.
 // An empty or whitespace-only expression returns *TrueNode.
 // Any syntax, field, operator, or value error returns *ParseError.
+// Expressions nested deeper than 256 parenthesis levels return *ParseError
+// ("expression nesting too deep") instead of crashing via stack overflow.
 func Parse(expr string) (Node, error) {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
@@ -191,16 +200,24 @@ func (p *parser) parseUnary() (Node, *ParseError) {
 // parsePrimary = "(" expr ")" | predicate
 func (p *parser) parsePrimary() (Node, *ParseError) {
 	if p.peek().Kind == tokLParen {
+		p.depth++
+		if p.depth > maxExprDepth {
+			tok := p.peek()
+			return nil, parseErr(tok.Pos, "expression nesting too deep (max %d levels)", maxExprDepth)
+		}
 		p.consume() // consume "("
 		inner, err := p.parseExpr()
 		if err != nil {
+			p.depth--
 			return nil, err
 		}
 		if p.peek().Kind != tokRParen {
 			tok := p.peek()
+			p.depth--
 			return nil, parseErr(tok.Pos, "expected ')' but got %q", tok.Val)
 		}
 		p.consume() // consume ")"
+		p.depth--
 		return inner, nil
 	}
 	return p.parsePredicate()

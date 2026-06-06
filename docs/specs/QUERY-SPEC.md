@@ -128,6 +128,11 @@ code 1 with a message), on:
 A well-formed expression that simply matches nothing is **not** an error — it
 returns an empty result.
 
+**Expression nesting depth:** parenthesised sub-expressions may be nested to a
+maximum depth of **256 levels**. Input that exceeds this limit is rejected with
+a parse error ("expression nesting too deep") rather than crashing. In practice
+no real query approaches this limit.
+
 ---
 
 ## 5. Evaluation scope (not part of the grammar)
