@@ -24,6 +24,32 @@ L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
   cross-process locking.** Don't assert durability against the mock.
 - Run L1/L2 on every change; run L3/L4 before handoff.
 
+## What Mem can and cannot prove
+
+`vfs.Mem` matches `osFS` on the following contract (as of B4):
+
+- **Parent-dir-must-exist**: `WriteAtomic`, `Append`, and `Rename` all require
+  the parent directory to be present in the dirs set (registered via `MkdirAll`).
+  Calls that skip `MkdirAll` will fail on both `Mem` and real disk — the two
+  backends agree. A test that passes on `Mem` therefore also passes on disk for
+  this invariant.
+- **Rename is file-only**: `Mem.Rename` supports moving a single file between
+  two existing directories. Renaming a directory is unsupported (returns an
+  error); in production the only `Rename` calls move a single task `.md` file,
+  so this is not a limitation.
+
+`vfs.Mem` **cannot** prove:
+
+- **Crash durability**: `fsync` is a no-op in memory. A "crash" after `WriteAtomic`
+  but before the parent-dir `fsync` (the A4 path) cannot be modelled in `Mem`.
+  L3 (real `t.TempDir()`) is the only layer that proves the full crash-safe rename
+  sequence.
+- **Atomic-append tearing**: `Mem.Append` is a single map update — it cannot
+  model a partial write at the boundary of an OS append. L3 is required to prove
+  `O_APPEND` durability on the comment sidecar.
+- **Cross-process locking**: `Mem.Lock` is an in-process mutex. `flock` behaviour
+  (advisory, per-fd, cross-process) is exclusively an L3 concern.
+
 ## Fixtures — one builder, two backends
 
 `internal/storetest` builds a populated store from a spec, materialized into

@@ -212,6 +212,11 @@ func (m *Mem) Stat(name string) (os.FileInfo, error) {
 
 // WriteAtomic writes data to name, replacing any previous content. On Mem the
 // write is atomic by definition — there is no torn intermediate state.
+//
+// The parent directory must already exist (created via MkdirAll); if it does
+// not, WriteAtomic returns an os.ErrNotExist-wrapped error, matching the
+// behaviour of the real osFS which calls os.CreateTemp and fails with ENOENT
+// when the parent directory is absent.
 func (m *Mem) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -220,14 +225,23 @@ func (m *Mem) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
+	parent := filepath.Dir(name)
+	if !m.dirs[parent] {
+		return fmt.Errorf("%w: parent directory does not exist: %s", os.ErrNotExist, parent)
+	}
+
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	m.files[name] = cp
-	m.ensureDir(filepath.Dir(name))
 	return nil
 }
 
 // Append appends data to the named file, creating it if it does not exist.
+//
+// The parent directory must already exist (created via MkdirAll); if it does
+// not, Append returns an os.ErrNotExist-wrapped error, matching the behaviour
+// of the real osFS which calls os.OpenFile with O_APPEND and fails with ENOENT
+// when the parent directory is absent.
 func (m *Mem) Append(name string, data []byte, perm os.FileMode) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -236,17 +250,31 @@ func (m *Mem) Append(name string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
+	parent := filepath.Dir(name)
+	if !m.dirs[parent] {
+		return fmt.Errorf("%w: parent directory does not exist: %s", os.ErrNotExist, parent)
+	}
+
 	existing := m.files[name]
 	combined := make([]byte, len(existing)+len(data))
 	copy(combined, existing)
 	copy(combined[len(existing):], data)
 	m.files[name] = combined
-	m.ensureDir(filepath.Dir(name))
 	return nil
 }
 
 // Rename moves oldpath to newpath. If a fault is registered for "Rename" and
 // the oldpath matches, the error is returned and no files are modified.
+//
+// Mem.Rename supports files only. Renaming a directory is not implemented
+// (it would silently leave child-path keys orphaned). Callers that need to
+// move a directory should use a sequence of file-level Rename calls after
+// re-creating the target directory with MkdirAll. In production code the only
+// Rename calls go through closeMove and openWithFS, which always rename a
+// single task .md file between two directories that already exist.
+//
+// The destination parent directory must already exist; if it does not, Rename
+// returns an os.ErrNotExist-wrapped error, matching real osFS behaviour.
 func (m *Mem) Rename(oldpath, newpath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -255,15 +283,26 @@ func (m *Mem) Rename(oldpath, newpath string) error {
 		return err
 	}
 
+	// Reject attempts to rename a directory.
+	if m.dirs[oldpath] {
+		return fmt.Errorf("vfs.Mem.Rename: renaming directories is not supported: %s", oldpath)
+	}
+
 	data, ok := m.files[oldpath]
 	if !ok {
 		return fmt.Errorf("%w: %s", os.ErrNotExist, oldpath)
 	}
+
+	// Require the destination parent directory to exist.
+	dstParent := filepath.Dir(newpath)
+	if !m.dirs[dstParent] {
+		return fmt.Errorf("%w: destination parent directory does not exist: %s", os.ErrNotExist, dstParent)
+	}
+
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	m.files[newpath] = cp
 	delete(m.files, oldpath)
-	m.ensureDir(filepath.Dir(newpath))
 	return nil
 }
 

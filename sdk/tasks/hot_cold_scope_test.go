@@ -159,6 +159,10 @@ func TestAll_NeverDescendsIntoComments(t *testing.T) {
 
 	// Write a garbled file in comments/ — if All() descends, it would try to parse
 	// it as an issue and fail.
+	// MkdirAll is required: Mem now requires the parent dir to exist (matching osFS).
+	if err := m.MkdirAll("/.tasks/comments", 0o755); err != nil {
+		t.Fatalf("MkdirAll comments: %v", err)
+	}
 	garbledPath := "/.tasks/comments/garbage.md"
 	if err := m.WriteAtomic(garbledPath, []byte("GARBLED COMMENT FILE"), 0o644); err != nil {
 		t.Fatalf("WriteAtomic comments garble: %v", err)
