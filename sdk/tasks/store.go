@@ -541,6 +541,11 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			if err != nil {
 				return err
 			}
+			// reopenLocked forces StatusOpen; override with the requested non-closed
+			// status so that e.g. Update(..., {Status: in_progress}) lands on
+			// in_progress, not open. (SDK-SPEC §4: "the issue ends in the requested
+			// status".)
+			reopened.Status = *in.Status
 			// Apply remaining (non-status) field changes to the reopened issue.
 			applyNonStatusFields(reopened, in)
 			reopened.Updated = s.now()
