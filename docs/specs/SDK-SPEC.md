@@ -29,8 +29,8 @@ func Open(start string) (*Store, error)
   is found.
 
 `Store` is the single gateway to a project's files; every read and write goes
-through it. It is safe to use from one process; cross-process safety is provided by
-the write lock (§7).
+through it. It is safe for concurrent use within a process and across processes; the
+write path serializes writers (§7).
 
 ```go
 func (s *Store) Root() string     // project root (parent of the data dir)
@@ -163,7 +163,11 @@ type UpdateInput struct {
 fields are applied.
 
 `Creator` is intentionally absent from `UpdateInput`: it is provenance — set once
-at creation and never edited afterward.
+at creation and never edited afterward. The SDK applies no identity default: an
+empty `CreateInput.Creator` is stored as empty (provenance simply unknown). The
+`$USER` fallback is a CLI-layer convenience (`--creator`, CLI-SPEC.md §4), matching
+`--assignee` and comment `--author`; an embedder that wants attribution sets
+`Creator` itself.
 
 ### Filtering
 
@@ -182,6 +186,9 @@ const (
     SortWork     SortField = "" // priority then created (default)
     SortID; SortPriority; SortCreated; SortUpdated; SortClosed
 )
+// Every sort is total — it ends with an `id` tie-break — so the order is
+// deterministic for a given store state. This is what makes Offset/Limit paging
+// stable across windows (see ListPage, §4).
 ```
 
 All filtering (by status, type, priority, assignee, creator, label, text, ready/blocked, dates)
@@ -198,7 +205,8 @@ count from a single snapshot.
 - By default (`IncludeClosed:false`, no closed-referencing `Expr`)
   only the hot (active) set is scanned. The `closed/` partition is never opened.
 - `IncludeClosed:true`: reads both hot and cold partitions.
-- `Expr` references closed work (e.g. `status == "closed"` or a `closed` date comparison):
+- `Expr` satisfies the cold-scope predicate (QUERY-SPEC.md §5 — a `status == "closed"`
+  atom or any `closed`-field comparison; `status != "closed"` does **not** count):
   cold partition is auto-included; `IncludeClosed` need not be set explicitly.
 - Callers must never rely on the cold partition being scanned silently — they must
   explicitly opt in. `All()`, `Ready()`, `Blocked()`, and `Labels()` are always hot-only.
@@ -243,8 +251,9 @@ const (
 // Build compiles the criteria to a canonical filter expression. It is the single
 // owner of value quoting/escaping and precedence. Pure; no filesystem access. The
 // zero value compiles to "" (the always-true predicate). For well-formed input the
-// result always parses (it never yields a *ParseError); an unknown Status or Type
-// is reported as an error.
+// result always parses (it never yields a *ParseError); invalid input — an unknown
+// Status or Type, or a negative priority bound — is reported as a *ValidationError
+// (§6), naming the offending field.
 func (c Criteria) Build() (string, error)
 ```
 
@@ -254,6 +263,17 @@ All user-supplied string, enum, and date values are emitted **quoted** (with
 `"`→`\"` and `\`→`\\` escaping per QUERY-SPEC.md §3); the numeric `priority` is
 emitted bare. This puts the bareword/quoting rule in exactly one audited place.
 `LabelMatch` defaults to `LabelMatchAll` (the issue must carry every listed label).
+Date bounds are **half-open on the instant**: `*From` emits `field >= From`
+(inclusive), `*To` emits `field < To` (exclusive); to cover a whole day `D` pass `To`
+as the start of the next day. `PriorityMin` / `PriorityMax` are emitted bare as
+`priority >= n` / `priority <= n`. A `priority` literal is a **non-negative** integer
+(QUERY-SPEC.md §3, grammar `number = digit {digit}`); a bound *above* the storable
+range (`>= 5`) is emitted as-is and harmless — it matches all or none rather than
+erroring. A **negative** bound is rejected with a `*ValidationError` naming the field:
+the grammar cannot express it, and clamping it to `0` would silently change its
+meaning (`priority <= -1` selects nothing, but `priority <= 0` selects the criticals).
+Rejecting rather than clamping keeps `Build` total over the storable range and free of
+`*ParseError`s.
 
 ---
 
@@ -285,12 +305,13 @@ type BlockedIssue struct {
 // Page is a windowed List/Find result plus the total number of matches in scope
 // (before Offset/Limit) — the value a viewer needs to size a scrollbar.
 type Page struct {
-    Issues []*Issue // the window: matches[Offset : Offset+Limit]
+    Issues []*Issue // the window: matches[Offset : Offset+Limit] (matches[Offset:] when Limit == 0)
     Total  int      // total matches in scope, before Offset/Limit
 }
 
 // FindOptions is the presentation subset of Filter (scope/sort/paging) used with a
-// Criteria. The selection comes from the Criteria, not from an Expr.
+// Criteria. The selection comes from the Criteria, not from an Expr. Offset/Limit
+// behave exactly as on Filter (§3): negatives clamp to 0, Limit 0 = no limit.
 type FindOptions struct {
     IncludeClosed bool
     Sort          SortField
@@ -309,19 +330,22 @@ type FindOptions struct {
   [QUERY-SPEC.md](QUERY-SPEC.md); a malformed expression returns a `*ParseError`
   (§6), not a match.
 - **`Query`** / **`List`** read the active set by default; passing
-  `IncludeClosed:true` **or** using an expression that references closed work
-  (e.g. `status == "closed"` or a `closed` date comparison) includes the cold
-  partition. See Filter scope semantics in §3.
+  `IncludeClosed:true` **or** an expression that satisfies the cold-scope predicate
+  (QUERY-SPEC.md §5) includes the cold partition. See Filter scope semantics in §3.
 - **`ListPage`** runs the same selection/sort/paging as `List` and additionally
   returns `Total` — the count of all matches in scope **before** `Offset`/`Limit`
   are applied. The window and the total come from one directory snapshot, so a
-  paging viewer never races a separate count against the page. Paging is stable
-  across windows because every sort has an `id` tie-break.
+  paging viewer never races a separate count against the page. Every sort has an `id`
+  tie-break, so ordering is **deterministic for a given store state**; but each call
+  is its own snapshot, so paging is not isolated across calls — a store mutated
+  between page fetches can skip or repeat an item at a window boundary.
 - **`Find`** / **`FindPage`** are `Criteria.Build` + `List` / `ListPage`:
-  `Find(c, opt) ≡ List(Filter{Expr: c.Build(), …})`. The closed partition is
-  auto-derived from the criteria (a `Closed` status, or any `Closed*` bound) exactly
-  as it is for the equivalent `Expr`; `FindOptions.IncludeClosed` is the explicit
-  override.
+  `Find(c, opt) ≡ List(Filter{Expr: c.Build(), …})`. Cold scope is derived by
+  applying the cold-scope predicate (QUERY-SPEC.md §5) to the **built expression** —
+  the same detector `List` uses — so a `Criteria` and its hand-written `Expr` always
+  scope identically; `FindOptions.IncludeClosed` is the explicit override. If
+  `Criteria.Build` fails (the `*ValidationError` cases above — unknown `Status` /
+  `Type`, or a negative priority bound), that error is returned and no scan runs.
 - **`Ready`** / **`Blocked`** / **`Labels`** are always hot-only. They are O(open)
   and never read `closed/`. Use `List(Filter{IncludeClosed:true})` for history.
 - **`Detail`** resolves `ParentRef`, `BlockedBy`, `Related`, computes `Blocks` and
@@ -352,11 +376,14 @@ func (s *Store) RemoveDep(dependent, blocker string) error
 - **`Update`** applies the partial field changes and routes lifecycle transitions
   through the same path the CLI uses: setting `Status` to `closed` routes through the
   close flow (stamps the close time, moves the file to `closed/`); setting a
-  non-closed `Status` on a closed issue routes through reopen (moves the file back,
-  clears the close fields), then applies the remaining field edits. A plain field
-  edit with no status change on a closed issue returns `ErrImmutable`. Callers drive
-  a status change entirely through `Update`'s `Status` field — they never dispatch
-  `Close` / `Reopen` themselves for it.
+  non-closed `Status` on a closed issue reopens it (moves the file back, clears the
+  close fields) and the issue ends in **the requested status** — `in_progress` stays
+  `in_progress`, not forced to `open` — then the remaining field edits apply. A plain
+  field edit with no status change on a closed issue returns `ErrImmutable` (and
+  re-setting `Status: closed` on a closed issue is a status no-op, so any accompanying
+  field edit still returns `ErrImmutable`). Callers drive a status change entirely
+  through `Update`'s `Status` field — they never dispatch `Close` / `Reopen`
+  themselves for it.
 - **`AddComment`** appends a new comment and returns it, including its freshly
   allocated random `ID` (the handle a caller needs for a later edit/delete);
   **`EditComment`** appends a revision with `Replaces` set and returns the new
@@ -365,7 +392,9 @@ func (s *Store) RemoveDep(dependent, blocker string) error
   lock; none rewrites the task file (the sidecar is append-only, storage §4.4).
 - **`Close`** sets the closed timestamp/reason and relocates the file to `closed/`;
   **`Reopen`** moves it back to the hot set, clears the close fields, and sets
-  `StatusOpen` (the pre-close status is not persisted).
+  `StatusOpen` (the pre-close status is not persisted). `Reopen` always lands on
+  `open`; to reopen directly into another active status use `Update` with that
+  `Status`. On an already-active issue `Reopen` is a no-op, returning it unchanged.
 
 ---
 
@@ -399,7 +428,8 @@ var (
 `RemoveDep` when the target issue lives in `closed/` (closed issues are immutable
 in place — see storage spec §5). `Close` is idempotent: calling it on an already-closed
 issue returns the existing issue and `nil` (no-op; no in-place write to `closed/`
-is attempted). Use `Reopen` to restore mutability; `AddComment` / `EditComment` /
+is attempted); `Reopen` is symmetric — on an already-active issue it is a no-op
+returning the issue unchanged. Use `Reopen` to restore mutability; `AddComment` / `EditComment` /
 `DeleteComment` are still allowed on closed issues (sidecar append is the one
 exception — see storage spec §5).
 
@@ -428,14 +458,19 @@ The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §1.
 
 ## 7. Concurrency & durability contract
 
-- **One writer per store.** Every mutating method runs under an exclusive advisory
-  lock (`flock` on `.tasks/.lock`). Concurrent processes serialize; reads are
-  lock-free.
+- **One writer per store.** Every mutating method serializes against all others,
+  whether separate processes or goroutines in one process: an in-process mutex
+  serializes goroutines, and an exclusive advisory `flock` on `.tasks/.lock`
+  serializes processes. Reads are lock-free.
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
   never observes a torn file — except the append-only comment sidecar (§4), which is
   grown with `O_APPEND` + `fsync` rather than rewritten.
-- **Read consistency.** Read methods take a fresh directory snapshot per call; a
-  returned `*Issue` is a copy the caller may mutate without affecting disk.
+- **Read consistency.** A read takes a fresh snapshot per call and returns an
+  `*Issue` the caller may mutate without affecting disk. A scan spanning both
+  partitions (`IncludeClosed`) reads two directories, so it is **not** a single
+  atomic snapshot: a concurrent close/reopen (a cross-partition move) can briefly
+  make an issue visible in both or neither. Reads dedup by ID, so an issue never
+  appears twice; a transient omission, if any, clears on the next call.
 
 ---
 

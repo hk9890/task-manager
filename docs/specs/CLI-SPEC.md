@@ -87,6 +87,9 @@ unless the expression selects them or `--all` is given. Default order: priority
 | `--limit <n>` | Cap the number of results (`0` = all). |
 
 - **Output (JSON):** array of `issueDTO`.
+- The CLI does not page: `--limit` is a simple cap and there is no `--offset`.
+  Windowed paging with a total match count is an SDK concern (`ListPage` / `FindPage`,
+  SDK-SPEC.md §4).
 
 ### 3.1 Filter expressions
 
@@ -105,9 +108,9 @@ text ~ "drill" && !blocked
 closed > "2026-01-01"
 ```
 
-Scope: closed issues are excluded unless `--all` is passed or the expression itself
-references closed work (`status == "closed"`, or a `closed` comparison). See
-QUERY-SPEC.md §5.
+Scope: closed issues are excluded unless `--all` is passed or the expression
+satisfies the cold-scope predicate (a `status == "closed"` atom or a `closed`
+comparison; `status != "closed"` does not). See QUERY-SPEC.md §5.
 
 ### `atctl search <text> [options]`
 
@@ -184,7 +187,9 @@ as-is.
 
 - Setting `--status closed` transitions the issue to closed (stamps the close time
   and moves it to the cold partition) but records **no** reason — use `close
-  --reason` for that. Moving away from `closed` reopens (status → `open`).
+  --reason` for that. Setting a non-closed `--status` on a closed issue reopens it
+  and lands on the status you asked for (`--status in_progress` → `in_progress`, not
+  `open`).
 - `creator` is provenance — set once at `create` and not editable here.
 - **Output:** the updated `issueDTO`.
 
@@ -196,7 +201,8 @@ Close an issue: set status `closed`, stamp the close time, optionally record
 ### `atctl reopen <id>`
 
 Move a closed issue back to the active set, clear its closed timestamp/reason, and
-set its status to `open`.
+set its status to `open`. No-op on an already-active issue. (To reopen directly into
+another status, use `update --status`.)
 
 ### `atctl dep add <dependent> <blocker>`
 

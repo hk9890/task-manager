@@ -336,10 +336,14 @@ An issue is **active** while its file lives in the store's hot directory and
 
 ## 7. Concurrency & durability
 
-- **Single writer.** Every mutation runs under an exclusive advisory lock (`flock`
-  on `.tasks/.lock`). Concurrent writers serialize; they never interleave writes.
-  The lock covers the whole store, including comment-sidecar appends.
-- **Reads are lock-free.** Atomic renames make this safe.
+- **Single writer.** Every mutation serializes against all others — goroutines via
+  an in-process mutex, processes via an exclusive advisory `flock` on `.tasks/.lock`;
+  writes never interleave. The lock covers the whole store, including comment-sidecar
+  appends.
+- **Reads are lock-free** (atomic renames make this safe). A scan spanning the hot
+  directory and `closed/` reads two directories, so it is not a single atomic
+  snapshot; readers dedup by ID so a concurrent close/reopen can never yield a
+  duplicate (a transient omission, if any, clears on the next read).
 - **Throughput ceiling.** The write path `fsync`s inside the lock, so write
   throughput is bounded by `fsync` latency. In-lock work is kept minimal; the hot
   scan is the main cost, which §2/§5 keep O(open).

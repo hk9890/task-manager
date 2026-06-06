@@ -62,7 +62,7 @@ operator a field does not support is a parse error (§4).
 |---|---|---|---|
 | `status` | enum | `==` `!=` | `open` / `in_progress` / `blocked` / `closed` |
 | `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` |
-| `priority` | int | `==` `!=` `<` `<=` `>` `>=` | `0`–`4` |
+| `priority` | int | `==` `!=` `<` `<=` `>` `>=` | integer (`0`–`4` stored) |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |
 | `creator` | string | `==` `!=` `~` | quoted or bareword |
 | `parent` | issue ID | `==` `!=` | an issue ID, e.g. `"dtt-0007"`; `==` may be `""` (no parent) |
@@ -77,7 +77,10 @@ operator a field does not support is a parse error (§4).
 **Per-field matching semantics:**
 
 - **enum / `priority` / `parent`** — `==` / `!=` compare the field value directly.
-  `priority` also supports the ordering operators (numeric).
+  `priority` also supports the ordering operators (numeric). Any non-negative integer
+  is a legal `priority` literal; only `0`–`4` are storable, so an out-of-range bound
+  simply matches all or none (`priority < 5` matches every issue, `priority == 7`
+  matches none) instead of erroring.
 - **`assignee`** — `==` / `!=` exact; `~` case-insensitive substring.
 - **`creator`** — same as `assignee`: `==` / `!=` exact; `~` case-insensitive substring.
 - **`label`** — the issue carries a *set* of labels. `label == "x"` is true iff the
@@ -125,7 +128,7 @@ code 1 with a message), on:
 
 - an **unknown field** or an unknown bare predicate;
 - an **operator not permitted** for the field (e.g. `status < "open"`, `text == "x"`);
-- a **malformed value** for the field's type (`priority` not an integer in `0`–`4`;
+- a **malformed value** for the field's type (`priority` not a non-negative integer;
   an unparseable date; an unknown enum token);
 - a **syntax error**: unbalanced parentheses, a dangling operator, a missing value,
   or trailing tokens after a complete expression.
@@ -143,12 +146,25 @@ no real query approaches this limit.
 ## 5. Evaluation scope (not part of the grammar)
 
 The expression decides *whether* an issue matches; it does **not** decide which
-partitions are scanned. By default only the hot (active) set is evaluated. Closed
-issues are read only when the caller opts in — `atctl --all`, or the SDK
-`Filter.IncludeClosed` — **or** when the expression references closed work
-(`status == "closed"`, or a `closed` comparison), which implies the cold partition.
-This scoping rule lives with the caller (CLI-SPEC.md §3, SDK-SPEC.md §4), not with
-the grammar, so the same expression is portable across front ends.
+partitions are scanned. By default only the hot (active) set is evaluated.
+
+**Cold-scope predicate (normative).** The cold (`closed/`) partition is scanned iff
+*any* of these holds:
+
+1. the caller opts in — `atctl --all`, `Filter.IncludeClosed`, or
+   `FindOptions.IncludeClosed`;
+2. the parsed expression contains a `status == "closed"` atom (positive equality
+   only); or
+3. the parsed expression contains any `closed`-field comparison (any operator).
+
+Nothing else auto-scans cold — in particular `status != "closed"` does **not** (it
+selects active work); to include closed issues under such a query the caller must opt
+in explicitly. The predicate is computed from the **parsed expression**, so there is
+exactly one detector: `Criteria` / `Find` derive their scope by building the
+expression and running this same predicate, never by inspecting the struct, so a
+`Criteria` and its hand-written equivalent always scope identically. This rule lives
+with the caller (CLI-SPEC.md §3, SDK-SPEC.md §3–4), not with the grammar, so the same
+expression is portable across front ends.
 
 ---
 
