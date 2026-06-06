@@ -99,12 +99,12 @@ type Ref struct { ID, Title string; Type Type; Status Status; Priority int }
 
 type Detail struct {
     Issue
-    ParentRef *Ref   // resolved parent
-    BlockedBy []Ref  // resolved blockers
-    Related   []Ref  // resolved related
-    Blocks    []Ref  // derived: issues blocked by this one
-    Children  []Ref  // derived: issues whose parent is this one
-    Comments  []Comment
+    ParentRef     *Ref   // resolved parent   (vs the embedded Issue.Parent ID)
+    BlockedByRefs []Ref  // resolved blockers (vs the embedded Issue.BlockedBy IDs)
+    RelatedRefs   []Ref  // resolved related  (vs the embedded Issue.Related IDs)
+    Blocks        []Ref  // derived: issues blocked by this one
+    Children      []Ref  // derived: issues whose parent is this one
+    Comments      []Comment
 }
 ```
 
@@ -422,7 +422,6 @@ Sentinel errors, testable with `errors.Is`:
 ```go
 var (
     ErrNotFound      // issue not found
-    ErrAlreadyExists // issue already exists
     ErrNoStore       // no .tasks directory found
     ErrStoreExists   // .tasks directory already exists
     ErrImmutable     // attempted in-place write to a closed issue (closed/ partition)

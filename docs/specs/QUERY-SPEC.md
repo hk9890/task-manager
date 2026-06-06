@@ -95,7 +95,12 @@ operator a field does not support is a parse error (§4).
   that can satisfy any ordering bound.
 - **`ready` / `blocked`** — computed predicates with the meanings fixed by the
   storage spec (TASK-STORAGE-SPEC.md §9): `ready` = open with no open blocker;
-  `blocked` = non-closed with ≥1 open blocker.
+  `blocked` = non-closed with ≥1 open blocker. These are derived from the
+  dependency graph and are **independent of the `status` field**: the `blocked`
+  predicate is **not** the same as `status == "blocked"`. The `blocked` *status*
+  is a manual label the engine never sets or clears automatically — an issue can
+  carry `status == "blocked"` with no open blocker (so not `blocked` here), or be
+  `blocked` here while its status is `open`/`in_progress`.
 
 **String comparison & case:** field names and enum tokens are lowercase. `==` / `!=`
 on strings are exact and case-sensitive; `~` is always case-insensitive.

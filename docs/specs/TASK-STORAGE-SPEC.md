@@ -377,6 +377,13 @@ There is no same-type constraint: any issue may parent or block any other.
 - **Blocked** = non-closed issues with at least one open blocker.
 - **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection).
 
+Ready/blocked are **derived from the dependency graph, not from the `status`
+field**. The `blocked` *status value* is a manual label: the engine never sets or
+clears it in response to dependencies, and it is not kept in sync with the
+computed `blocked` predicate above. An issue may hold `status: blocked` with no
+open blocker, or be blocked (by dependency) while its status is `open` or
+`in_progress`.
+
 ---
 
 ## 10. Validation

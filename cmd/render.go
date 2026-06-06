@@ -98,8 +98,8 @@ func toDetailDTO(d *tasks.Detail) detailDTO {
 	out := detailDTO{
 		issueDTO:      toIssueDTO(&d.Issue),
 		Description:   d.Description,
-		BlockedByRefs: toRefDTOs(d.BlockedBy),
-		RelatedRefs:   toRefDTOs(d.Related),
+		BlockedByRefs: toRefDTOs(d.BlockedByRefs),
+		RelatedRefs:   toRefDTOs(d.RelatedRefs),
 		Blocks:        toRefDTOs(d.Blocks),
 		Children:      toRefDTOs(d.Children),
 	}
@@ -149,9 +149,9 @@ func printDetail(d *tasks.Detail) {
 	if d.ParentRef != nil {
 		fmt.Printf("  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
 	}
-	printRefLine("blocked by", d.BlockedBy)
+	printRefLine("blocked by", d.BlockedByRefs)
 	printRefLine("blocks", d.Blocks)
-	printRefLine("related", d.Related)
+	printRefLine("related", d.RelatedRefs)
 	printRefLine("children", d.Children)
 	fmt.Printf("  created:  %s\n", d.Created.Format(time.RFC3339))
 	fmt.Printf("  updated:  %s\n", d.Updated.Format(time.RFC3339))

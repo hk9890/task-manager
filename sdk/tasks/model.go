@@ -122,12 +122,12 @@ type Ref struct {
 type Detail struct {
 	Issue
 
-	ParentRef *Ref      // resolved Parent, if set and found
-	BlockedBy []Ref     // resolved blockers (overrides Issue.BlockedBy IDs for display)
-	Related   []Ref     // resolved related issues
-	Blocks    []Ref     // derived: issues that list this one in their BlockedBy
-	Children  []Ref     // derived: issues whose Parent is this one
-	Comments  []Comment // resolved effective comment log (edits applied, tombstones omitted)
+	ParentRef     *Ref      // resolved Parent, if set and found
+	BlockedByRefs []Ref     // resolved blockers (vs the embedded Issue.BlockedBy IDs)
+	RelatedRefs   []Ref     // resolved related (vs the embedded Issue.Related IDs)
+	Blocks        []Ref     // derived: issues that list this one in their BlockedBy
+	Children      []Ref     // derived: issues whose Parent is this one
+	Comments      []Comment // resolved effective comment log (edits applied, tombstones omitted)
 }
 
 // ref builds a Ref from an issue.

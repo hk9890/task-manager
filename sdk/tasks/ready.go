@@ -166,7 +166,7 @@ func (s *Store) Detail(id string) (*Detail, error) {
 			return nil, fmt.Errorf("resolve blocker ref %s: %w", b, err)
 		}
 		if r != nil {
-			d.BlockedBy = append(d.BlockedBy, *r)
+			d.BlockedByRefs = append(d.BlockedByRefs, *r)
 		}
 	}
 	for _, relID := range iss.Related {
@@ -175,7 +175,7 @@ func (s *Store) Detail(id string) (*Detail, error) {
 			return nil, fmt.Errorf("resolve related ref %s: %w", relID, err)
 		}
 		if r != nil {
-			d.Related = append(d.Related, *r)
+			d.RelatedRefs = append(d.RelatedRefs, *r)
 		}
 	}
 	for _, other := range all {
@@ -216,8 +216,8 @@ func findCycle(idx map[string]*Issue, start string) string {
 
 	// dfsFrame holds the state for one DFS call.
 	type dfsFrame struct {
-		id       string
-		edgeIdx  int // index into idx[id].BlockedBy; next edge to process
+		id      string
+		edgeIdx int // index into idx[id].BlockedBy; next edge to process
 	}
 
 	color := map[string]int{}
