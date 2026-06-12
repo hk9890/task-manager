@@ -5,8 +5,8 @@ package tasks_test
 import (
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/storetest"
+	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/storetest"
 )
 
 // TestStoretest_L2_AllAndReady is the reference L2 test that builds a fixture

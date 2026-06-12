@@ -1,11 +1,11 @@
 //go:build integration
 
-// L4 CLI tests for `atctl list -q <expr>` and `atctl search`.
+// L4 CLI tests for `taskmgr list -q <expr>` and `taskmgr search`.
 //
 // Coverage:
 //   - All §6 example expressions from QUERY-SPEC.md
-//   - atctl search <text> equivalence with list -q 'text ~ "<text>"'
-//   - Malformed -q: exit code 1, message on stderr prefixed "atctl: "
+//   - taskmgr search <text> equivalence with list -q 'text ~ "<text>"'
+//   - Malformed -q: exit code 1, message on stderr prefixed "taskmgr: "
 //   - JSON output: array of issueDTO
 package cmd_test
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // ── fixture helpers ───────────────────────────────────────────────────────────
@@ -139,22 +139,22 @@ func queryFixture(t *testing.T) (root string, ids map[string]string) {
 	return root, ids
 }
 
-// listQuery runs `atctl --json list -q <expr>` and returns the issue IDs in
+// listQuery runs `taskmgr --json list -q <expr>` and returns the issue IDs in
 // the result.
 func listQuery(t *testing.T, root, expr string) []string {
 	t.Helper()
-	out, _, code := atctl(t, root, "--json", "list", "-q", expr)
+	out, _, code := taskmgr(t, root, "--json", "list", "-q", expr)
 	if code != 0 {
 		t.Fatalf("list -q %q failed (exit %d): %s", expr, code, out)
 	}
 	return issueIDsFromJSON(t, out)
 }
 
-// listQueryAllFlags runs `atctl --json list -q <expr> --all` and returns ids.
+// listQueryAllFlags runs `taskmgr --json list -q <expr> --all` and returns ids.
 func listQueryAllFlags(t *testing.T, root, expr string, extraArgs ...string) []string {
 	t.Helper()
 	args := append([]string{"--json", "list", "-q", expr}, extraArgs...)
-	out, _, code := atctl(t, root, args...)
+	out, _, code := taskmgr(t, root, args...)
 	if code != 0 {
 		t.Fatalf("list -q %q (%v) failed (exit %d): %s", expr, extraArgs, code, out)
 	}
@@ -320,7 +320,7 @@ func TestL4_Query_ParentID(t *testing.T) {
 // array of issueDTOs with required fields.
 func TestL4_Query_JSONIsArray(t *testing.T) {
 	root, _ := queryFixture(t)
-	out, _, code := atctl(t, root, "--json", "list", "-q", `status == "open"`)
+	out, _, code := taskmgr(t, root, "--json", "list", "-q", `status == "open"`)
 	if code != 0 {
 		t.Fatalf("list -q failed (exit %d): %s", code, out)
 	}
@@ -349,11 +349,11 @@ func TestL4_Query_JSONIsArray(t *testing.T) {
 func TestL4_Search_EquivalentToTextTilde(t *testing.T) {
 	root, ids := queryFixture(t)
 
-	searchOut, _, code := atctl(t, root, "--json", "search", "drill")
+	searchOut, _, code := taskmgr(t, root, "--json", "search", "drill")
 	if code != 0 {
 		t.Fatalf("search drill failed (exit %d): %s", code, searchOut)
 	}
-	listOut, _, code := atctl(t, root, "--json", "list", "-q", `text ~ "drill"`)
+	listOut, _, code := taskmgr(t, root, "--json", "list", "-q", `text ~ "drill"`)
 	if code != 0 {
 		t.Fatalf(`list -q 'text~"drill"' failed (exit %d): %s`, code, listOut)
 	}
@@ -379,7 +379,7 @@ func TestL4_Search_AllIncludesClosed(t *testing.T) {
 	root, ids := queryFixture(t)
 
 	// "closed" is in the title of both closed issues.
-	out, _, code := atctl(t, root, "--json", "search", "closed", "--all")
+	out, _, code := taskmgr(t, root, "--json", "search", "closed", "--all")
 	if code != 0 {
 		t.Fatalf("search --all failed (exit %d): %s", code, out)
 	}
@@ -395,7 +395,7 @@ func TestL4_Search_AllIncludesClosed(t *testing.T) {
 // ── malformed expr ────────────────────────────────────────────────────────────
 
 // TestL4_MalformedExpr_ExitOne verifies that a malformed -q expression causes
-// atctl to exit with code 1 and print a message on stderr prefixed "atctl: ".
+// taskmgr to exit with code 1 and print a message on stderr prefixed "taskmgr: ".
 func TestL4_MalformedExpr_ExitOne(t *testing.T) {
 	root, _ := queryFixture(t)
 
@@ -408,12 +408,12 @@ func TestL4_MalformedExpr_ExitOne(t *testing.T) {
 
 	for _, expr := range malformed {
 		t.Run(expr, func(t *testing.T) {
-			_, stderr, code := atctl(t, root, "list", "-q", expr)
+			_, stderr, code := taskmgr(t, root, "list", "-q", expr)
 			if code != 1 {
 				t.Errorf("list -q %q: expected exit 1, got %d", expr, code)
 			}
-			if !strings.HasPrefix(stderr, "atctl: ") {
-				t.Errorf("list -q %q: stderr must start with 'atctl: '; got: %q", expr, stderr)
+			if !strings.HasPrefix(stderr, "taskmgr: ") {
+				t.Errorf("list -q %q: stderr must start with 'taskmgr: '; got: %q", expr, stderr)
 			}
 		})
 	}
@@ -426,12 +426,12 @@ func TestL4_SearchMalformedInternalExpr_ExitOne(t *testing.T) {
 	root, _ := queryFixture(t)
 
 	// search with a malformed -q combined: `(foobar == "x") && text ~ "drill"`
-	_, stderr, code := atctl(t, root, "search", "drill", "-q", `foobar == "x"`)
+	_, stderr, code := taskmgr(t, root, "search", "drill", "-q", `foobar == "x"`)
 	if code != 1 {
 		t.Errorf("search with malformed -q: expected exit 1, got %d", code)
 	}
-	if !strings.HasPrefix(stderr, "atctl: ") {
-		t.Errorf("stderr must start with 'atctl: '; got: %q", stderr)
+	if !strings.HasPrefix(stderr, "taskmgr: ") {
+		t.Errorf("stderr must start with 'taskmgr: '; got: %q", stderr)
 	}
 }
 
@@ -445,7 +445,7 @@ func TestL4_Search_MultiWordJoined(t *testing.T) {
 
 	// "drill nav" appears only in drill-iss (title: "drill nav issue").
 	// Using two separate args should find it.
-	out, _, code := atctl(t, root, "--json", "search", "drill", "nav")
+	out, _, code := taskmgr(t, root, "--json", "search", "drill", "nav")
 	if code != 0 {
 		t.Fatalf("search 'drill nav' failed (exit %d): %s", code, out)
 	}
@@ -455,7 +455,7 @@ func TestL4_Search_MultiWordJoined(t *testing.T) {
 	}
 
 	// Sanity: searching "drill xyzzy" (no issue has both) should return empty.
-	out2, _, code2 := atctl(t, root, "--json", "search", "drill", "xyzzy")
+	out2, _, code2 := taskmgr(t, root, "--json", "search", "drill", "xyzzy")
 	if code2 != 0 {
 		t.Fatalf("search 'drill xyzzy' failed (exit %d): %s", code2, out2)
 	}
@@ -468,7 +468,7 @@ func TestL4_Search_MultiWordJoined(t *testing.T) {
 // ── --sort validation ─────────────────────────────────────────────────────────
 
 // TestL4_InvalidSort_ExitOne verifies that an invalid --sort value causes
-// atctl list to exit with code 1 and print an error on stderr. Valid values
+// taskmgr list to exit with code 1 and print an error on stderr. Valid values
 // are: work, id, priority, created, updated, closed (empty defaults to work).
 func TestL4_InvalidSort_ExitOne(t *testing.T) {
 	root, _ := queryFixture(t)
@@ -476,7 +476,7 @@ func TestL4_InvalidSort_ExitOne(t *testing.T) {
 	invalidSorts := []string{"bogus", "title", "date", "PRIORITY", "work_order"}
 	for _, s := range invalidSorts {
 		t.Run(s, func(t *testing.T) {
-			_, stderr, code := atctl(t, root, "list", "--sort", s)
+			_, stderr, code := taskmgr(t, root, "list", "--sort", s)
 			if code != 1 {
 				t.Errorf("list --sort %q: expected exit 1, got %d", s, code)
 			}
@@ -502,7 +502,7 @@ func TestL4_ValidSort_Succeeds(t *testing.T) {
 			if s != "" {
 				args = append(args, "--sort", s)
 			}
-			_, _, code := atctl(t, root, args...)
+			_, _, code := taskmgr(t, root, args...)
 			if code != 0 {
 				t.Errorf("list --sort %q: expected exit 0, got %d", s, code)
 			}
@@ -512,7 +512,7 @@ func TestL4_ValidSort_Succeeds(t *testing.T) {
 
 // ── blocked output format ──────────────────────────────────────────────────────
 
-// TestL4_Blocked_HumanFormat verifies that `atctl blocked` (human output)
+// TestL4_Blocked_HumanFormat verifies that `taskmgr blocked` (human output)
 // renders blocked issues per CLI-SPEC §"blocked":
 //
 //	<id>  <status>  P<n>  <title>
@@ -520,7 +520,7 @@ func TestL4_ValidSort_Succeeds(t *testing.T) {
 func TestL4_Blocked_HumanFormat(t *testing.T) {
 	root, ids := queryFixture(t)
 
-	out, _, code := atctl(t, root, "blocked")
+	out, _, code := taskmgr(t, root, "blocked")
 	if code != 0 {
 		t.Fatalf("blocked failed (exit %d): %s", code, out)
 	}

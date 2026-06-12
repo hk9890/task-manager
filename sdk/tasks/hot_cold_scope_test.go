@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // ── L1: pure-function tests ───────────────────────────────────────────────────

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // TestMem_WriteAtomicReadFile verifies a basic write+read round-trip.

@@ -4,12 +4,12 @@
 //
 // Acceptance criteria covered (at-dny.4):
 //
-//	AC1  atctl create --creator x persists x (verify via show --json).
+//	AC1  taskmgr create --creator x persists x (verify via show --json).
 //	AC2  With no --creator, creator defaults to $USER.
 //	AC3  issueDTO includes creator (omitempty) for show/list/search/ready and
 //	     nested DTOs; omitted when empty.
-//	AC4  atctl create --json output shape is unchanged ({id}).
-//	AC5  atctl update has no --creator flag.
+//	AC4  taskmgr create --json output shape is unchanged ({id}).
+//	AC5  taskmgr update has no --creator flag.
 package cmd_test
 
 import (
@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // ── AC1: create --creator x persists x ───────────────────────────────────────
@@ -32,7 +32,7 @@ func TestL4_Create_CreatorFlagPersists(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	out, _, code := atctl(t, root, "create", "--title", "creator flag test", "--creator", "testuser")
+	out, _, code := taskmgr(t, root, "create", "--title", "creator flag test", "--creator", "testuser")
 	if code != 0 {
 		t.Fatalf("create --creator: expected exit 0, got %d; out: %s", code, out)
 	}
@@ -50,7 +50,7 @@ func TestL4_Create_CreatorFlagPersists(t *testing.T) {
 	}
 
 	// Verify via show --json.
-	showOut, _, code2 := atctl(t, root, "--json", "show", issID)
+	showOut, _, code2 := taskmgr(t, root, "--json", "show", issID)
 	if code2 != 0 {
 		t.Fatalf("show failed (exit %d): %s", code2, showOut)
 	}
@@ -80,7 +80,7 @@ func TestL4_Create_CreatorDefaultsToUSER(t *testing.T) {
 		t.Skip("$USER not set in environment — skipping default-creator test")
 	}
 
-	out, _, code := atctl(t, root, "create", "--title", "no creator flag")
+	out, _, code := taskmgr(t, root, "create", "--title", "no creator flag")
 	if code != 0 {
 		t.Fatalf("create without --creator: expected exit 0, got %d; out: %s", code, out)
 	}
@@ -96,7 +96,7 @@ func TestL4_Create_CreatorDefaultsToUSER(t *testing.T) {
 		t.Fatalf("could not find issue ID in create output: %q", out)
 	}
 
-	showOut, _, code2 := atctl(t, root, "--json", "show", issID)
+	showOut, _, code2 := taskmgr(t, root, "--json", "show", issID)
 	if code2 != 0 {
 		t.Fatalf("show failed (exit %d): %s", code2, showOut)
 	}
@@ -133,7 +133,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 	issID := iss.ID
 
 	// show --json
-	showOut, _, code := atctl(t, root, "--json", "show", issID)
+	showOut, _, code := taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, showOut)
 	}
@@ -146,7 +146,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 	}
 
 	// list --json
-	listOut, _, code2 := atctl(t, root, "--json", "list")
+	listOut, _, code2 := taskmgr(t, root, "--json", "list")
 	if code2 != 0 {
 		t.Fatalf("list failed (exit %d): %s", code2, listOut)
 	}
@@ -162,7 +162,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 	}
 
 	// search --json
-	searchOut, _, code3 := atctl(t, root, "--json", "search", "creator present")
+	searchOut, _, code3 := taskmgr(t, root, "--json", "search", "creator present")
 	if code3 != 0 {
 		t.Fatalf("search failed (exit %d): %s", code3, searchOut)
 	}
@@ -178,7 +178,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 	}
 
 	// ready --json
-	readyOut, _, code4 := atctl(t, root, "--json", "ready")
+	readyOut, _, code4 := taskmgr(t, root, "--json", "ready")
 	if code4 != 0 {
 		t.Fatalf("ready failed (exit %d): %s", code4, readyOut)
 	}
@@ -215,7 +215,7 @@ func TestL4_IssueDTO_CreatorOmittedWhenEmpty(t *testing.T) {
 	}
 	issID := iss.ID
 
-	showOut, _, code := atctl(t, root, "--json", "show", issID)
+	showOut, _, code := taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, showOut)
 	}
@@ -253,7 +253,7 @@ func TestL4_NestedDTO_CreatorInBlockedDTO(t *testing.T) {
 		t.Fatalf("AddDep: %v", err)
 	}
 
-	out, _, code := atctl(t, root, "--json", "blocked")
+	out, _, code := taskmgr(t, root, "--json", "blocked")
 	if code != 0 {
 		t.Fatalf("blocked failed (exit %d): %s", code, out)
 	}
@@ -269,9 +269,9 @@ func TestL4_NestedDTO_CreatorInBlockedDTO(t *testing.T) {
 	}
 }
 
-// ── AC4: atctl create --json shape is unchanged ({id}) ───────────────────────
+// ── AC4: taskmgr create --json shape is unchanged ({id}) ───────────────────────
 
-// TestL4_Create_JSON_ShapeUnchanged verifies that atctl create --json still
+// TestL4_Create_JSON_ShapeUnchanged verifies that taskmgr create --json still
 // returns exactly {"id": "..."} — creator is NOT added to this output.
 func TestL4_Create_JSON_ShapeUnchanged(t *testing.T) {
 	root := t.TempDir()
@@ -279,7 +279,7 @@ func TestL4_Create_JSON_ShapeUnchanged(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	out, _, code := atctl(t, root, "--json", "create", "--title", "shape check", "--creator", "alice")
+	out, _, code := taskmgr(t, root, "--json", "create", "--title", "shape check", "--creator", "alice")
 	if code != 0 {
 		t.Fatalf("create --json failed (exit %d): %s", code, out)
 	}
@@ -305,14 +305,14 @@ func TestL4_Create_JSON_ShapeUnchanged(t *testing.T) {
 	}
 }
 
-// ── AC5: atctl update has no --creator flag ───────────────────────────────────
+// ── AC5: taskmgr update has no --creator flag ───────────────────────────────────
 
-// TestL4_Update_NoCreatorFlag verifies that atctl update does not accept a
+// TestL4_Update_NoCreatorFlag verifies that taskmgr update does not accept a
 // --creator flag (creator is immutable — CLI-SPEC §4).
 func TestL4_Update_NoCreatorFlag(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	_, stderr, code := atctl(t, root, "update", issID, "--creator", "hacker")
+	_, stderr, code := taskmgr(t, root, "update", issID, "--creator", "hacker")
 	if code == 0 {
 		t.Error("update --creator: expected non-zero exit, got 0 (flag must not exist)")
 	}

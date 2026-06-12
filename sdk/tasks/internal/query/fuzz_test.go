@@ -18,7 +18,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
 // FuzzParseQuery fuzzes query.Parse with arbitrary byte inputs.

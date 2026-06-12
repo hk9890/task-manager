@@ -13,7 +13,7 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   internal/query/           pure filter-expression engine: lex · parse · ast · eval · errors
   internal/vfs/             the disk seam: FS interface · osFS (prod) · Mem (test + faults)
   internal/storetest/       fixture builder ("make a store") — test-only support package
-cmd/                        atctl CLI (cobra); calls Store, never the FS
+cmd/                        taskmgr CLI (cobra); calls Store, never the FS
 bench/                      standalone module; outside build/test
 ```
 

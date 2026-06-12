@@ -15,7 +15,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // writeBodyFile writes content to a temp file and returns its path.
@@ -40,7 +40,7 @@ func TestL4_Create_DescAndFileAreMutuallyExclusive(t *testing.T) {
 
 	bodyFile := writeBodyFile(t, "from file")
 
-	_, stderr, code := atctl(t, root, "create", "--title", "test issue",
+	_, stderr, code := taskmgr(t, root, "create", "--title", "test issue",
 		"--description", "inline",
 		"--description-file", bodyFile)
 	if code == 0 {
@@ -53,12 +53,12 @@ func TestL4_Create_DescAndFileAreMutuallyExclusive(t *testing.T) {
 
 // ── update: no-op exits with error ────────────────────────────────────────────
 
-// TestL4_Update_NoFlagsIsError verifies that `atctl update <id>` with no
+// TestL4_Update_NoFlagsIsError verifies that `taskmgr update <id>` with no
 // mutating flags exits with code 1 rather than silently bumping updated.
 func TestL4_Update_NoFlagsIsError(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	_, stderr, code := atctl(t, root, "update", issID)
+	_, stderr, code := taskmgr(t, root, "update", issID)
 	if code == 0 {
 		t.Errorf("update with no flags: expected exit 1, got 0")
 	}
@@ -76,7 +76,7 @@ func TestL4_Update_DescAndFileAreMutuallyExclusive(t *testing.T) {
 
 	bodyFile := writeBodyFile(t, "from file")
 
-	_, stderr, code := atctl(t, root, "update", issID,
+	_, stderr, code := taskmgr(t, root, "update", issID,
 		"--description", "inline",
 		"--description-file", bodyFile)
 	if code == 0 {
@@ -96,7 +96,7 @@ func TestL4_CommentAdd_BodyAndFileAreMutuallyExclusive(t *testing.T) {
 
 	bodyFile := writeBodyFile(t, "from file")
 
-	_, stderr, code := atctl(t, root, "comment", "add", issID,
+	_, stderr, code := taskmgr(t, root, "comment", "add", issID,
 		"inline body",
 		"--file", bodyFile)
 	if code == 0 {
@@ -115,7 +115,7 @@ func TestL4_CommentEdit_BodyAndFileAreMutuallyExclusive(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// First add a comment to get a valid comment ID.
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original")
 	if code != 0 {
 		t.Fatalf("comment add failed (exit %d): %s", code, out)
 	}
@@ -127,7 +127,7 @@ func TestL4_CommentEdit_BodyAndFileAreMutuallyExclusive(t *testing.T) {
 
 	bodyFile := writeBodyFile(t, "from file")
 
-	_, stderr, code := atctl(t, root, "comment", "edit", issID, commentID,
+	_, stderr, code := taskmgr(t, root, "comment", "edit", issID, commentID,
 		"inline body",
 		"--file", bodyFile)
 	if code == 0 {

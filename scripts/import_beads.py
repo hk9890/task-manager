@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Import beads issues into an agent-tasks (.tasks) store via atctl.
+"""Import beads issues into an agent-tasks (.tasks) store via taskmgr.
 
 One-off migration: reads a beads JSONL export and recreates every issue in a
 target .tasks store — fields, labels, parent / blocked-by edges, comments, and
-closed state — driving the validated `atctl` CLI (the single writer).
+closed state — driving the validated `taskmgr` CLI (the single writer).
 
 Usage
 -----
@@ -91,7 +91,7 @@ def body_with_footer(rec: dict) -> str:
     return (body + "\n\n---\n" + footer + "\n").lstrip("\n")
 
 
-class Atctl:
+class Taskmgr:
     def __init__(self, binary: str, target: str, dry_run: bool):
         self.binary = binary
         self.target = target
@@ -104,11 +104,11 @@ class Atctl:
         cmd += args
         if self.dry_run:
             shown = " ".join(a if " " not in a else repr(a) for a in args)
-            eprint(f"  DRY: atctl {shown}" + (" <stdin>" if stdin is not None else ""))
+            eprint(f"  DRY: taskmgr {shown}" + (" <stdin>" if stdin is not None else ""))
             return {"id": f"dry-{args}"} if capture_json else ""
         proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True)
         if proc.returncode != 0:
-            raise RuntimeError(f"atctl {' '.join(args)} failed: {proc.stderr.strip()}")
+            raise RuntimeError(f"taskmgr {' '.join(args)} failed: {proc.stderr.strip()}")
         out = proc.stdout.strip()
         return json.loads(out) if capture_json and out else out
 
@@ -196,20 +196,20 @@ def edges(rec: dict):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Import beads issues into a .tasks store via atctl.")
+    ap = argparse.ArgumentParser(description="Import beads issues into a .tasks store via taskmgr.")
     ap.add_argument("--from", dest="src", help="beads JSONL export (default: run `bd export`)")
     ap.add_argument("--dir", default=".", help="target project dir holding .tasks (default: cwd)")
-    ap.add_argument("--atctl", default=os.path.join(REPO_ROOT, "bin", "atctl"),
-                    help="path to the atctl binary (default: <repo>/bin/atctl)")
-    ap.add_argument("--prefix", help="ID prefix for the new store (atctl derives one if omitted)")
+    ap.add_argument("--taskmgr", default=os.path.join(REPO_ROOT, "bin", "taskmgr"),
+                    help="path to the taskmgr binary (default: <repo>/bin/taskmgr)")
+    ap.add_argument("--prefix", help="ID prefix for the new store (taskmgr derives one if omitted)")
     ap.add_argument("--yes", "-y", action="store_true",
                     help="overwrite an existing .tasks store without prompting")
     ap.add_argument("--map-out", default=os.path.join(REPO_ROOT, "scripts", ".beads-import-map.json"))
     ap.add_argument("--dry-run", action="store_true", help="print actions without writing")
     args = ap.parse_args()
 
-    if not args.dry_run and not (os.path.isfile(args.atctl) and os.access(args.atctl, os.X_OK)):
-        eprint(f"atctl not found at {args.atctl}. Build it first:  mise run build")
+    if not args.dry_run and not (os.path.isfile(args.taskmgr) and os.access(args.taskmgr, os.X_OK)):
+        eprint(f"taskmgr not found at {args.taskmgr}. Build it first:  mise run build")
         return 1
 
     records = load_records(args.src)
@@ -217,7 +217,7 @@ def main() -> int:
     if not records:
         return 0
 
-    at = Atctl(args.atctl, args.dir, args.dry_run)
+    at = Taskmgr(args.taskmgr, args.dir, args.dry_run)
 
     # A fresh store is required (import is additive — re-importing into an existing
     # store would duplicate). If one already exists, ask before wiping it.
@@ -269,7 +269,7 @@ def main() -> int:
             else:
                 eprint(f"  ! {rec['id']}: blocker {b} not in export — skipped")
         if related:
-            eprint(f"  ! {rec['id']}: 'related' edges can't be set post-create via atctl — skipped {related}")
+            eprint(f"  ! {rec['id']}: 'related' edges can't be set post-create via taskmgr — skipped {related}")
         for c in rec.get("comments") or []:
             text = (c.get("text") or "").strip()
             if text:

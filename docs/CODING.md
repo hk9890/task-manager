@@ -8,7 +8,7 @@ map and the test layers, read
 ## Build & test (mise; `make` still works)
 
 ```bash
-mise run build             # -> ./bin/atctl
+mise run build             # -> ./bin/taskmgr
 mise run fmt vet lint
 mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
 mise run test:integration  # L3 real temp dir + L4 CLI

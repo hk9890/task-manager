@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // TestAddDep_ClosedIssue_ReturnsErrImmutable verifies that AddDep on a closed

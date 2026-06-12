@@ -14,7 +14,7 @@ package tasks
 import (
 	"strings"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
 // ParseError is the typed error returned when a filter expression cannot be

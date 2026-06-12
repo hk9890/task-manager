@@ -2,11 +2,11 @@
 
 // L4 CLI tests for the comment commands:
 //
-//	atctl comment add   → prints commentDTO (with id field)
-//	atctl comment edit  → EditComment
-//	atctl comment rm    → DeleteComment (idempotent)
-//	atctl show --json   → detailDTO.comments is resolved commentDTO[]
-//	atctl show (human)  → renders the resolved comment log
+//	taskmgr comment add   → prints commentDTO (with id field)
+//	taskmgr comment edit  → EditComment
+//	taskmgr comment rm    → DeleteComment (idempotent)
+//	taskmgr show --json   → detailDTO.comments is resolved commentDTO[]
+//	taskmgr show (human)  → renders the resolved comment log
 package cmd_test
 
 import (
@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-// atctl runs the atctl binary (built from this module) with the given arguments
+// taskmgr runs the taskmgr binary (built from this module) with the given arguments
 // from the specified working directory. It returns stdout, stderr, and exit code.
-func atctl(t *testing.T, storeDir string, args ...string) (stdout, stderr string, exitCode int) {
+func taskmgr(t *testing.T, storeDir string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
-	bin := atctlBin(t)
+	bin := taskmgrBin(t)
 	cmd := exec.Command(bin, append([]string{"--dir", storeDir}, args...)...)
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout = &outBuf
@@ -43,30 +43,30 @@ func atctl(t *testing.T, storeDir string, args ...string) (stdout, stderr string
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// atctlBin returns the path to the atctl binary, building it once per test run.
+// taskmgrBin returns the path to the taskmgr binary, building it once per test run.
 // The binary is placed in os.TempDir() so it survives individual test teardowns.
 var (
-	_atctlBinPath string
-	_atctlBinErr  error
-	_atctlBinOnce sync.Once
+	_taskmgrBinPath string
+	_taskmgrBinErr  error
+	_taskmgrBinOnce sync.Once
 )
 
-func atctlBin(t *testing.T) string {
+func taskmgrBin(t *testing.T) string {
 	t.Helper()
-	_atctlBinOnce.Do(func() {
-		bin := filepath.Join(os.TempDir(), "atctl-test-bin")
+	_taskmgrBinOnce.Do(func() {
+		bin := filepath.Join(os.TempDir(), "taskmgr-test-bin")
 		out, err := exec.Command("go", "build", "-o", bin,
-			"github.com/hk9890/agent-tasks").CombinedOutput()
+			"github.com/hk9890/task-manager").CombinedOutput()
 		if err != nil {
-			_atctlBinErr = fmt.Errorf("go build failed: %v\n%s", err, out)
+			_taskmgrBinErr = fmt.Errorf("go build failed: %v\n%s", err, out)
 			return
 		}
-		_atctlBinPath = bin
+		_taskmgrBinPath = bin
 	})
-	if _atctlBinErr != nil {
-		t.Fatalf("failed to build atctl: %v", _atctlBinErr)
+	if _taskmgrBinErr != nil {
+		t.Fatalf("failed to build taskmgr: %v", _taskmgrBinErr)
 	}
-	return _atctlBinPath
+	return _taskmgrBinPath
 }
 
 // newTestStoreDir creates a temporary directory, initialises a store, and
@@ -97,7 +97,7 @@ func newTestStoreDir(t *testing.T) (string, string) {
 func TestL4_CommentAdd_PrintsCommentID(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "a test note")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "a test note")
 	if code != 0 {
 		t.Fatalf("comment add failed (exit %d), stderr: %s", code, out)
 	}
@@ -122,7 +122,7 @@ func TestL4_CommentAdd_PrintsCommentID(t *testing.T) {
 func TestL4_CommentAdd_CommentDTOShape(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "some body text")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "some body text")
 	if code != 0 {
 		t.Fatalf("comment add failed (exit %d): %s", code, out)
 	}
@@ -144,7 +144,7 @@ func TestL4_CommentAdd_CommentDTOShape(t *testing.T) {
 func TestL4_CommentAdd_HumanOutput(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "comment", "add", issID, "human note")
+	out, _, code := taskmgr(t, root, "comment", "add", issID, "human note")
 	if code != 0 {
 		t.Fatalf("comment add failed (exit %d): %s", code, out)
 	}
@@ -158,7 +158,7 @@ func TestL4_CommentAdd_HumanOutput(t *testing.T) {
 func TestL4_CommentAdd_EmptyBodyRejected(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	_, _, code := atctl(t, root, "comment", "add", issID, "")
+	_, _, code := taskmgr(t, root, "comment", "add", issID, "")
 	if code == 0 {
 		t.Error("expected non-zero exit for empty comment body")
 	}
@@ -174,7 +174,7 @@ func TestL4_CommentAdd_FileFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "--file", bodyFile)
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "--file", bodyFile)
 	if code != 0 {
 		t.Fatalf("comment add --file failed (exit %d): %s", code, out)
 	}
@@ -196,7 +196,7 @@ func TestL4_CommentEdit_UpdatesComment(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// Add an original comment.
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original body")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original body")
 	if code != 0 {
 		t.Fatalf("comment add failed (exit %d): %s", code, out)
 	}
@@ -207,13 +207,13 @@ func TestL4_CommentEdit_UpdatesComment(t *testing.T) {
 	commentID, _ := addDTO["id"].(string)
 
 	// Edit the comment.
-	_, stderr, code := atctl(t, root, "comment", "edit", issID, commentID, "revised body")
+	_, stderr, code := taskmgr(t, root, "comment", "edit", issID, commentID, "revised body")
 	if code != 0 {
 		t.Fatalf("comment edit failed (exit %d): %s", code, stderr)
 	}
 
 	// show --json should have 1 comment with revised body.
-	out, _, code = atctl(t, root, "--json", "show", issID)
+	out, _, code = taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -238,7 +238,7 @@ func TestL4_CommentEdit_UpdatesComment(t *testing.T) {
 func TestL4_CommentEdit_EmptyBodyRejected(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -248,7 +248,7 @@ func TestL4_CommentEdit_EmptyBodyRejected(t *testing.T) {
 	}
 	commentID, _ := dto["id"].(string)
 
-	_, _, code = atctl(t, root, "comment", "edit", issID, commentID, "")
+	_, _, code = taskmgr(t, root, "comment", "edit", issID, commentID, "")
 	if code == 0 {
 		t.Error("expected non-zero exit for empty edit body")
 	}
@@ -258,7 +258,7 @@ func TestL4_CommentEdit_EmptyBodyRejected(t *testing.T) {
 func TestL4_CommentEdit_AuthorFlag(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original", "--author", "alice")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original", "--author", "alice")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -269,7 +269,7 @@ func TestL4_CommentEdit_AuthorFlag(t *testing.T) {
 	commentID, _ := addDTO["id"].(string)
 
 	// Edit with a different author.
-	out, stderr, code := atctl(t, root, "--json", "comment", "edit", issID, commentID, "revised", "--author", "bob")
+	out, stderr, code := taskmgr(t, root, "--json", "comment", "edit", issID, commentID, "revised", "--author", "bob")
 	if code != 0 {
 		t.Fatalf("edit failed (exit %d): %s", code, stderr)
 	}
@@ -287,7 +287,7 @@ func TestL4_CommentEdit_AuthorFlag(t *testing.T) {
 func TestL4_CommentEdit_FileFlag(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -302,7 +302,7 @@ func TestL4_CommentEdit_FileFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, _, code = atctl(t, root, "--json", "comment", "edit", issID, commentID, "--file", bodyFile)
+	out, _, code = taskmgr(t, root, "--json", "comment", "edit", issID, commentID, "--file", bodyFile)
 	if code != 0 {
 		t.Fatalf("edit --file failed (exit %d): %s", code, out)
 	}
@@ -322,7 +322,7 @@ func TestL4_CommentEdit_FileFlag(t *testing.T) {
 func TestL4_CommentRm_RemovesFromResolved(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "to be deleted")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "to be deleted")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -333,13 +333,13 @@ func TestL4_CommentRm_RemovesFromResolved(t *testing.T) {
 	commentID, _ := addDTO["id"].(string)
 
 	// Delete it.
-	_, stderr, code := atctl(t, root, "comment", "rm", issID, commentID)
+	_, stderr, code := taskmgr(t, root, "comment", "rm", issID, commentID)
 	if code != 0 {
 		t.Fatalf("comment rm failed (exit %d): %s", code, stderr)
 	}
 
 	// show should have 0 comments.
-	out, _, code = atctl(t, root, "--json", "show", issID)
+	out, _, code = taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -359,7 +359,7 @@ func TestL4_CommentRm_RemovesFromResolved(t *testing.T) {
 func TestL4_CommentRm_Idempotent(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "note")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "note")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -370,16 +370,16 @@ func TestL4_CommentRm_Idempotent(t *testing.T) {
 	commentID, _ := addDTO["id"].(string)
 
 	// First delete.
-	_, stderr, code := atctl(t, root, "comment", "rm", issID, commentID)
+	_, stderr, code := taskmgr(t, root, "comment", "rm", issID, commentID)
 	if code != 0 {
 		t.Fatalf("first rm failed (exit %d): %s", code, stderr)
 	}
 
 	// Second delete. Per spec: idempotent. Accept any exit code but verify the
 	// resolved view still has 0 comments.
-	atctl(t, root, "comment", "rm", issID, commentID)
+	taskmgr(t, root, "comment", "rm", issID, commentID)
 
-	out, _, code = atctl(t, root, "--json", "show", issID)
+	out, _, code = taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show after second rm failed: %s", out)
 	}
@@ -401,7 +401,7 @@ func TestL4_ShowJSON_CommentsResolved(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// Add two comments; edit the first one.
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "first comment", "--author", "alice")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "first comment", "--author", "alice")
 	if code != 0 {
 		t.Fatalf("add 1 failed (exit %d): %s", code, out)
 	}
@@ -411,10 +411,10 @@ func TestL4_ShowJSON_CommentsResolved(t *testing.T) {
 	}
 	firstID, _ := a["id"].(string)
 
-	atctl(t, root, "comment", "add", issID, "second comment", "--author", "bob")
-	atctl(t, root, "comment", "edit", issID, firstID, "revised first", "--author", "alice")
+	taskmgr(t, root, "comment", "add", issID, "second comment", "--author", "bob")
+	taskmgr(t, root, "comment", "edit", issID, firstID, "revised first", "--author", "alice")
 
-	out, _, code = atctl(t, root, "--json", "show", issID)
+	out, _, code = taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -452,12 +452,12 @@ func TestL4_ShowJSON_CommentsResolved(t *testing.T) {
 func TestL4_ShowHuman_CommentsRendered(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	_, _, code := atctl(t, root, "comment", "add", issID, "a human note", "--author", "alice")
+	_, _, code := taskmgr(t, root, "comment", "add", issID, "a human note", "--author", "alice")
 	if code != 0 {
 		t.Fatal("comment add failed")
 	}
 
-	out, _, code := atctl(t, root, "show", issID)
+	out, _, code := taskmgr(t, root, "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -474,7 +474,7 @@ func TestL4_ShowHuman_CommentsRendered(t *testing.T) {
 func TestL4_ShowJSON_CommentReplaces(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "original", "--author", "alice")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "original", "--author", "alice")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -484,9 +484,9 @@ func TestL4_ShowJSON_CommentReplaces(t *testing.T) {
 	}
 	firstID, _ := a["id"].(string)
 
-	atctl(t, root, "comment", "edit", issID, firstID, "revised", "--author", "alice")
+	taskmgr(t, root, "comment", "edit", issID, firstID, "revised", "--author", "alice")
 
-	out, _, code = atctl(t, root, "--json", "show", issID)
+	out, _, code = taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -514,7 +514,7 @@ func TestL4_CommentLifecycle_EndToEnd(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// Step 1: add a comment.
-	out, _, code := atctl(t, root, "--json", "comment", "add", issID, "initial note", "--author", "alice")
+	out, _, code := taskmgr(t, root, "--json", "comment", "add", issID, "initial note", "--author", "alice")
 	if code != 0 {
 		t.Fatalf("add failed (exit %d): %s", code, out)
 	}
@@ -531,14 +531,14 @@ func TestL4_CommentLifecycle_EndToEnd(t *testing.T) {
 	showAndExpectCount(t, root, issID, 1)
 
 	// Step 3: edit the comment.
-	_, stderr, code := atctl(t, root, "comment", "edit", issID, cid, "revised note", "--author", "alice")
+	_, stderr, code := taskmgr(t, root, "comment", "edit", issID, cid, "revised note", "--author", "alice")
 	if code != 0 {
 		t.Fatalf("edit failed (exit %d): %s", code, stderr)
 	}
 	showAndExpectCount(t, root, issID, 1) // still 1 (chain collapses)
 
 	// Step 4: delete the comment.
-	_, stderr, code = atctl(t, root, "comment", "rm", issID, cid)
+	_, stderr, code = taskmgr(t, root, "comment", "rm", issID, cid)
 	if code != 0 {
 		t.Fatalf("rm failed (exit %d): %s", code, stderr)
 	}
@@ -547,7 +547,7 @@ func TestL4_CommentLifecycle_EndToEnd(t *testing.T) {
 
 func showAndExpectCount(t *testing.T, root, issID string, want int) {
 	t.Helper()
-	out, _, code := atctl(t, root, "--json", "show", issID)
+	out, _, code := taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}

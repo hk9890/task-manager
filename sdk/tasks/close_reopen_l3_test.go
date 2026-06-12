@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/storetest"
+	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/storetest"
 )
 
 // TestL3_Close_MoveAndReload verifies the full close lifecycle on a real disk:

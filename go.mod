@@ -1,11 +1,11 @@
-module github.com/hk9890/agent-tasks
+module github.com/hk9890/task-manager
 
 go 1.26.3
 
-replace github.com/hk9890/agent-tasks/sdk => ./sdk
+replace github.com/hk9890/task-manager/sdk => ./sdk
 
 require (
-	github.com/hk9890/agent-tasks/sdk v0.0.0
+	github.com/hk9890/task-manager/sdk v0.0.0
 	github.com/spf13/cobra v1.10.2
 )
 

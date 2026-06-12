@@ -6,7 +6,7 @@ access; the on-disk format it produces is defined in
 [TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md).
 
 ```go
-import "github.com/hk9890/agent-tasks/sdk/tasks"
+import "github.com/hk9890/task-manager/sdk/tasks"
 ```
 
 The package is its own Go module (minimal dependencies) so consumers can import it

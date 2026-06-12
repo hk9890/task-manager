@@ -20,8 +20,8 @@ git worktree remove ../agent-tasks-<feature>
 
 ## Change loop
 
-1. Track the work in the repo's own `.tasks/` store with `atctl` (`atctl create`
-   to open an issue, `atctl close` when it lands).
+1. Track the work in the repo's own `.tasks/` store with `taskmgr` (`taskmgr create`
+   to open an issue, `taskmgr close` when it lands).
 2. Make the change on the feature branch — never on `main`.
 3. Verify to the depth of the change:
    - **Docs-only** → check touched paths, links, and routes.
@@ -39,7 +39,7 @@ gh pr create --fill
 
 - The branch must be green (`make fmt vet test`) before review.
 - Merge the PR into `main`; do not push to `main` directly.
-- Update tracker state with `atctl`: close finished issues and file follow-ups.
+- Update tracker state with `taskmgr`: close finished issues and file follow-ups.
 
 ## Session completion
 

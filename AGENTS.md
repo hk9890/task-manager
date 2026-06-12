@@ -3,7 +3,7 @@
 ## Repository purpose
 
 A lean, file-based task tracker: issues, dependencies, and ready-work as Markdown
-files under `.tasks/`. Ships a CLI (`atctl`) and an importable Go SDK
+files under `.tasks/`. Ships a CLI (`taskmgr`) and an importable Go SDK
 (`sdk/tasks`) over one storage engine. Three Go modules: the cobra CLI, a
 dependency-light SDK, and a standalone `bench` harness.
 

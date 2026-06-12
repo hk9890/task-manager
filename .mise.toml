@@ -10,35 +10,35 @@ CGO_ENABLED = "0"
 
 # ---- build & run -----------------------------------------------------------
 
-[tasks.atctl]
-description = "Build atctl from the current source and run it in your shell's directory. Usage: mise run atctl -- <args>  (e.g. mise run atctl -- ready)"
-# Single line so mise appends your args to the atctl invocation (not the build step).
-run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/atctl . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/atctl"'
+[tasks.taskmgr]
+description = "Build taskmgr from the current source and run it in your shell's directory. Usage: mise run taskmgr -- <args>  (e.g. mise run taskmgr -- ready)"
+# Single line so mise appends your args to the taskmgr invocation (not the build step).
+run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/taskmgr"'
 
 [tasks.import-beads]
 description = "Import the beads tracker into a .tasks store in your current dir (prompts before overwriting). Extra args after -- (e.g. -- -y to skip the prompt)."
-run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/atctl . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec python3 "$MISE_PROJECT_ROOT/scripts/import_beads.py" --prefix at'
+run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec python3 "$MISE_PROJECT_ROOT/scripts/import_beads.py" --prefix at'
 
 [tasks.build]
-description = "Build the atctl binary into ./bin"
+description = "Build the taskmgr binary into ./bin"
 run = """
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-PKG=github.com/hk9890/agent-tasks/cmd
-go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/atctl .
+PKG=github.com/hk9890/task-manager/cmd
+go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/taskmgr .
 """
 
 # ---- format / vet / lint / tidy (both modules) -----------------------------
 
 [tasks.fmt]
 description = "Format Go source (goimports, both modules)"
-run = "goimports -local github.com/hk9890/agent-tasks -w cmd sdk/tasks main.go"
+run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks main.go"
 
 [tasks."fmt:check"]
 description = "Fail if any file is not formatted"
 run = """
-OUT=$(goimports -local github.com/hk9890/agent-tasks -l cmd sdk/tasks main.go)
+OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks main.go)
 if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
 """
 

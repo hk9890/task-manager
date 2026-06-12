@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // Build info, overridable via -ldflags.
@@ -22,11 +22,11 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "atctl",
+	Use:   "taskmgr",
 	Short: "Agent Tasks Control — a file-based task tracker",
-	Long: `atctl is the command-line tool for agent-tasks: a lean, file-based task
+	Long: `taskmgr is the command-line tool for agent-tasks: a lean, file-based task
 tracker. Each issue is a Markdown file with YAML frontmatter under a project's
-.tasks directory. atctl is the only thing that should write those files — it
+.tasks directory. taskmgr is the only thing that should write those files — it
 validates everything and serializes concurrent writers.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -35,7 +35,7 @@ validates everything and serializes concurrent writers.`,
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "atctl: "+err.Error())
+		fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -59,7 +59,7 @@ var versionCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"version": Version, "commit": Commit, "date": Date})
 		}
-		fmt.Printf("atctl %s (commit %s, built %s)\n", Version, Commit, Date)
+		fmt.Printf("taskmgr %s (commit %s, built %s)\n", Version, Commit, Date)
 		return nil
 	},
 }

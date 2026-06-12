@@ -37,7 +37,7 @@ the files except through the engine.
 
 ```
         ┌──────────────┐      ┌─────────────────────┐
-        │  atctl (CLI) │      │  future consumers    │     front ends (thin)
+        │  taskmgr (CLI) │      │  future consumers    │     front ends (thin)
         └──────┬───────┘      └──────────┬──────────┘
                │     import / invoke      │
                └────────────┬─────────────┘
@@ -51,7 +51,7 @@ the files except through the engine.
                  └────────────────────┘
 ```
 **Every front end goes through the engine — and only the engine.** A front end
-never reads or writes files directly; it calls SDK functions. The CLI (`atctl`) is
+never reads or writes files directly; it calls SDK functions. The CLI (`taskmgr`) is
 the first and currently only consumer; the same boundary would let a future
 consumer (e.g. a viewer or an HTTP server) sit on the engine without duplicating
 storage or validation logic. Those are illustrations, not planned work — see §9.
@@ -59,7 +59,7 @@ storage or validation logic. Those are illustrations, not planned work — see �
 - **Engine (`sdk/tasks`)** — the only code that reads or writes issue files. It
   enforces the on-disk format, validates input, computes ready/blocked and derived
   edges, and serializes concurrent writers.
-- **CLI (`atctl`)** — a command-line front end for agents and humans; a thin
+- **CLI (`taskmgr`)** — a command-line front end for agents and humans; a thin
   wrapper that parses flags and calls the engine. See the CLI spec.
 - **Other consumers** — any program (e.g. a viewer) imports the engine directly and
   works against the same files; there is no subprocess or JSON wire protocol
@@ -72,7 +72,7 @@ storage or validation logic. Those are illustrations, not planned work — see �
 Three Go modules:
 
 ```
-github.com/hk9890/agent-tasks            root module — the atctl CLI (cobra)
+github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra)
 ├── main.go                              wires command execution
 ├── cmd/                                 command groups + output rendering
 ├── sdk/                                 separate module — the engine
@@ -81,7 +81,7 @@ github.com/hk9890/agent-tasks            root module — the atctl CLI (cobra)
 ```
 
 - **`sdk` is its own module** so consumers import
-  `github.com/hk9890/agent-tasks/sdk/tasks` without inheriting the CLI's
+  `github.com/hk9890/task-manager/sdk/tasks` without inheriting the CLI's
   dependencies. The root module wires the local copy with a `replace` directive.
 - **`bench`** is a standalone module (also `replace`d onto the engine) holding a
   scaling harness. It is intentionally excluded from `go build ./...` and the test
@@ -169,7 +169,7 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 ---
 
 ## 8. Consumers
-- **`atctl`** — the agent/human CLI and the first (currently only) consumer to be
+- **`taskmgr`** — the agent/human CLI and the first (currently only) consumer to be
   built. Stateless; each invocation opens the store, performs one operation, and
   exits.
 - **Future consumers (illustrative, none planned).** Any Go program can import the

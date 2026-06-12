@@ -86,8 +86,8 @@ jobs:
 
       # ── binary ────────────────────────────────────────────────────────────
 
-      - name: build atctl
-        run: go build -o bin/atctl .
+      - name: build taskmgr
+        run: go build -o bin/taskmgr .
 
   lint:
     name: Lint
