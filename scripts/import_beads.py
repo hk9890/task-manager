@@ -46,6 +46,21 @@ TYPE_ALIASES = {"decision": "task", "enhancement": "feature", "feat": "feature",
 VALID_STATUSES = {"open", "in_progress", "blocked", "closed"}
 LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._/-]*$")
 
+# taskmgr rejects control characters in titles/bodies/comments (they would force a
+# double-quoted YAML scalar). Beads stores them freely — e.g. ANSI colour codes
+# pasted into a comment. Strip ANSI escape sequences, then any remaining C0/DEL
+# control characters, keeping only tab and newline. Normalise CR to LF.
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def clean_text(s: str | None) -> str:
+    if not s:
+        return s or ""
+    s = ANSI_RE.sub("", s)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return CTRL_RE.sub("", s)
+
 
 def eprint(*a):
     print(*a, file=sys.stderr)
@@ -80,8 +95,8 @@ def clamp_priority(p) -> str:
 
 
 def body_with_footer(rec: dict) -> str:
-    body = (rec.get("description") or "").rstrip()
-    notes = (rec.get("notes") or "").strip()
+    body = clean_text(rec.get("description")).rstrip()
+    notes = clean_text(rec.get("notes")).strip()
     if notes:
         body = (body + "\n\n## Notes\n" + notes).strip()
     bits = [f"created {rec.get('created_at', '?')}", f"updated {rec.get('updated_at', '?')}"]
@@ -119,10 +134,10 @@ class Taskmgr:
         self._run(args)
 
     def create(self, *, title, typ, priority, assignee, labels, body) -> str:
-        args = ["create", "--title", title, "--type", typ, "--priority", priority,
-                "--description-file", "-"]
+        args = ["create", "--title", clean_text(title) or "(untitled)", "--type", typ,
+                "--priority", priority, "--description-file", "-"]
         if assignee:
-            args += ["--assignee", assignee[:128]]
+            args += ["--assignee", clean_text(assignee)[:128]]
         for l in labels:
             args += ["--label", l]
         res = self._run(args, stdin=body, capture_json=True)
@@ -137,8 +152,8 @@ class Taskmgr:
     def add_comment(self, new_id, author, text):
         args = ["comment", "add", new_id, "--file", "-"]
         if author:
-            args += ["--author", author[:128]]
-        self._run(args, stdin=text)
+            args += ["--author", clean_text(author)[:128]]
+        self._run(args, stdin=clean_text(text))
 
     def set_status(self, new_id, status):
         self._run(["update", new_id, "--status", status])
@@ -234,6 +249,21 @@ def main() -> int:
             return 0
     at.init(args.prefix)
 
+    # A single rejected taskmgr call must not abort the whole migration (and, worse,
+    # leave it half-applied — e.g. dying in pass 2 before anything is closed). Each
+    # post-create operation is isolated: on failure we log and carry on, so the store
+    # always ends in a consistent state. Failures are tallied for the final summary.
+    failed: list[str] = []
+
+    def attempt(desc: str, fn) -> bool:
+        try:
+            fn()
+            return True
+        except RuntimeError as e:
+            eprint(f"  ! {desc} — {e}")
+            failed.append(desc)
+            return False
+
     # Pass 1 — create every issue (open), build the id map.
     idmap: dict[str, str] = {}
     for rec in records:
@@ -244,28 +274,35 @@ def main() -> int:
                 labels.append(s)
             elif not s:
                 eprint(f"  ! dropping invalid label {l!r} on {rec['id']}")
-        new_id = at.create(
-            title=rec["title"][:200],
-            typ=map_type(rec.get("issue_type")),
-            priority=clamp_priority(rec.get("priority")),
-            assignee=rec.get("owner") or "",
-            labels=labels,
-            body=body_with_footer(rec),
-        )
+        try:
+            new_id = at.create(
+                title=rec["title"][:200],
+                typ=map_type(rec.get("issue_type")),
+                priority=clamp_priority(rec.get("priority")),
+                assignee=rec.get("owner") or "",
+                labels=labels,
+                body=body_with_footer(rec),
+            )
+        except RuntimeError as e:
+            eprint(f"  ! {rec['id']}: create failed, skipping issue — {e}")
+            failed.append(f"{rec['id']}: create")
+            continue
         idmap[rec["id"]] = new_id
         eprint(f"  + {rec['id']} -> {new_id}  {rec['title'][:48]}")
 
     # Pass 2 — edges + comments (everything still open, so refs resolve).
     for rec in records:
+        if rec["id"] not in idmap:
+            continue
         new_id = idmap[rec["id"]]
         parent, blockers, related = edges(rec)
         if parent and parent in idmap:
-            at.set_parent(new_id, idmap[parent])
+            attempt(f"{rec['id']}: set parent", lambda: at.set_parent(new_id, idmap[parent]))
         elif parent:
             eprint(f"  ! {rec['id']}: parent {parent} not in export — skipped")
         for b in blockers:
             if b in idmap:
-                at.add_dep(new_id, idmap[b])
+                attempt(f"{rec['id']}: add dep {b}", lambda b=b: at.add_dep(new_id, idmap[b]))
             else:
                 eprint(f"  ! {rec['id']}: blocker {b} not in export — skipped")
         if related:
@@ -273,22 +310,27 @@ def main() -> int:
         for c in rec.get("comments") or []:
             text = (c.get("text") or "").strip()
             if text:
-                at.add_comment(new_id, c.get("author") or "", text)
+                attempt(f"{rec['id']}: comment",
+                        lambda c=c, text=text: at.add_comment(new_id, c.get("author") or "", text))
 
     # Pass 3 — apply non-open status (close moves to closed/).
     for rec in records:
+        if rec["id"] not in idmap:
+            continue
         new_id = idmap[rec["id"]]
         st = rec.get("status")
         if st == "closed":
-            at.close(new_id, rec.get("close_reason") or "")
+            attempt(f"{rec['id']}: close", lambda: at.close(new_id, rec.get("close_reason") or ""))
         elif st in ("in_progress", "blocked"):
-            at.set_status(new_id, st)
+            attempt(f"{rec['id']}: set status {st}", lambda st=st: at.set_status(new_id, st))
 
     if not args.dry_run:
         with open(args.map_out, "w") as f:
             json.dump(idmap, f, indent=2, sort_keys=True)
         eprint(f"\nWrote id map -> {args.map_out}")
-    eprint(f"Imported {len(idmap)} issues into {os.path.join(args.dir, '.tasks')}.")
+    eprint(f"Imported {len(idmap)}/{len(records)} issues into {os.path.join(args.dir, '.tasks')}.")
+    if failed:
+        eprint(f"{len(failed)} operation(s) failed and were skipped (see ! lines above).")
     return 0
 
 
