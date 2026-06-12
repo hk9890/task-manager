@@ -3,7 +3,7 @@
 ## `import_beads.py` — migrate a beads tracker into a `.tasks` store
 
 One-off importer: reads a beads JSONL export and recreates every issue in an
-agent-tasks `.tasks` store by driving `taskmgr` (the validated single writer).
+task-manager `.tasks` store by driving `taskmgr` (the validated single writer).
 Preserves title, description, type, priority, labels, assignee, `parent` /
 `blocked_by` edges, comments, and closed state.
 
@@ -31,10 +31,10 @@ Flags: `--from FILE` (default: runs `bd export`), `--dir DIR` (target holding
 `--map-out FILE`, `--dry-run`.
 
 ### What to expect
-- **IDs are reallocated** — beads ids (`at-zib.1.1`) aren't valid agent-tasks ids.
+- **IDs are reallocated** — beads ids (`at-zib.1.1`) aren't valid task-manager ids.
   The script remaps every `parent`/`blocked_by` edge and writes a
   `beads-id → new-id` map (default `scripts/.beads-import-map.json`, gitignored).
 - **Timestamps** — `created`/`updated`/`closed` are set at import time; the
   original beads timestamps are preserved in a footer appended to each issue body.
-- **`related` edges** are skipped (agent-tasks only sets `related` at create time).
+- **`related` edges** are skipped (task-manager only sets `related` at create time).
 - Closed beads issues land directly in `.tasks/closed/`.

@@ -1,6 +1,6 @@
 # Architecture Specification
 
-A high-level description of how agent-tasks is structured: the layers, the Go
+A high-level description of how task-manager is structured: the layers, the Go
 modules, the storage engine at the core, and the invariants that hold the design
 together. Detail lives in the companion specs:
 [storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md).

@@ -23,11 +23,11 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "taskmgr",
-	Short: "Agent Tasks Control — a file-based task tracker",
-	Long: `taskmgr is the command-line tool for agent-tasks: a lean, file-based task
-tracker. Each issue is a Markdown file with YAML frontmatter under a project's
-.tasks directory. taskmgr is the only thing that should write those files — it
-validates everything and serializes concurrent writers.`,
+	Short: "Task Manager — a file-based task tracker",
+	Long: `taskmgr is a lean, file-based task tracker. Each issue is a Markdown file
+with YAML frontmatter under a project's .tasks directory. taskmgr is the only
+thing that should write those files — it validates everything and serializes
+concurrent writers.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }

@@ -1,4 +1,4 @@
-// Package tasks is the storage engine and SDK for agent-tasks: a file-based
+// Package tasks is the storage engine and SDK for task-manager: a file-based
 // task tracker.
 //
 // Each issue is a single Markdown file with a YAML frontmatter header, living

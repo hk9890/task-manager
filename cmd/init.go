@@ -17,7 +17,7 @@ var initPrefix string
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a .tasks directory in the current project",
-	Long: `Initialize a new agent-tasks store: create a .tasks directory with a config
+	Long: `Initialize a new task-manager store: create a .tasks directory with a config
 file. The --prefix sets the ID prefix for this project (e.g. "agt" -> agt-0001).
 If omitted, it is derived from the directory name.`,
 	Args: cobra.NoArgs,
@@ -41,7 +41,7 @@ If omitted, it is derived from the directory name.`,
 		if flagJSON {
 			return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix()})
 		}
-		fmt.Printf("Initialized agent-tasks store at %s (prefix %q)\n", s.Dir(), s.Prefix())
+		fmt.Printf("Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
 		return nil
 	},
 }
