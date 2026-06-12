@@ -1,6 +1,6 @@
 # Releasing
 
-agent-tasks has two release artifacts: the **`taskmgr` CLI binary** and the
+task-manager has two release artifacts: the **`taskmgr` CLI binary** and the
 **`sdk/tasks` Go module**. There is no automated release pipeline yet — releases
 are cut manually with `make` and git tags. (A GoReleaser-based flow, like the one
 in beads-workbench, is the intended direction; CI already runs build and tests on
@@ -42,7 +42,7 @@ Run from the repository root on a clean, up-to-date tree.
 4. Tag the CLI and the SDK module on the release commit:
 
    ```bash
-   git tag -a vX.Y.Z     -m "agent-tasks vX.Y.Z"
+   git tag -a vX.Y.Z     -m "task-manager vX.Y.Z"
    git tag -a sdk/vX.Y.Z -m "sdk/tasks vX.Y.Z"
    ```
 

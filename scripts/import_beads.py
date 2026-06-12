@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import beads issues into an agent-tasks (.tasks) store via taskmgr.
+"""Import beads issues into an task-manager (.tasks) store via taskmgr.
 
 One-off migration: reads a beads JSONL export and recreates every issue in a
 target .tasks store — fields, labels, parent / blocked-by edges, comments, and
@@ -19,8 +19,8 @@ Usage
 
 Notes
 -----
-* agent-tasks IDs are reallocated (beads ids like ``at-zib.1.1`` are not valid
-  agent-tasks ids). A ``beads-id -> new-id`` map is printed at the end and
+* task-manager IDs are reallocated (beads ids like ``at-zib.1.1`` are not valid
+  task-manager ids). A ``beads-id -> new-id`` map is printed at the end and
   written to ``--map-out`` (default ``scripts/.beads-import-map.json``).
 * File timestamps (created/updated/closed) are set at import time. The original
   beads timestamps are preserved in a footer appended to each issue body, so no

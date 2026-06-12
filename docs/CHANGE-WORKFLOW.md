@@ -8,14 +8,14 @@ request. **No direct commits to `main`.**
 Use an isolated worktree so `main` stays clean and parallel work can coexist:
 
 ```bash
-git worktree add ../agent-tasks-<feature> -b <feature>
-cd ../agent-tasks-<feature>
+git worktree add ../task-manager-<feature> -b <feature>
+cd ../task-manager-<feature>
 ```
 
 When the change has landed, remove it:
 
 ```bash
-git worktree remove ../agent-tasks-<feature>
+git worktree remove ../task-manager-<feature>
 ```
 
 ## Change loop

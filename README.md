@@ -1,4 +1,4 @@
-# agent-tasks
+# task-manager
 
 A lean, file-based task tracker — issues, dependencies, and ready-work, and
 nothing else. No database: every task is a Markdown file under a `.tasks/`

@@ -1,4 +1,4 @@
-# AGENTS.md — agent-tasks routing
+# AGENTS.md — task-manager routing
 
 ## Repository purpose
 
