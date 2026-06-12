@@ -261,6 +261,7 @@ Idempotent.
 | `taskmgr statuses` | The valid status values, in display order. |
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
+| `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, and a usage example — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
 
 ---
 
@@ -319,6 +320,7 @@ taskmgr comment  edit <id> <comment-id> [body] [--author --file]
 taskmgr comment  rm   <id> <comment-id> [--author]
 taskmgr labels | statuses | types
 taskmgr version
+taskmgr commands
 
 Global: --json, -C/--dir <path>
 ```
