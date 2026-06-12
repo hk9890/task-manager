@@ -173,6 +173,7 @@ func (b *Builder) materialize(s *tasks.Store) {
 	for _, spec := range b.issues {
 		p := spec.priority
 		in := tasks.CreateInput{
+			ID:       spec.id, // pin the fixture ID (CreateInput.ID escape hatch)
 			Title:    spec.title,
 			Type:     spec.issType,
 			Priority: &p,
@@ -185,7 +186,7 @@ func (b *Builder) materialize(s *tasks.Store) {
 			b.t.Fatalf("storetest: Create(%q): %v", spec.id, err)
 		}
 		if iss.ID != spec.id {
-			b.t.Fatalf("storetest: Issue(%q): got ID %q — register issues in sequential order matching prefix %q", spec.id, iss.ID, b.prefix)
+			b.t.Fatalf("storetest: Issue(%q): got ID %q", spec.id, iss.ID)
 		}
 	}
 

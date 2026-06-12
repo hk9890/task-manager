@@ -137,6 +137,7 @@ type Config struct { Prefix string }
 
 ```go
 type CreateInput struct {
+    ID          string    // optional explicit ID (import/migration); empty → store allocates
     Title       string
     Description string
     Type        Type
@@ -376,8 +377,11 @@ func (s *Store) RemoveDep(dependent, blocker string) error
 
 - Every write allocates/validates, then performs an atomic file write while holding
   the project lock.
-- **`Create`** allocates the next ID, applies defaults (`TypeTask`,
-  `PriorityDefault`, `StatusOpen`), de-duplicates labels/edges, and validates.
+- **`Create`** allocates a fresh collision-resistant ID (random base36 token; see
+  TASK-STORAGE-SPEC §3), applies defaults (`TypeTask`, `PriorityDefault`,
+  `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
+  `CreateInput.ID` is honoured verbatim instead (import/migration) when it is
+  well-formed, carries the store prefix, and is not already in use.
 - **`Update`** applies the partial field changes and routes lifecycle transitions
   through the same path the CLI uses: setting `Status` to `closed` routes through the
   close flow (stamps the close time, moves the file to `closed/`); setting a
