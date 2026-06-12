@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/storetest"
+	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/storetest"
 )
 
 // TestStoretest_L3_AllAndReady is the reference L3 test that builds a fixture

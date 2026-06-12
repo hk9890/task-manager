@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
 // buildDeeplyNestedExpr builds an expression with n levels of parentheses:

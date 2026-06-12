@@ -1,4 +1,4 @@
-module github.com/hk9890/agent-tasks/sdk
+module github.com/hk9890/task-manager/sdk
 
 go 1.26.3
 

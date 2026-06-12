@@ -30,7 +30,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 	"gopkg.in/yaml.v3"
 )
 

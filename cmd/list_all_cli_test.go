@@ -2,11 +2,11 @@
 
 // L4 CLI tests for:
 //
-//	atctl list --all       → includes closed issues
-//	atctl search --all     → includes closed issues
-//	atctl list (default)   → hot-only (no closed issues)
-//	atctl search (default) → hot-only
-//	atctl list -q <expr>   → filtered subset, closed scope auto-detected
+//	taskmgr list --all       → includes closed issues
+//	taskmgr search --all     → includes closed issues
+//	taskmgr list (default)   → hot-only (no closed issues)
+//	taskmgr search (default) → hot-only
+//	taskmgr list -q <expr>   → filtered subset, closed scope auto-detected
 package cmd_test
 
 import (
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // newStoreWithOpenAndClosed initialises a temp store with one open and one
@@ -60,14 +60,14 @@ func issueIDsFromJSON(t *testing.T, output string) []string {
 	return ids
 }
 
-// ── atctl list ────────────────────────────────────────────────────────────────
+// ── taskmgr list ────────────────────────────────────────────────────────────────
 
-// TestL4_ListDefault_HotOnly verifies that `atctl list` without --all excludes
+// TestL4_ListDefault_HotOnly verifies that `taskmgr list` without --all excludes
 // closed issues (hot-only).
 func TestL4_ListDefault_HotOnly(t *testing.T) {
 	root, openID, closedID := newStoreWithOpenAndClosed(t)
 
-	out, _, code := atctl(t, root, "--json", "list")
+	out, _, code := taskmgr(t, root, "--json", "list")
 	if code != 0 {
 		t.Fatalf("list failed (exit %d): %s", code, out)
 	}
@@ -88,12 +88,12 @@ func TestL4_ListDefault_HotOnly(t *testing.T) {
 	}
 }
 
-// TestL4_ListAll_IncludesClosed verifies that `atctl list --all` returns both
+// TestL4_ListAll_IncludesClosed verifies that `taskmgr list --all` returns both
 // hot and cold issues.
 func TestL4_ListAll_IncludesClosed(t *testing.T) {
 	root, openID, closedID := newStoreWithOpenAndClosed(t)
 
-	out, _, code := atctl(t, root, "--json", "list", "--all")
+	out, _, code := taskmgr(t, root, "--json", "list", "--all")
 	if code != 0 {
 		t.Fatalf("list --all failed (exit %d): %s", code, out)
 	}
@@ -110,12 +110,12 @@ func TestL4_ListAll_IncludesClosed(t *testing.T) {
 	}
 }
 
-// TestL4_ListQuery_ClosedStatus verifies that `atctl list -q 'status == "closed"'`
+// TestL4_ListQuery_ClosedStatus verifies that `taskmgr list -q 'status == "closed"'`
 // auto-includes the closed partition so closed issues are returned.
 func TestL4_ListQuery_ClosedStatus(t *testing.T) {
 	root, _, closedID := newStoreWithOpenAndClosed(t)
 
-	out, _, code := atctl(t, root, "--json", "list", "-q", `status == "closed"`)
+	out, _, code := taskmgr(t, root, "--json", "list", "-q", `status == "closed"`)
 	if code != 0 {
 		t.Fatalf("list -q closed failed (exit %d): %s", code, out)
 	}
@@ -131,12 +131,12 @@ func TestL4_ListQuery_ClosedStatus(t *testing.T) {
 	}
 }
 
-// TestL4_ListQuery_OpenStatus verifies that `atctl list -q 'status == "open"'`
+// TestL4_ListQuery_OpenStatus verifies that `taskmgr list -q 'status == "open"'`
 // stays hot-only (no closed-referencing expression).
 func TestL4_ListQuery_OpenStatus(t *testing.T) {
 	root, _, closedID := newStoreWithOpenAndClosed(t)
 
-	out, _, code := atctl(t, root, "--json", "list", "-q", `status == "open"`)
+	out, _, code := taskmgr(t, root, "--json", "list", "-q", `status == "open"`)
 	if code != 0 {
 		t.Fatalf("list -q open failed (exit %d): %s", code, out)
 	}
@@ -148,15 +148,15 @@ func TestL4_ListQuery_OpenStatus(t *testing.T) {
 	}
 }
 
-// ── atctl search ──────────────────────────────────────────────────────────────
+// ── taskmgr search ──────────────────────────────────────────────────────────────
 
-// TestL4_SearchDefault_HotOnly verifies that `atctl search <text>` without
+// TestL4_SearchDefault_HotOnly verifies that `taskmgr search <text>` without
 // --all excludes closed issues.
 func TestL4_SearchDefault_HotOnly(t *testing.T) {
 	root, _, closedID := newStoreWithOpenAndClosed(t)
 
 	// "done" is in the closed issue's title; without --all it must not appear.
-	out, _, code := atctl(t, root, "--json", "search", "done")
+	out, _, code := taskmgr(t, root, "--json", "search", "done")
 	if code != 0 {
 		t.Fatalf("search failed (exit %d): %s", code, out)
 	}
@@ -168,13 +168,13 @@ func TestL4_SearchDefault_HotOnly(t *testing.T) {
 	}
 }
 
-// TestL4_SearchAll_IncludesClosed verifies that `atctl search <text> --all`
+// TestL4_SearchAll_IncludesClosed verifies that `taskmgr search <text> --all`
 // searches the cold partition too.
 func TestL4_SearchAll_IncludesClosed(t *testing.T) {
 	root, _, closedID := newStoreWithOpenAndClosed(t)
 
 	// "done" is in the closed issue's title; with --all it must appear.
-	out, _, code := atctl(t, root, "--json", "search", "done", "--all")
+	out, _, code := taskmgr(t, root, "--json", "search", "done", "--all")
 	if code != 0 {
 		t.Fatalf("search --all failed (exit %d): %s", code, out)
 	}
@@ -197,7 +197,7 @@ func TestL4_SearchAll_OpenIssueAlsoReturned(t *testing.T) {
 
 	// "task" is in both the open issue's title ("active task") and not in the closed
 	// one; use "a" to match both. Or use "task" which matches "active task".
-	out, _, code := atctl(t, root, "--json", "search", "task", "--all")
+	out, _, code := taskmgr(t, root, "--json", "search", "task", "--all")
 	if code != 0 {
 		t.Fatalf("search --all failed (exit %d): %s", code, out)
 	}

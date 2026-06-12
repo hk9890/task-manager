@@ -3,17 +3,17 @@
 ## `import_beads.py` — migrate a beads tracker into a `.tasks` store
 
 One-off importer: reads a beads JSONL export and recreates every issue in an
-agent-tasks `.tasks` store by driving `atctl` (the validated single writer).
+agent-tasks `.tasks` store by driving `taskmgr` (the validated single writer).
 Preserves title, description, type, priority, labels, assignee, `parent` /
 `blocked_by` edges, comments, and closed state.
 
 ```bash
-# easiest — via mise (builds atctl, runs in your current dir):
+# easiest — via mise (builds taskmgr, runs in your current dir):
 mise run import-beads            # prompts before overwriting an existing .tasks
 mise run import-beads -- -y      # overwrite without prompting
 
 # or directly:
-mise run build                   # produces ./bin/atctl (used by the script)
+mise run build                   # produces ./bin/taskmgr (used by the script)
 python3 scripts/import_beads.py --prefix at
 python3 scripts/import_beads.py --from beads.jsonl --dir /path/to/project
 python3 scripts/import_beads.py --dry-run    # preview, write nothing
@@ -27,7 +27,7 @@ the prompt (e.g. for the mise task or CI).
 
 Flags: `--from FILE` (default: runs `bd export`), `--dir DIR` (target holding
 `.tasks`, default cwd), `--prefix P` (ID prefix for the new store), `--yes/-y`
-(overwrite without asking), `--atctl PATH` (default `<repo>/bin/atctl`),
+(overwrite without asking), `--taskmgr PATH` (default `<repo>/bin/taskmgr`),
 `--map-out FILE`, `--dry-run`.
 
 ### What to expect

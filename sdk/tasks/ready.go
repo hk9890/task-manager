@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/query"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
 // openBlockers returns the IDs of an issue's blockers that are not yet closed.

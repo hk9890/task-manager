@@ -22,7 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 const (

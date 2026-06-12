@@ -190,7 +190,7 @@ func TestCloseIdempotent(t *testing.T) {
 	if first.Status != StatusClosed || first.CloseReason != "done" {
 		t.Errorf("close wrong: %+v", first)
 	}
-	// CLI-SPEC §"atctl close" says Close is idempotent. Re-closing an
+	// CLI-SPEC §"taskmgr close" says Close is idempotent. Re-closing an
 	// already-closed issue must succeed (nil error) and return the existing
 	// closed issue unchanged. The new reason is ignored; original is preserved.
 	second, err := s.Close(iss.ID, "again")

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // AssertStoreInvariants verifies the four store-wide consistency invariants

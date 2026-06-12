@@ -4,8 +4,8 @@
 //
 // Spec sections covered:
 //   §1  Global conventions — exit codes (0 = success, 1 = any error); errors
-//       printed to stderr, prefixed "atctl: "; nothing printed to stdout on error.
-//   §4  Mutation commands — close idempotency (atctl close); dep add idempotency;
+//       printed to stderr, prefixed "taskmgr: "; nothing printed to stdout on error.
+//   §4  Mutation commands — close idempotency (taskmgr close); dep add idempotency;
 //       comment rm idempotency (already in comment_cli_test.go — not duplicated here).
 //   §6  JSON output shapes — lists return JSON arrays ([]) not null; empty list
 //       returns []; issueDTO required fields present; detailDTO has comments array.
@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // ── §1: exit code discipline ─────────────────────────────────────────────────
@@ -38,7 +38,7 @@ func TestSpec_CLI_NotFound_ExitOne(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	_, _, code := atctl(t, root, "show", "tst-9999")
+	_, _, code := taskmgr(t, root, "show", "tst-9999")
 	if code != 1 {
 		t.Errorf("show <unknown>: expected exit 1, got %d", code)
 	}
@@ -52,7 +52,7 @@ func TestSpec_CLI_ValidationError_ExitOne(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	_, _, code := atctl(t, root, "create", "--title", "")
+	_, _, code := taskmgr(t, root, "create", "--title", "")
 	if code != 1 {
 		t.Errorf("create --title '': expected exit 1, got %d", code)
 	}
@@ -66,31 +66,31 @@ func TestSpec_CLI_Success_ExitZero(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	_, _, code := atctl(t, root, "create", "--title", "green test")
+	_, _, code := taskmgr(t, root, "create", "--title", "green test")
 	if code != 0 {
 		t.Errorf("create: expected exit 0, got %d", code)
 	}
 }
 
-// ── §1: error goes to stderr not stdout, prefixed "atctl: " ──────────────────
+// ── §1: error goes to stderr not stdout, prefixed "taskmgr: " ──────────────────
 
 // TestSpec_CLI_ErrorOnStderr verifies that an error message is sent to stderr
-// (not stdout) and is prefixed with "atctl: ".
-// CLI-SPEC §1: "The message is printed to stderr, prefixed atctl: ".
+// (not stdout) and is prefixed with "taskmgr: ".
+// CLI-SPEC §1: "The message is printed to stderr, prefixed taskmgr: ".
 func TestSpec_CLI_ErrorOnStderr(t *testing.T) {
 	root := t.TempDir()
 	if _, err := tasks.Init(root, "tst"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	stdout, stderr, code := atctl(t, root, "show", "tst-9999")
+	stdout, stderr, code := taskmgr(t, root, "show", "tst-9999")
 	if code == 0 {
 		t.Skip("show unknown ID unexpectedly succeeded — skip stderr check")
 	}
 
 	// Error must be on stderr.
-	if !strings.HasPrefix(stderr, "atctl: ") {
-		t.Errorf("error not prefixed 'atctl: ' on stderr; stderr=%q stdout=%q", stderr, stdout)
+	if !strings.HasPrefix(stderr, "taskmgr: ") {
+		t.Errorf("error not prefixed 'taskmgr: ' on stderr; stderr=%q stdout=%q", stderr, stdout)
 	}
 
 	// Stdout must be empty on error.
@@ -107,13 +107,13 @@ func TestSpec_CLI_ValidationError_OnStderr(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	stdout, stderr, code := atctl(t, root, "create", "--title", "")
+	stdout, stderr, code := taskmgr(t, root, "create", "--title", "")
 	if code == 0 {
 		t.Skip("create with empty title unexpectedly succeeded")
 	}
 
-	if !strings.HasPrefix(stderr, "atctl: ") {
-		t.Errorf("validation error not prefixed 'atctl: '; stderr=%q stdout=%q", stderr, stdout)
+	if !strings.HasPrefix(stderr, "taskmgr: ") {
+		t.Errorf("validation error not prefixed 'taskmgr: '; stderr=%q stdout=%q", stderr, stdout)
 	}
 	if strings.TrimSpace(stdout) != "" {
 		t.Errorf("stdout must be empty on validation error; got: %q", stdout)
@@ -122,26 +122,26 @@ func TestSpec_CLI_ValidationError_OnStderr(t *testing.T) {
 
 // ── §4: close idempotency ─────────────────────────────────────────────────────
 
-// TestSpec_CLI_CloseIdempotent verifies that running `atctl close <id>` twice
+// TestSpec_CLI_CloseIdempotent verifies that running `taskmgr close <id>` twice
 // on the same issue exits 0 on both calls.
-// CLI-SPEC §4: "atctl close <id> … Idempotent."
+// CLI-SPEC §4: "taskmgr close <id> … Idempotent."
 func TestSpec_CLI_CloseIdempotent(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// First close.
-	_, stderr, code := atctl(t, root, "close", issID)
+	_, stderr, code := taskmgr(t, root, "close", issID)
 	if code != 0 {
 		t.Fatalf("first close failed (exit %d): %s", code, stderr)
 	}
 
 	// Second close on the same already-closed issue: must also exit 0.
-	_, stderr2, code2 := atctl(t, root, "close", issID)
+	_, stderr2, code2 := taskmgr(t, root, "close", issID)
 	if code2 != 0 {
 		t.Errorf("second close (idempotent): expected exit 0, got %d; stderr: %s", code2, stderr2)
 	}
 
 	// Verify the issue is still closed after the idempotent call.
-	out, _, code3 := atctl(t, root, "--json", "show", issID)
+	out, _, code3 := taskmgr(t, root, "--json", "show", issID)
 	if code3 != 0 {
 		t.Fatalf("show after re-close failed: %s", out)
 	}
@@ -156,9 +156,9 @@ func TestSpec_CLI_CloseIdempotent(t *testing.T) {
 
 // ── §4: dep add idempotency ───────────────────────────────────────────────────
 
-// TestSpec_CLI_DepAddIdempotent verifies that `atctl dep add <dep> <blocker>`
+// TestSpec_CLI_DepAddIdempotent verifies that `taskmgr dep add <dep> <blocker>`
 // is idempotent: running it twice exits 0 on both calls.
-// CLI-SPEC §4: "atctl dep add … Idempotent."
+// CLI-SPEC §4: "taskmgr dep add … Idempotent."
 func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 	root := t.TempDir()
 	s, err := tasks.Init(root, "tst")
@@ -180,19 +180,19 @@ func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 	}
 
 	// First dep add.
-	_, stderr, code := atctl(t, root, "dep", "add", dep.ID, blocker.ID)
+	_, stderr, code := taskmgr(t, root, "dep", "add", dep.ID, blocker.ID)
 	if code != 0 {
 		t.Fatalf("first dep add failed (exit %d): %s", code, stderr)
 	}
 
 	// Second dep add on the same pair: must also exit 0 (idempotent).
-	_, stderr2, code2 := atctl(t, root, "dep", "add", dep.ID, blocker.ID)
+	_, stderr2, code2 := taskmgr(t, root, "dep", "add", dep.ID, blocker.ID)
 	if code2 != 0 {
 		t.Errorf("second dep add (idempotent): expected exit 0, got %d; stderr: %s", code2, stderr2)
 	}
 
 	// Exactly one entry in blocked_by (no duplicate written).
-	out, _, code3 := atctl(t, root, "--json", "show", dep.ID)
+	out, _, code3 := taskmgr(t, root, "--json", "show", dep.ID)
 	if code3 != 0 {
 		t.Fatalf("show dep failed: %s", out)
 	}
@@ -206,12 +206,12 @@ func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_DepAdd_SelfRejected verifies that `atctl dep add <id> <id>`
+// TestSpec_CLI_DepAdd_SelfRejected verifies that `taskmgr dep add <id> <id>`
 // is rejected with exit code 1 (CLI-SPEC §4: "rejects self-dependency").
 func TestSpec_CLI_DepAdd_SelfRejected(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	_, _, code := atctl(t, root, "dep", "add", issID, issID)
+	_, _, code := taskmgr(t, root, "dep", "add", issID, issID)
 	if code != 1 {
 		t.Errorf("dep add self-loop: expected exit 1, got %d", code)
 	}
@@ -219,12 +219,12 @@ func TestSpec_CLI_DepAdd_SelfRejected(t *testing.T) {
 
 // ── §6: JSON output shapes ───────────────────────────────────────────────────
 
-// TestSpec_CLI_ListJSON_IsArray verifies that `atctl list --json` always returns
+// TestSpec_CLI_ListJSON_IsArray verifies that `taskmgr list --json` always returns
 // a JSON array, never null or an object. CLI-SPEC §6: "array of issueDTO".
 func TestSpec_CLI_ListJSON_IsArray(t *testing.T) {
 	root, _ := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "list")
+	out, _, code := taskmgr(t, root, "--json", "list")
 	if code != 0 {
 		t.Fatalf("list failed (exit %d): %s", code, out)
 	}
@@ -237,7 +237,7 @@ func TestSpec_CLI_ListJSON_IsArray(t *testing.T) {
 }
 
 // TestSpec_CLI_ListJSON_EmptyIsEmptyArray verifies that when no issues match,
-// `atctl list --json` returns [] (empty array) not null.
+// `taskmgr list --json` returns [] (empty array) not null.
 // CLI-SPEC §6: JSON arrays must be [] when empty (consistent contract for agents).
 func TestSpec_CLI_ListJSON_EmptyIsEmptyArray(t *testing.T) {
 	root := t.TempDir()
@@ -246,7 +246,7 @@ func TestSpec_CLI_ListJSON_EmptyIsEmptyArray(t *testing.T) {
 	}
 	// No issues created: the list must be empty.
 
-	out, _, code := atctl(t, root, "--json", "list")
+	out, _, code := taskmgr(t, root, "--json", "list")
 	if code != 0 {
 		t.Fatalf("list on empty store failed (exit %d): %s", code, out)
 	}
@@ -268,7 +268,7 @@ func TestSpec_CLI_ListJSON_EmptyIsEmptyArray(t *testing.T) {
 func TestSpec_CLI_IssueDTOShape(t *testing.T) {
 	root, _ := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "list")
+	out, _, code := taskmgr(t, root, "--json", "list")
 	if code != 0 {
 		t.Fatalf("list failed (exit %d): %s", code, out)
 	}
@@ -298,9 +298,9 @@ func TestSpec_CLI_DetailDTOHasCommentsArray(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
 	// Add a comment so the array is non-trivially populated.
-	atctl(t, root, "comment", "add", issID, "a note")
+	taskmgr(t, root, "comment", "add", issID, "a note")
 
-	out, _, code := atctl(t, root, "--json", "show", issID)
+	out, _, code := taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -330,7 +330,7 @@ func TestSpec_CLI_DetailDTOCommentsEmptyIsArray(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 	// No comments added.
 
-	out, _, code := atctl(t, root, "--json", "show", issID)
+	out, _, code := taskmgr(t, root, "--json", "show", issID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -354,12 +354,12 @@ func TestSpec_CLI_DetailDTOCommentsEmptyIsArray(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_SearchJSON_IsArray verifies that `atctl search --json` returns
+// TestSpec_CLI_SearchJSON_IsArray verifies that `taskmgr search --json` returns
 // a JSON array. CLI-SPEC §6: Output (JSON): array of issueDTO.
 func TestSpec_CLI_SearchJSON_IsArray(t *testing.T) {
 	root, _ := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "search", "test")
+	out, _, code := taskmgr(t, root, "--json", "search", "test")
 	if code != 0 {
 		t.Fatalf("search failed (exit %d): %s", code, out)
 	}
@@ -370,12 +370,12 @@ func TestSpec_CLI_SearchJSON_IsArray(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_ReadyJSON_IsArray verifies that `atctl ready --json` returns a
+// TestSpec_CLI_ReadyJSON_IsArray verifies that `taskmgr ready --json` returns a
 // JSON array. CLI-SPEC §6: Output (JSON): array of issueDTO.
 func TestSpec_CLI_ReadyJSON_IsArray(t *testing.T) {
 	root, _ := newTestStoreDir(t)
 
-	out, _, code := atctl(t, root, "--json", "ready")
+	out, _, code := taskmgr(t, root, "--json", "ready")
 	if code != 0 {
 		t.Fatalf("ready failed (exit %d): %s", code, out)
 	}
@@ -386,7 +386,7 @@ func TestSpec_CLI_ReadyJSON_IsArray(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_CreateJSON_ReturnsID verifies that `atctl create --json` returns
+// TestSpec_CLI_CreateJSON_ReturnsID verifies that `taskmgr create --json` returns
 // a JSON object with an "id" field. CLI-SPEC §6: "Output: the new ID ({"id"} in JSON)".
 func TestSpec_CLI_CreateJSON_ReturnsID(t *testing.T) {
 	root := t.TempDir()
@@ -394,7 +394,7 @@ func TestSpec_CLI_CreateJSON_ReturnsID(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	out, _, code := atctl(t, root, "--json", "create", "--title", "new issue")
+	out, _, code := taskmgr(t, root, "--json", "create", "--title", "new issue")
 	if code != 0 {
 		t.Fatalf("create failed (exit %d): %s", code, out)
 	}
@@ -413,15 +413,15 @@ func TestSpec_CLI_CreateJSON_ReturnsID(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_VersionJSON_Shape verifies that `atctl version --json` returns
+// TestSpec_CLI_VersionJSON_Shape verifies that `taskmgr version --json` returns
 // the documented shape: {"version","commit","date"}.
 // CLI-SPEC §5: version command output.
 func TestSpec_CLI_VersionJSON_Shape(t *testing.T) {
 	root := t.TempDir()
-	// version doesn't need a store, but atctlBin does need to be built.
-	_ = atctlBin(t)
+	// version doesn't need a store, but taskmgrBin does need to be built.
+	_ = taskmgrBin(t)
 
-	out, _, code := atctl(t, root, "--json", "version")
+	out, _, code := taskmgr(t, root, "--json", "version")
 	if code != 0 {
 		t.Fatalf("version failed (exit %d): %s", code, out)
 	}
@@ -437,7 +437,7 @@ func TestSpec_CLI_VersionJSON_Shape(t *testing.T) {
 	}
 }
 
-// TestSpec_CLI_BlockedJSON_IsArray verifies that `atctl blocked --json` returns
+// TestSpec_CLI_BlockedJSON_IsArray verifies that `taskmgr blocked --json` returns
 // a JSON array of blockedDTO. CLI-SPEC §6: blockedDTO.
 func TestSpec_CLI_BlockedJSON_IsArray(t *testing.T) {
 	root := t.TempDir()
@@ -462,7 +462,7 @@ func TestSpec_CLI_BlockedJSON_IsArray(t *testing.T) {
 		t.Fatalf("AddDep: %v", err)
 	}
 
-	out, _, code := atctl(t, root, "--json", "blocked")
+	out, _, code := taskmgr(t, root, "--json", "blocked")
 	if code != 0 {
 		t.Fatalf("blocked failed (exit %d): %s", code, out)
 	}

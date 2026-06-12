@@ -1,7 +1,7 @@
-# CLI Specification — `atctl`
+# CLI Specification — `taskmgr`
 
-This document specifies the `atctl` command-line interface: every command, its
-arguments and options, and what it does. `atctl` is the agent-facing front end to
+This document specifies the `taskmgr` command-line interface: every command, its
+arguments and options, and what it does. `taskmgr` is the agent-facing front end to
 a `.tasks` store (see [TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) for the on-disk
 format it operates on).
 
@@ -10,7 +10,7 @@ format it operates on).
 ## 1. Invocation & global conventions
 
 ```
-atctl <command> [subcommand] [args] [flags]
+taskmgr <command> [subcommand] [args] [flags]
 ```
 
 ### Persistent flags (valid on every command)
@@ -32,7 +32,7 @@ atctl <command> [subcommand] [args] [flags]
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | Any error (not found, validation failure, no store, I/O). The message is printed to stderr, prefixed `atctl: `. |
+| `1` | Any error (not found, validation failure, no store, I/O). The message is printed to stderr, prefixed `taskmgr: `. |
 
 ### Discovery
 
@@ -44,7 +44,7 @@ directory is found. Most commands fail with a "no store" error if none exists;
 
 ## 2. Setup commands
 
-### `atctl init`
+### `taskmgr init`
 
 Create a new store in the current project.
 
@@ -63,7 +63,7 @@ Create a new store in the current project.
 
 ## 3. Read commands
 
-### `atctl show <id>`
+### `taskmgr show <id>`
 
 Show full detail for one issue: all fields, resolved relationships (parent,
 blocked-by, related, plus derived **blocks** and **children**), the description
@@ -72,7 +72,7 @@ removed; see storage spec §4.4).
 
 - **Output (JSON):** `detailDTO` (§6).
 
-### `atctl list [-q <expr>] [options]`
+### `taskmgr list [-q <expr>] [options]`
 
 List issues selected by a **filter expression** (§3.1). Closed issues are excluded
 unless the expression selects them or `--all` is given. Default order: priority
@@ -112,18 +112,18 @@ Scope: closed issues are excluded unless `--all` is passed or the expression
 satisfies the cold-scope predicate (a `status == "closed"` atom or a `closed`
 comparison; `status != "closed"` does not). See QUERY-SPEC.md §5.
 
-### `atctl search <text> [options]`
+### `taskmgr search <text> [options]`
 
 Shorthand for matching `<text>` against the ID, title, or description —
 equivalent to `list -q 'text ~ "<text>"'`. Accepts `--all`, `--sort`, `--reverse`,
 and `--limit`.
 
-### `atctl ready [--limit <n>]`
+### `taskmgr ready [--limit <n>]`
 
 List issues ready to work: status `open` with no open blockers, ordered by
 priority then age. `--limit` caps results.
 
-### `atctl blocked`
+### `taskmgr blocked`
 
 List non-closed issues that have at least one open blocker. Human output prints
 each blocked issue as a standard list row, then its blockers indented one per line
@@ -145,7 +145,7 @@ dtt-0051  open         P2  Wire up export
 
 All mutations validate before writing and run under the project write lock.
 
-### `atctl create --title <t> [options]`
+### `taskmgr create --title <t> [options]`
 
 Create a new issue and allocate its ID.
 
@@ -165,7 +165,7 @@ Create a new issue and allocate its ID.
 
 - **Output:** the new ID (`{"id"}` in JSON).
 
-### `atctl update <id> [options]`
+### `taskmgr update <id> [options]`
 
 Apply a partial update. Only the flags you pass change; everything else is left
 as-is.
@@ -193,27 +193,27 @@ as-is.
 - `creator` is provenance — set once at `create` and not editable here.
 - **Output:** the updated `issueDTO`.
 
-### `atctl close <id> [--reason <r>]`
+### `taskmgr close <id> [--reason <r>]`
 
 Close an issue: set status `closed`, stamp the close time, optionally record
 `--reason`, and move the file into the cold partition. Idempotent.
 
-### `atctl reopen <id>`
+### `taskmgr reopen <id>`
 
 Move a closed issue back to the active set, clear its closed timestamp/reason, and
 set its status to `open`. No-op on an already-active issue. (To reopen directly into
 another status, use `update --status`.)
 
-### `atctl dep add <dependent> <blocker>`
+### `taskmgr dep add <dependent> <blocker>`
 
 Record that `<dependent>` is blocked by `<blocker>`. Idempotent; rejects
 self-dependency and any edge that would create a cycle.
 
-### `atctl dep rm <dependent> <blocker>`
+### `taskmgr dep rm <dependent> <blocker>`
 
 Remove a blocking dependency.
 
-### `atctl comment add <id> [body] [options]`
+### `taskmgr comment add <id> [body] [options]`
 
 Append a comment to an issue's sidecar. The body comes from the positional
 argument or `--file`.
@@ -228,7 +228,7 @@ argument or `--file`.
 - **Output (JSON):** `commentDTO` for the new comment (including its `id`), so
   callers can use the id for a later `comment edit` or `comment rm`.
 
-### `atctl comment edit <id> <comment-id> [body] [options]`
+### `taskmgr comment edit <id> <comment-id> [body] [options]`
 
 Append a revision that supersedes an earlier comment (`replaces`). The original
 stays in the log; readers render the newest revision. Same body source/options as
@@ -241,7 +241,7 @@ stays in the log; readers render the newest revision. Same body source/options a
 
 - **Output (JSON):** `commentDTO` for the new revision comment.
 
-### `atctl comment rm <id> <comment-id> [--author <a>]`
+### `taskmgr comment rm <id> <comment-id> [--author <a>]`
 
 Delete a comment: append a tombstone that retracts the target (`replaces` it with
 no body). The original stays in the log as history; the resolved view omits it.
@@ -257,10 +257,10 @@ Idempotent.
 
 | Command | Output |
 |---|---|
-| `atctl labels` | Distinct labels in use, sorted. |
-| `atctl statuses` | The valid status values, in display order. |
-| `atctl types` | The valid issue types, in display order. |
-| `atctl version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
+| `taskmgr labels` | Distinct labels in use, sorted. |
+| `taskmgr statuses` | The valid status values, in display order. |
+| `taskmgr types` | The valid issue types, in display order. |
+| `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
 
 ---
 
@@ -300,25 +300,25 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 ## 7. Command summary
 
 ```
-atctl init     [--prefix X]
-atctl create   --title T [--description[-file] --type --priority --assignee
+taskmgr init     [--prefix X]
+taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
-atctl show     <id>
-atctl list     [-q <expr>] [--all --sort --reverse --limit]
-atctl search   <text> [--all --sort --reverse --limit]
-atctl ready    [--limit]
-atctl blocked
-atctl update   <id> [--title --description[-file] --status --type --priority
+taskmgr show     <id>
+taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
+taskmgr search   <text> [--all --sort --reverse --limit]
+taskmgr ready    [--limit]
+taskmgr blocked
+taskmgr update   <id> [--title --description[-file] --status --type --priority
                      --assignee --parent --add-label --remove-label
                      --set-labels --clear-labels]
-atctl close    <id> [--reason]
-atctl reopen   <id>
-atctl dep      add|rm <dependent> <blocker>
-atctl comment  add  <id> [body] [--author --file]
-atctl comment  edit <id> <comment-id> [body] [--author --file]
-atctl comment  rm   <id> <comment-id> [--author]
-atctl labels | statuses | types
-atctl version
+taskmgr close    <id> [--reason]
+taskmgr reopen   <id>
+taskmgr dep      add|rm <dependent> <blocker>
+taskmgr comment  add  <id> [body] [--author --file]
+taskmgr comment  edit <id> <comment-id> [body] [--author --file]
+taskmgr comment  rm   <id> <comment-id> [--author]
+taskmgr labels | statuses | types
+taskmgr version
 
 Global: --json, -C/--dir <path>
 ```

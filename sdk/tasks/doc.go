@@ -3,7 +3,7 @@
 //
 // Each issue is a single Markdown file with a YAML frontmatter header, living
 // under a per-project .tasks directory. This package is the only component that
-// reads or writes those files; the atctl CLI and the beads-workbench viewer are
+// reads or writes those files; the taskmgr CLI and the beads-workbench viewer are
 // both thin layers over it. Centralizing file access here is deliberate — it is
 // the single place that enforces the on-disk format, validates input, and
 // serializes concurrent writers with an advisory lock, so nothing can write

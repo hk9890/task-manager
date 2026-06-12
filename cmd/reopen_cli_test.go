@@ -2,9 +2,9 @@
 
 // L4 CLI tests for:
 //
-//	atctl reopen <id>
-//	atctl update --status closed  (routes through Close)
-//	atctl update --status open    (routes through Reopen on a closed issue)
+//	taskmgr reopen <id>
+//	taskmgr update --status closed  (routes through Close)
+//	taskmgr update --status open    (routes through Reopen on a closed issue)
 package cmd_test
 
 import (
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // newTestStoreDirWithClosed creates a temp store, creates one open issue and
@@ -43,18 +43,18 @@ func newTestStoreDirWithClosed(t *testing.T) (root, openID, closedID string) {
 	return root, open.ID, closed.ID
 }
 
-// TestL4_Reopen_Success verifies that `atctl reopen <id>` on a closed issue
+// TestL4_Reopen_Success verifies that `taskmgr reopen <id>` on a closed issue
 // succeeds (exit 0) and sets status back to open.
 func TestL4_Reopen_Success(t *testing.T) {
 	root, _, closedID := newTestStoreDirWithClosed(t)
 
-	_, stderr, code := atctl(t, root, "reopen", closedID)
+	_, stderr, code := taskmgr(t, root, "reopen", closedID)
 	if code != 0 {
 		t.Fatalf("reopen failed (exit %d): %s", code, stderr)
 	}
 
 	// Verify via show --json.
-	out, _, code := atctl(t, root, "--json", "show", closedID)
+	out, _, code := taskmgr(t, root, "--json", "show", closedID)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -74,27 +74,27 @@ func TestL4_Reopen_Success(t *testing.T) {
 	}
 }
 
-// TestL4_Reopen_NotFound verifies that `atctl reopen <unknown>` exits with 1.
+// TestL4_Reopen_NotFound verifies that `taskmgr reopen <unknown>` exits with 1.
 func TestL4_Reopen_NotFound(t *testing.T) {
 	root, _, _ := newTestStoreDirWithClosed(t)
 
-	_, _, code := atctl(t, root, "reopen", "tst-9999")
+	_, _, code := taskmgr(t, root, "reopen", "tst-9999")
 	if code == 0 {
 		t.Error("expected non-zero exit for reopen of unknown ID")
 	}
 }
 
 // TestL4_UpdateStatus_ClosedMovesToClosedDir verifies that
-// `atctl update --status closed <id>` moves the file to cold partition.
+// `taskmgr update --status closed <id>` moves the file to cold partition.
 func TestL4_UpdateStatus_ClosedMovesToClosedDir(t *testing.T) {
 	root, openID, _ := newTestStoreDirWithClosed(t)
 
-	_, stderr, code := atctl(t, root, "update", openID, "--status", "closed")
+	_, stderr, code := taskmgr(t, root, "update", openID, "--status", "closed")
 	if code != 0 {
 		t.Fatalf("update --status closed failed (exit %d): %s", code, stderr)
 	}
 
-	out, _, code := atctl(t, root, "--json", "show", openID)
+	out, _, code := taskmgr(t, root, "--json", "show", openID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -112,16 +112,16 @@ func TestL4_UpdateStatus_ClosedMovesToClosedDir(t *testing.T) {
 }
 
 // TestL4_UpdateStatus_OpenReopensClosedIssue verifies that
-// `atctl update --status open <closedID>` reopens it.
+// `taskmgr update --status open <closedID>` reopens it.
 func TestL4_UpdateStatus_OpenReopensClosedIssue(t *testing.T) {
 	root, _, closedID := newTestStoreDirWithClosed(t)
 
-	_, stderr, code := atctl(t, root, "update", closedID, "--status", "open")
+	_, stderr, code := taskmgr(t, root, "update", closedID, "--status", "open")
 	if code != 0 {
 		t.Fatalf("update --status open failed (exit %d): %s", code, stderr)
 	}
 
-	out, _, code := atctl(t, root, "--json", "show", closedID)
+	out, _, code := taskmgr(t, root, "--json", "show", closedID)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -138,7 +138,7 @@ func TestL4_UpdateStatus_OpenReopensClosedIssue(t *testing.T) {
 func TestL4_Reopen_HumanOutput(t *testing.T) {
 	root, _, closedID := newTestStoreDirWithClosed(t)
 
-	out, _, code := atctl(t, root, "reopen", closedID)
+	out, _, code := taskmgr(t, root, "reopen", closedID)
 	if code != 0 {
 		t.Fatalf("reopen failed (exit %d): %s", code, out)
 	}
@@ -152,7 +152,7 @@ func TestL4_Reopen_HumanOutput(t *testing.T) {
 func TestL4_CommentOnClosedIssue(t *testing.T) {
 	root, _, closedID := newTestStoreDirWithClosed(t)
 
-	out, stderr, code := atctl(t, root, "--json", "comment", "add", closedID, "post-close note")
+	out, stderr, code := taskmgr(t, root, "--json", "comment", "add", closedID, "post-close note")
 	if code != 0 {
 		t.Fatalf("comment add on closed issue failed (exit %d): stderr=%s out=%s", code, stderr, out)
 	}

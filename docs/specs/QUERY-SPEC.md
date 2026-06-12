@@ -5,7 +5,7 @@ its grammar, the fields and operators, precedence, value syntax, and evaluation 
 error semantics.
 
 The language is an **engine-level** concern. The SDK owns parsing and evaluation
-(`Store.Query` / `Filter.Expr`, see [SDK-SPEC.md](SDK-SPEC.md)); the `atctl` CLI is
+(`Store.Query` / `Filter.Expr`, see [SDK-SPEC.md](SDK-SPEC.md)); the `taskmgr` CLI is
 a thin pass-through that forwards its `-q/--query` string to the engine unchanged
 (see [CLI-SPEC.md](CLI-SPEC.md)). Both front ends therefore share one grammar — the
 one defined here — and there is exactly one implementation of it.
@@ -48,7 +48,7 @@ bareword   = word_char , { word_char } ;   (* word_char = [A-Za-z0-9_:./@-] *)
   All binary operators are left-associative. `a || b && c` parses as
   `a || (b && c)`; `!ready && blocked` parses as `(!ready) && blocked`.
 - **The empty expression** (absent, empty, or whitespace-only) is the always-true
-  predicate — it selects every issue in scope. This is what `atctl list` with no
+  predicate — it selects every issue in scope. This is what `taskmgr list` with no
   `-q` uses.
 
 ---
@@ -156,7 +156,7 @@ partitions are scanned. By default only the hot (active) set is evaluated.
 **Cold-scope predicate (normative).** The cold (`closed/`) partition is scanned iff
 *any* of these holds:
 
-1. the caller opts in — `atctl --all`, `Filter.IncludeClosed`, or
+1. the caller opts in — `taskmgr --all`, `Filter.IncludeClosed`, or
    `FindOptions.IncludeClosed`;
 2. the parsed expression contains a `status == "closed"` atom (positive equality
    only); or

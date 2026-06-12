@@ -1,6 +1,6 @@
 # Releasing
 
-agent-tasks has two release artifacts: the **`atctl` CLI binary** and the
+agent-tasks has two release artifacts: the **`taskmgr` CLI binary** and the
 **`sdk/tasks` Go module**. There is no automated release pipeline yet — releases
 are cut manually with `make` and git tags. (A GoReleaser-based flow, like the one
 in beads-workbench, is the intended direction; CI already runs build and tests on
@@ -9,7 +9,7 @@ every push.)
 ## Versioning
 
 - Semantic version tags: `vX.Y.Z`.
-- `atctl version` prints the build metadata stamped via `-ldflags` into
+- `taskmgr version` prints the build metadata stamped via `-ldflags` into
   `cmd.Version` / `Commit` / `Date` (see the `makefile`). Untagged local builds
   report `dev`.
 - The SDK is a **separate Go module** (`sdk/`). Go consumers pin it with a
@@ -55,7 +55,7 @@ Run from the repository root on a clean, up-to-date tree.
 6. Build the binary artifact (version stamped from the tag):
 
    ```bash
-   make build      # -> ./bin/atctl
+   make build      # -> ./bin/taskmgr
    ```
 
    Cross-platform archives are a future GoReleaser step.
@@ -63,10 +63,10 @@ Run from the repository root on a clean, up-to-date tree.
 ## Verifying
 
 ```bash
-./bin/atctl version          # shows the tagged version / commit / date
+./bin/taskmgr version          # shows the tagged version / commit / date
 ```
 
-From a consumer, `go get github.com/hk9890/agent-tasks/sdk@vX.Y.Z` must resolve
+From a consumer, `go get github.com/hk9890/task-manager/sdk@vX.Y.Z` must resolve
 the `sdk/vX.Y.Z` tag.
 
 ## Visibility

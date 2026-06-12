@@ -80,7 +80,7 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"comments.go": true,
 	}
 
-	const vfsPkg = "github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 
 	entries, err := os.ReadDir(sdkTasksDir)
 	if err != nil {

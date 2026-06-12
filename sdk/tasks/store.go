@@ -12,7 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 const (
@@ -394,7 +394,7 @@ func (s *Store) writeIssue(iss *Issue) error {
 
 // withLock runs fn while holding both the in-process mutex and the advisory
 // flock, so writers serialize across goroutines within one process AND across
-// concurrent atctl processes on the same host.
+// concurrent taskmgr processes on the same host.
 //
 // Lock order (must be consistent everywhere to avoid deadlock):
 //  1. s.mu  — in-process mutex (acquired first)
@@ -675,7 +675,7 @@ func applyLabels(iss *Issue, in UpdateInput) {
 
 // Close stamps the issue closed and moves its .md to closed/.
 //
-// Idempotent (CLI-SPEC §"atctl close", SDK-SPEC §4): if the issue is already
+// Idempotent (CLI-SPEC §"taskmgr close", SDK-SPEC §4): if the issue is already
 // closed, Close returns a successful no-op — the existing closed issue is
 // returned and no file write occurs. The supplied reason is silently ignored
 // on a re-close; the original close_reason from the first Close call is

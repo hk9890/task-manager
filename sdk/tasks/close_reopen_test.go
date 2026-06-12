@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks/internal/vfs"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // newMemStoreForClose creates a mem-backed store with a deterministic clock.
@@ -148,7 +148,7 @@ func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
 }
 
 // TestClose_Idempotent verifies that calling Close again on an already-closed
-// issue is a successful no-op (CLI-SPEC §"atctl close": "Idempotent").
+// issue is a successful no-op (CLI-SPEC §"taskmgr close": "Idempotent").
 // The returned issue must still be closed, the original close_reason is
 // preserved (not overwritten), and no ErrImmutable is returned.
 func TestClose_Idempotent(t *testing.T) {

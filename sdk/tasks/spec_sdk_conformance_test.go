@@ -19,7 +19,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hk9890/agent-tasks/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // ── §6 / §1: sentinel errors exist and are returned by documented operations ──

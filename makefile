@@ -7,22 +7,22 @@ VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exclude "sdk/*" --alw
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-PKG     := github.com/hk9890/agent-tasks/cmd
+PKG     := github.com/hk9890/task-manager/cmd
 LDFLAGS := -ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X $(PKG).Date=$(DATE) -s -w"
 
 INSTALL_BIN_DIR ?= $(if $(GOBIN),$(GOBIN),$(shell go env GOPATH)/bin)
 
 all: build
 
-# Build the atctl binary into ./bin.
+# Build the taskmgr binary into ./bin.
 build:
-	@echo "Building atctl $(VERSION)..."
-	@go build $(LDFLAGS) -o bin/atctl .
+	@echo "Building taskmgr $(VERSION)..."
+	@go build $(LDFLAGS) -o bin/taskmgr .
 
-# Install atctl onto $PATH.
+# Install taskmgr onto $PATH.
 install:
-	@echo "Installing atctl to $(INSTALL_BIN_DIR)..."
-	@go build $(LDFLAGS) -o $(INSTALL_BIN_DIR)/atctl .
+	@echo "Installing taskmgr to $(INSTALL_BIN_DIR)..."
+	@go build $(LDFLAGS) -o $(INSTALL_BIN_DIR)/taskmgr .
 
 # Run all tests (both modules).
 test: test-sdk test-cli
