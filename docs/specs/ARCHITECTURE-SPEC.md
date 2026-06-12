@@ -139,7 +139,9 @@ the `vfs.FS` interface. This confinement is enforced at two levels:
 Every mutation follows the same path, which is where the "one writer" guarantee is
 enforced:
 
-1. **Acquire the store lock** (`flock`); concurrent writers serialize here.
+1. **Acquire the store lock** — an in-process mutex, then an exclusive `flock` on
+   `.tasks/.lock`; concurrent writers serialize here, whether goroutines in one
+   process or separate processes.
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
@@ -153,8 +155,9 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 
 ## 7. Core invariants
 
-- **One writer.** All file access funnels through the engine under an exclusive
-  store-wide lock. This is the precondition for validation and atomicity.
+- **One writer.** All file access funnels through the engine; every mutation
+  serializes against all others — goroutines via an in-process mutex, processes via
+  an exclusive store-wide `flock`. This is the precondition for validation and atomicity.
 - **Derived inverse edges.** Only `parent`, `blocked_by`, and `related` are stored,
   on the dependent issue. Children and "blocks" are always computed by scanning, so
   the on-disk graph cannot contradict itself.

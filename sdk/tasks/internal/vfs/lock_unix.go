@@ -11,6 +11,7 @@ import (
 // Lock acquires an exclusive advisory flock on path, creating the file if
 // necessary. It blocks until the lock is available. The returned unlock
 // function releases the lock and closes the file descriptor.
+// This is the unix implementation; see lock_other.go for the fail-closed stub.
 func (osFS) Lock(path string) (func() error, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {

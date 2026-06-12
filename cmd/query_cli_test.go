@@ -402,7 +402,6 @@ func TestL4_MalformedExpr_ExitOne(t *testing.T) {
 	malformed := []string{
 		`foobar == "x"`,     // unknown field
 		`status < "open"`,   // bad operator for enum
-		`priority == 5`,     // priority out of range
 		`(status == "open"`, // unbalanced paren
 		`text == "x"`,       // text only allows ~
 	}
@@ -433,5 +432,119 @@ func TestL4_SearchMalformedInternalExpr_ExitOne(t *testing.T) {
 	}
 	if !strings.HasPrefix(stderr, "atctl: ") {
 		t.Errorf("stderr must start with 'atctl: '; got: %q", stderr)
+	}
+}
+
+// ── search multi-word joining ──────────────────────────────────────────────────
+
+// TestL4_Search_MultiWordJoined verifies that `search foo bar` joins the
+// positional arguments into the phrase "foo bar" rather than silently dropping
+// "bar". It must match an issue whose title contains both words together.
+func TestL4_Search_MultiWordJoined(t *testing.T) {
+	root, ids := queryFixture(t)
+
+	// "drill nav" appears only in drill-iss (title: "drill nav issue").
+	// Using two separate args should find it.
+	out, _, code := atctl(t, root, "--json", "search", "drill", "nav")
+	if code != 0 {
+		t.Fatalf("search 'drill nav' failed (exit %d): %s", code, out)
+	}
+	got := issueIDsFromJSON(t, out)
+	if !hasID(got, ids["drill-iss"]) {
+		t.Errorf("search 'drill nav': drill-iss missing; got: %v", got)
+	}
+
+	// Sanity: searching "drill xyzzy" (no issue has both) should return empty.
+	out2, _, code2 := atctl(t, root, "--json", "search", "drill", "xyzzy")
+	if code2 != 0 {
+		t.Fatalf("search 'drill xyzzy' failed (exit %d): %s", code2, out2)
+	}
+	got2 := issueIDsFromJSON(t, out2)
+	if hasID(got2, ids["drill-iss"]) {
+		t.Errorf("search 'drill xyzzy': drill-iss should not match; got: %v", got2)
+	}
+}
+
+// ── --sort validation ─────────────────────────────────────────────────────────
+
+// TestL4_InvalidSort_ExitOne verifies that an invalid --sort value causes
+// atctl list to exit with code 1 and print an error on stderr. Valid values
+// are: work, id, priority, created, updated, closed (empty defaults to work).
+func TestL4_InvalidSort_ExitOne(t *testing.T) {
+	root, _ := queryFixture(t)
+
+	invalidSorts := []string{"bogus", "title", "date", "PRIORITY", "work_order"}
+	for _, s := range invalidSorts {
+		t.Run(s, func(t *testing.T) {
+			_, stderr, code := atctl(t, root, "list", "--sort", s)
+			if code != 1 {
+				t.Errorf("list --sort %q: expected exit 1, got %d", s, code)
+			}
+			if !strings.Contains(stderr, s) {
+				t.Errorf("list --sort %q: stderr should mention the invalid value; got: %q", s, stderr)
+			}
+			// Error message should list valid values.
+			if !strings.Contains(stderr, "work") {
+				t.Errorf("list --sort %q: stderr should mention valid values; got: %q", s, stderr)
+			}
+		})
+	}
+}
+
+// TestL4_ValidSort_Succeeds verifies that all documented --sort values are accepted.
+func TestL4_ValidSort_Succeeds(t *testing.T) {
+	root, _ := queryFixture(t)
+
+	validSorts := []string{"", "work", "id", "priority", "created", "updated"}
+	for _, s := range validSorts {
+		t.Run("sort="+s, func(t *testing.T) {
+			args := []string{"--json", "list"}
+			if s != "" {
+				args = append(args, "--sort", s)
+			}
+			_, _, code := atctl(t, root, args...)
+			if code != 0 {
+				t.Errorf("list --sort %q: expected exit 0, got %d", s, code)
+			}
+		})
+	}
+}
+
+// ── blocked output format ──────────────────────────────────────────────────────
+
+// TestL4_Blocked_HumanFormat verifies that `atctl blocked` (human output)
+// renders blocked issues per CLI-SPEC §"blocked":
+//
+//	<id>  <status>  P<n>  <title>
+//	  ↳ <id>  <status>  <title>
+func TestL4_Blocked_HumanFormat(t *testing.T) {
+	root, ids := queryFixture(t)
+
+	out, _, code := atctl(t, root, "blocked")
+	if code != 0 {
+		t.Fatalf("blocked failed (exit %d): %s", code, out)
+	}
+
+	blockedID := ids["blocked-iss"]
+	blockerID := ids["blocker"]
+
+	// The blocked issue row must contain the ID, status, priority and title.
+	if !strings.Contains(out, blockedID) {
+		t.Errorf("blocked output missing blocked issue ID %q;\noutput:\n%s", blockedID, out)
+	}
+	// Status must appear before the title on the main row (format: id  status  Pn  title).
+	if !strings.Contains(out, "open") {
+		t.Errorf("blocked output missing status 'open';\noutput:\n%s", out)
+	}
+	// The blocker must appear as an indented ↳ line.
+	if !strings.Contains(out, "↳") {
+		t.Errorf("blocked output missing ↳ prefix for blocker lines;\noutput:\n%s", out)
+	}
+	if !strings.Contains(out, blockerID) {
+		t.Errorf("blocked output missing blocker ID %q;\noutput:\n%s", blockerID, out)
+	}
+	// The old "blocked by" text must NOT appear (was replaced by ↳ format).
+	if strings.Contains(out, "blocked by") {
+		t.Errorf("blocked output must not use old 'blocked by' text;\noutput:\n%s", out)
 	}
 }

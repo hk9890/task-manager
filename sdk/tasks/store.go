@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -66,6 +67,13 @@ type Store struct {
 	dir  string // absolute path to the data directory (.tasks)
 	cfg  Config
 	fs   vfs.FS // disk seam; always vfs.NewOS() in production
+
+	// mu serializes writes within a single process. It is acquired by withLock
+	// before the advisory flock, so concurrent goroutines in one embedder never
+	// interleave their mutations even when flock would allow it (flock is per-
+	// process on Linux/macOS). Reads remain lock-free (SDK-SPEC §1/§7,
+	// ARCHITECTURE-SPEC §6/§7, TASK-STORAGE-SPEC §7).
+	mu sync.Mutex
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
@@ -363,7 +371,20 @@ func (s *Store) nextID() (string, error) {
 
 // writeIssue atomically writes an issue to disk via the FS seam. The
 // caller must hold the store lock.
+//
+// Defense-in-depth (TASK-STORAGE-SPEC §5): if the issue's id already exists
+// in closed/, writing to the hot dir would either duplicate it across both
+// partitions or silently resurrect it. We detect this here as a belt-and-
+// braces guard; callers are expected to check isInClosed before reaching this
+// point, but this prevents any future caller from bypassing that check.
 func (s *Store) writeIssue(iss *Issue) error {
+	inClosed, err := s.isInClosed(iss.ID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if inClosed {
+		return fmt.Errorf("%w: %s", ErrImmutable, iss.ID)
+	}
 	data, err := Marshal(iss)
 	if err != nil {
 		return err
@@ -371,9 +392,23 @@ func (s *Store) writeIssue(iss *Issue) error {
 	return s.fs.WriteAtomic(s.filePath(iss.ID), data, 0o644)
 }
 
-// withLock runs fn while holding an exclusive advisory lock on the store, so
-// concurrent atctl processes cannot interleave writes.
+// withLock runs fn while holding both the in-process mutex and the advisory
+// flock, so writers serialize across goroutines within one process AND across
+// concurrent atctl processes on the same host.
+//
+// Lock order (must be consistent everywhere to avoid deadlock):
+//  1. s.mu  — in-process mutex (acquired first)
+//  2. flock — cross-process advisory lock (acquired second)
+//
+// All public mutation methods call withLock exactly once at their outermost
+// level. Internal helpers (writeIssue, closeMove, reopenLocked, checkRefs,
+// migrateInlineComments) run inside the fn closure — they must NOT call
+// withLock themselves, or the non-reentrant Mutex will deadlock.
+// Reads (Get, All, Comments, …) are intentionally lock-free.
 func (s *Store) withLock(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	unlock, err := s.fs.Lock(filepath.Join(s.dir, lockFileName))
 	if err != nil {
 		return err
@@ -390,6 +425,7 @@ type CreateInput struct {
 	Type        Type
 	Priority    *int
 	Assignee    string
+	Creator     string
 	Labels      []string
 	Parent      string
 	BlockedBy   []string
@@ -412,6 +448,7 @@ func (s *Store) Create(in CreateInput) (*Issue, error) {
 			Type:        in.Type,
 			Priority:    PriorityDefault,
 			Assignee:    in.Assignee,
+			Creator:     strings.TrimSpace(in.Creator),
 			Labels:      dedupe(in.Labels),
 			Parent:      in.Parent,
 			BlockedBy:   dedupe(in.BlockedBy),
@@ -504,6 +541,11 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			if err != nil {
 				return err
 			}
+			// reopenLocked forces StatusOpen; override with the requested non-closed
+			// status so that e.g. Update(..., {Status: in_progress}) lands on
+			// in_progress, not open. (SDK-SPEC §4: "the issue ends in the requested
+			// status".)
+			reopened.Status = *in.Status
 			// Apply remaining (non-status) field changes to the reopened issue.
 			applyNonStatusFields(reopened, in)
 			reopened.Updated = s.now()
@@ -633,9 +675,17 @@ func applyLabels(iss *Issue, in UpdateInput) {
 
 // Close stamps the issue closed and moves its .md to closed/.
 //
-// A closed issue is immutable in place (TASK-STORAGE-SPEC §5): calling Close
-// again on an already-closed issue returns ErrImmutable. Use Reopen to restore
-// mutability, or AddComment to append a post-close note.
+// Idempotent (CLI-SPEC §"atctl close", SDK-SPEC §4): if the issue is already
+// closed, Close returns a successful no-op — the existing closed issue is
+// returned and no file write occurs. The supplied reason is silently ignored
+// on a re-close; the original close_reason from the first Close call is
+// preserved. This keeps the "closed issues are immutable in place"
+// (TASK-STORAGE-SPEC §5) invariant intact — no hot-dir write is attempted.
+//
+// To change the close_reason of an already-closed issue, Reopen it first,
+// then Close again with the new reason.
+//
+// Use Reopen to restore mutability, or AddComment to append a post-close note.
 func (s *Store) Close(id, reason string) (*Issue, error) {
 	var out *Issue
 	err := s.withLock(func() error {
@@ -643,13 +693,16 @@ func (s *Store) Close(id, reason string) (*Issue, error) {
 		if err != nil {
 			return err
 		}
-		// Reject in-place writes to already-closed issues.
+		// If the issue is already closed, return a successful no-op.
+		// No in-place write to closed/ is attempted, preserving the immutability
+		// invariant (TASK-STORAGE-SPEC §5).
 		inClosed, err := s.isInClosed(id)
 		if err != nil {
 			return err
 		}
 		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, id)
+			out = iss
+			return nil
 		}
 		s.applyStatus(iss, StatusClosed, reason)
 		iss.Updated = s.now()
@@ -993,6 +1046,14 @@ func (s *Store) AddDep(dependent, blocker string) error {
 		if err != nil {
 			return err
 		}
+		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
+		inClosed, err := s.isInClosed(dependent)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
+		}
 		if dependent == blocker {
 			return invalid("blocked_by", "issue cannot block itself")
 		}
@@ -1016,6 +1077,14 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 		iss, err := s.Get(dependent)
 		if err != nil {
 			return err
+		}
+		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
+		inClosed, err := s.isInClosed(dependent)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
 		}
 		kept := iss.BlockedBy[:0]
 		for _, b := range iss.BlockedBy {

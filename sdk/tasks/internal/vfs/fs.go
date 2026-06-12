@@ -44,6 +44,11 @@ type FS interface {
 	// Lock acquires an exclusive advisory lock on the file at path (creating it
 	// if necessary). It returns an unlock function that must be called to
 	// release the lock. The lock is process-wide advisory (flock on unix).
+	//
+	// Platform contract: Lock is implemented only for unix targets (Linux, macOS,
+	// etc.). On non-unix targets it returns an error immediately (fails closed)
+	// rather than silently providing no mutual exclusion. Production builds must
+	// target a unix OS.
 	Lock(path string) (unlock func() error, err error)
 
 	// Getwd returns the current working directory.

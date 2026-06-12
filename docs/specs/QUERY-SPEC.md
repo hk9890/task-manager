@@ -34,7 +34,7 @@ comparison = field , op , value ;
 op         = "==" | "!=" | "<" | "<=" | ">" | ">=" | "~" ;
 
 bool_field = "ready" | "blocked" ;
-field      = "status" | "type" | "priority" | "assignee" | "parent"
+field      = "status" | "type" | "priority" | "assignee" | "creator" | "parent"
            | "label"  | "text" | "created"  | "updated"  | "closed" ;
 
 value      = number | string | bareword ;
@@ -62,8 +62,9 @@ operator a field does not support is a parse error (§4).
 |---|---|---|---|
 | `status` | enum | `==` `!=` | `open` / `in_progress` / `blocked` / `closed` |
 | `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` |
-| `priority` | int | `==` `!=` `<` `<=` `>` `>=` | `0`–`4` |
+| `priority` | int | `==` `!=` `<` `<=` `>` `>=` | integer (`0`–`4` stored) |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |
+| `creator` | string | `==` `!=` `~` | quoted or bareword |
 | `parent` | issue ID | `==` `!=` | an issue ID, e.g. `"dtt-0007"`; `==` may be `""` (no parent) |
 | `label` | string set | `==` `!=` `~` | quoted or bareword |
 | `text` | virtual string | `~` | quoted or bareword |
@@ -76,18 +77,30 @@ operator a field does not support is a parse error (§4).
 **Per-field matching semantics:**
 
 - **enum / `priority` / `parent`** — `==` / `!=` compare the field value directly.
-  `priority` also supports the ordering operators (numeric).
+  `priority` also supports the ordering operators (numeric). Any non-negative integer
+  is a legal `priority` literal; only `0`–`4` are storable, so an out-of-range bound
+  simply matches all or none (`priority < 5` matches every issue, `priority == 7`
+  matches none) instead of erroring.
 - **`assignee`** — `==` / `!=` exact; `~` case-insensitive substring.
+- **`creator`** — same as `assignee`: `==` / `!=` exact; `~` case-insensitive substring.
 - **`label`** — the issue carries a *set* of labels. `label == "x"` is true iff the
   set contains exactly `"x"` (membership); `label != "x"` is its negation;
   `label ~ "x"` is true iff some label contains the case-insensitive substring `x`.
 - **`text`** — a virtual field: the case-insensitive concatenation of the issue's
   `id`, `title`, and description body. Only `~` (substring) is defined.
 - **`created` / `updated` / `closed`** — chronological comparison (§3). On an issue
-  with no `closed` timestamp, every `closed` comparison is false.
+  with no `closed` timestamp, every `closed` comparison is false. Likewise, on
+  an issue with no `created` or `updated` value (absent or zero), every
+  `created` / `updated` comparison is false — a missing timestamp has no value
+  that can satisfy any ordering bound.
 - **`ready` / `blocked`** — computed predicates with the meanings fixed by the
   storage spec (TASK-STORAGE-SPEC.md §9): `ready` = open with no open blocker;
-  `blocked` = non-closed with ≥1 open blocker.
+  `blocked` = non-closed with ≥1 open blocker. These are derived from the
+  dependency graph and are **independent of the `status` field**: the `blocked`
+  predicate is **not** the same as `status == "blocked"`. The `blocked` *status*
+  is a manual label the engine never sets or clears automatically — an issue can
+  carry `status == "blocked"` with no open blocker (so not `blocked` here), or be
+  `blocked` here while its status is `open`/`in_progress`.
 
 **String comparison & case:** field names and enum tokens are lowercase. `==` / `!=`
 on strings are exact and case-sensitive; `~` is always case-insensitive.
@@ -120,7 +133,7 @@ code 1 with a message), on:
 
 - an **unknown field** or an unknown bare predicate;
 - an **operator not permitted** for the field (e.g. `status < "open"`, `text == "x"`);
-- a **malformed value** for the field's type (`priority` not an integer in `0`–`4`;
+- a **malformed value** for the field's type (`priority` not a non-negative integer;
   an unparseable date; an unknown enum token);
 - a **syntax error**: unbalanced parentheses, a dangling operator, a missing value,
   or trailing tokens after a complete expression.
@@ -128,17 +141,35 @@ code 1 with a message), on:
 A well-formed expression that simply matches nothing is **not** an error — it
 returns an empty result.
 
+**Expression nesting depth:** parenthesised sub-expressions may be nested to a
+maximum depth of **256 levels**. Input that exceeds this limit is rejected with
+a parse error ("expression nesting too deep") rather than crashing. In practice
+no real query approaches this limit.
+
 ---
 
 ## 5. Evaluation scope (not part of the grammar)
 
 The expression decides *whether* an issue matches; it does **not** decide which
-partitions are scanned. By default only the hot (active) set is evaluated. Closed
-issues are read only when the caller opts in — `atctl --all`, or the SDK
-`Filter.IncludeClosed` — **or** when the expression references closed work
-(`status == "closed"`, or a `closed` comparison), which implies the cold partition.
-This scoping rule lives with the caller (CLI-SPEC.md §3, SDK-SPEC.md §4), not with
-the grammar, so the same expression is portable across front ends.
+partitions are scanned. By default only the hot (active) set is evaluated.
+
+**Cold-scope predicate (normative).** The cold (`closed/`) partition is scanned iff
+*any* of these holds:
+
+1. the caller opts in — `atctl --all`, `Filter.IncludeClosed`, or
+   `FindOptions.IncludeClosed`;
+2. the parsed expression contains a `status == "closed"` atom (positive equality
+   only); or
+3. the parsed expression contains any `closed`-field comparison (any operator).
+
+Nothing else auto-scans cold — in particular `status != "closed"` does **not** (it
+selects active work); to include closed issues under such a query the caller must opt
+in explicitly. The predicate is computed from the **parsed expression**, so there is
+exactly one detector: `Criteria` / `Find` derive their scope by building the
+expression and running this same predicate, never by inspecting the struct, so a
+`Criteria` and its hand-written equivalent always scope identically. This rule lives
+with the caller (CLI-SPEC.md §3, SDK-SPEC.md §3–4), not with the grammar, so the same
+expression is portable across front ends.
 
 ---
 
@@ -151,6 +182,7 @@ type == bug && label ~ "area:db"
 ready && priority <= 2
 text ~ "drill" && !blocked
 assignee == "hans" && (type == bug || type == chore)
+creator == "ada" && status == "open"
 closed > "2026-01-01"
 parent == "dtt-0007"
 ```
@@ -164,3 +196,11 @@ operator, or a new bare predicate is an **additive** change (an expression valid
 today stays valid). Removing or repurposing one is breaking and is versioned with
 the SDK module. The grammar is intentionally frozen at this shape — selection only;
 no ordering, projection, or aggregation is ever added here (those stay caller-side).
+
+**Structured construction.** Callers that build expressions from typed inputs should
+use the SDK's `Criteria.Build` (SDK-SPEC.md §3) rather than concatenating strings:
+it is the canonical producer of this syntax and the single owner of value
+quoting/escaping and precedence. It only *produces* an expression — evaluation stays
+in the one engine. Ordering, limit, offset, and the total match count are
+presentation concerns handled caller-side (`Filter` / `Page`), never part of this
+grammar.

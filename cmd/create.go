@@ -17,6 +17,7 @@ var createFlags struct {
 	typ             string
 	priority        int
 	assignee        string
+	creator         string
 	labels          []string
 	parent          string
 	blockedBy       []string
@@ -33,6 +34,10 @@ var createCmd = &cobra.Command{
 			return err
 		}
 
+		if cmd.Flags().Changed("description") && cmd.Flags().Changed("description-file") {
+			return fmt.Errorf("--description and --description-file are mutually exclusive")
+		}
+
 		desc := createFlags.description
 		if createFlags.descriptionFile != "" {
 			b, err := readFileOrStdin(createFlags.descriptionFile)
@@ -42,11 +47,17 @@ var createCmd = &cobra.Command{
 			desc = string(b)
 		}
 
+		creator := createFlags.creator
+		if creator == "" {
+			creator = os.Getenv("USER")
+		}
+
 		in := tasks.CreateInput{
 			Title:       createFlags.title,
 			Description: desc,
 			Type:        tasks.Type(createFlags.typ),
 			Assignee:    createFlags.assignee,
+			Creator:     creator,
 			Labels:      createFlags.labels,
 			Parent:      createFlags.parent,
 			BlockedBy:   createFlags.blockedBy,
@@ -85,6 +96,7 @@ func init() {
 	f.StringVar(&createFlags.typ, "type", "task", "issue type (task|bug|feature|epic|chore)")
 	f.IntVar(&createFlags.priority, "priority", tasks.PriorityDefault, "priority 0 (critical) .. 4 (trivial)")
 	f.StringVar(&createFlags.assignee, "assignee", "", "assignee")
+	f.StringVar(&createFlags.creator, "creator", "", "creator — who filed the issue; recorded once at creation (default: $USER)")
 	f.StringSliceVar(&createFlags.labels, "label", nil, "label (repeatable)")
 	f.StringVar(&createFlags.parent, "parent", "", "parent issue ID")
 	f.StringSliceVar(&createFlags.blockedBy, "blocked-by", nil, "blocker issue ID (repeatable)")

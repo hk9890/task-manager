@@ -190,12 +190,18 @@ func TestCloseIdempotent(t *testing.T) {
 	if first.Status != StatusClosed || first.CloseReason != "done" {
 		t.Errorf("close wrong: %+v", first)
 	}
-	// Per TASK-STORAGE-SPEC §5, closed files are immutable in place.
-	// Re-closing an already-closed issue is an in-place write to closed/ and
-	// must return ErrImmutable (not be silently idempotent).
-	_, err = s.Close(iss.ID, "again")
-	if !errors.Is(err, ErrImmutable) {
-		t.Errorf("re-close should return ErrImmutable, got %v", err)
+	// CLI-SPEC §"atctl close" says Close is idempotent. Re-closing an
+	// already-closed issue must succeed (nil error) and return the existing
+	// closed issue unchanged. The new reason is ignored; original is preserved.
+	second, err := s.Close(iss.ID, "again")
+	if err != nil {
+		t.Errorf("re-close must succeed (idempotent), got: %v", err)
+	}
+	if second == nil || second.Status != StatusClosed {
+		t.Errorf("re-close must return closed issue, got: %+v", second)
+	}
+	if second.CloseReason != "done" {
+		t.Errorf("re-close must preserve original close_reason %q, got %q", "done", second.CloseReason)
 	}
 }
 

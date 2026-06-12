@@ -232,3 +232,100 @@ func TestOsFS_Rename(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// TestOsFS_WriteAtomic_DirSynced verifies that WriteAtomic fsyncs the parent
+// directory after renaming: the call must succeed and the file must be readable,
+// confirming the dir-fsync code path runs without error.
+func TestOsFS_WriteAtomic_DirSynced(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "synced.md")
+	data := []byte("crash-durable")
+
+	if err := fs.WriteAtomic(name, data, 0o644); err != nil {
+		t.Fatalf("WriteAtomic (with dir fsync): %v", err)
+	}
+
+	got, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile after WriteAtomic: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Errorf("got %q, want %q", got, data)
+	}
+
+	// Overwrite triggers another rename → dir fsync.
+	data2 := []byte("updated")
+	if err := fs.WriteAtomic(name, data2, 0o644); err != nil {
+		t.Fatalf("WriteAtomic overwrite (with dir fsync): %v", err)
+	}
+	got2, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile after overwrite: %v", err)
+	}
+	if !bytes.Equal(got2, data2) {
+		t.Errorf("got %q, want %q", got2, data2)
+	}
+}
+
+// TestOsFS_Append_CreateFsyncDir verifies that the first Append (which creates
+// a new dir entry) succeeds including the parent-dir fsync, and that a
+// subsequent Append (file already exists) also succeeds without dir fsync.
+func TestOsFS_Append_CreateFsyncDir(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	name := filepath.Join(dir, "new.log")
+
+	// First call: file does not exist → O_CREATE adds a dir entry → dir fsync.
+	if err := fs.Append(name, []byte("entry1\n"), 0o644); err != nil {
+		t.Fatalf("Append create (with dir fsync): %v", err)
+	}
+	if _, err := os.Stat(name); err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+
+	// Second call: file exists → no new dir entry → no dir fsync (but must succeed).
+	if err := fs.Append(name, []byte("entry2\n"), 0o644); err != nil {
+		t.Fatalf("Append existing (no dir fsync): %v", err)
+	}
+
+	got, err := fs.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	want := "entry1\nentry2\n"
+	if string(got) != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestOsFS_Rename_DirSynced verifies that the bare Rename fsyncs the
+// destination directory after the rename succeeds.
+func TestOsFS_Rename_DirSynced(t *testing.T) {
+	dir := t.TempDir()
+	fs := vfs.NewOS()
+
+	src := filepath.Join(dir, "before.md")
+	dst := filepath.Join(dir, "after.md")
+
+	if err := fs.WriteAtomic(src, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Rename(src, dst); err != nil {
+		t.Fatalf("Rename (with dir fsync): %v", err)
+	}
+
+	// src must be gone, dst must have the content.
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src should be gone after rename")
+	}
+	got, err := fs.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("ReadFile dst: %v", err)
+	}
+	if string(got) != "payload" {
+		t.Errorf("got %q, want %q", got, "payload")
+	}
+}

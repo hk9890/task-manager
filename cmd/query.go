@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -33,17 +34,45 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	f.IntVar(&ff.limit, "limit", 0, "maximum number of results (0 = all)")
 }
 
+// validSortValues lists the sort field values accepted by --sort.
+// The empty string means the default work-order (priority then created).
+var validSortValues = map[string]bool{
+	"":         true, // default: work-order
+	"work":     true,
+	"id":       true,
+	"priority": true,
+	"created":  true,
+	"updated":  true,
+	"closed":   true,
+}
+
+// validateSort returns an error if the sort value is not in the accepted set.
+func validateSort(s string) error {
+	if validSortValues[s] {
+		return nil
+	}
+	return fmt.Errorf("invalid --sort value %q: must be one of work, id, priority, created, updated, closed", s)
+}
+
 func (ff *filterFlags) build() tasks.Filter {
+	// Map the CLI "work" alias to the SDK's empty-string sentinel.
+	sortVal := ff.sort
+	if sortVal == "work" {
+		sortVal = ""
+	}
 	return tasks.Filter{
 		Expr:          ff.query,
 		IncludeClosed: ff.all,
-		Sort:          tasks.SortField(ff.sort),
+		Sort:          tasks.SortField(sortVal),
 		Reverse:       ff.reverse,
 		Limit:         ff.limit,
 	}
 }
 
 func runList(cmd *cobra.Command, ff *filterFlags) error {
+	if err := validateSort(ff.sort); err != nil {
+		return err
+	}
 	s, err := openStore()
 	if err != nil {
 		return err
@@ -81,13 +110,14 @@ var listCmd = &cobra.Command{
 var searchFilter filterFlags
 
 var searchCmd = &cobra.Command{
-	Use:   "search <text>",
-	Short: "Search issues by text (ID, title, description)",
+	Use:   "search <text> [more words...]",
+	Short: "Search issues by text (ID, title, description); multiple words are joined",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Translate the search text into a text ~ "<text>" expression.
-		// If the user also passed -q, combine them with &&.
-		textExpr := fmt.Sprintf(`text ~ %q`, args[0])
+		// Join all positional arguments with spaces so `search foo bar` searches
+		// for the phrase "foo bar" rather than silently dropping "bar".
+		// Translate into a text ~ "<text>" expression; combine with -q if given.
+		textExpr := fmt.Sprintf(`text ~ %q`, strings.Join(args, " "))
 		if searchFilter.query != "" {
 			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
 		} else {
@@ -149,9 +179,9 @@ var blockedCmd = &cobra.Command{
 			return nil
 		}
 		for _, b := range blocked {
-			fmt.Printf("%s  P%d  %s\n", b.Issue.ID, b.Issue.Priority, b.Issue.Title)
+			fmt.Printf("%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
 			for _, r := range b.BlockedBy {
-				fmt.Printf("    blocked by %s (%s)  %s\n", r.ID, r.Status, r.Title)
+				fmt.Printf("  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
 			}
 		}
 		return nil

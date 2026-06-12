@@ -82,11 +82,14 @@ unless the expression selects them or `--all` is given. Default order: priority
 |---|---|
 | `-q, --query <expr>` | Filter expression (§3.1). Omitted → all active issues. |
 | `--all` | Include closed issues (reads the cold partition). |
-| `--sort <field>` | `work` \| `id` \| `priority` \| `created` \| `updated` \| `closed`. Default `work` = priority, then oldest `created`; `priority` sorts by priority alone. |
+| `--sort <field>` | `work` \| `id` \| `priority` \| `created` \| `updated` \| `closed`. Default `work` = priority, then oldest `created`; `priority` sorts by priority alone. Every sort breaks ties on `id` (deterministic order). |
 | `--reverse` | Reverse the sort order. |
 | `--limit <n>` | Cap the number of results (`0` = all). |
 
 - **Output (JSON):** array of `issueDTO`.
+- The CLI does not page: `--limit` is a simple cap and there is no `--offset`.
+  Windowed paging with a total match count is an SDK concern (`ListPage` / `FindPage`,
+  SDK-SPEC.md §4).
 
 ### 3.1 Filter expressions
 
@@ -105,9 +108,9 @@ text ~ "drill" && !blocked
 closed > "2026-01-01"
 ```
 
-Scope: closed issues are excluded unless `--all` is passed or the expression itself
-references closed work (`status == "closed"`, or a `closed` comparison). See
-QUERY-SPEC.md §5.
+Scope: closed issues are excluded unless `--all` is passed or the expression
+satisfies the cold-scope predicate (a `status == "closed"` atom or a `closed`
+comparison; `status != "closed"` does not). See QUERY-SPEC.md §5.
 
 ### `atctl search <text> [options]`
 
@@ -154,6 +157,7 @@ Create a new issue and allocate its ID.
 | `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore`. |
 | `--priority <n>` | `2` | `0` (critical) … `4` (trivial). |
 | `--assignee <a>` | empty | Assignee. |
+| `--creator <a>` | `$USER` | Creator — who filed the issue; recorded once at creation. |
 | `--label <l>` | — | Label; repeatable. |
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
@@ -183,7 +187,10 @@ as-is.
 
 - Setting `--status closed` transitions the issue to closed (stamps the close time
   and moves it to the cold partition) but records **no** reason — use `close
-  --reason` for that. Moving away from `closed` reopens (status → `open`).
+  --reason` for that. Setting a non-closed `--status` on a closed issue reopens it
+  and lands on the status you asked for (`--status in_progress` → `in_progress`, not
+  `open`).
+- `creator` is provenance — set once at `create` and not editable here.
 - **Output:** the updated `issueDTO`.
 
 ### `atctl close <id> [--reason <r>]`
@@ -194,7 +201,8 @@ Close an issue: set status `closed`, stamp the close time, optionally record
 ### `atctl reopen <id>`
 
 Move a closed issue back to the active set, clear its closed timestamp/reason, and
-set its status to `open`.
+set its status to `open`. No-op on an already-active issue. (To reopen directly into
+another status, use `update --status`.)
 
 ### `atctl dep add <dependent> <blocker>`
 
@@ -266,7 +274,7 @@ nested in others:
 ```json
 {
   "id": "dtt-0042", "title": "…", "status": "open", "type": "bug",
-  "priority": 1, "assignee": "hans", "labels": ["area:x"],
+  "priority": 1, "assignee": "hans", "creator": "hans", "labels": ["area:x"],
   "parent": "dtt-0007", "blocked_by": ["dtt-0040"], "related": ["dtt-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-04T09:00:00Z",
   "closed": "2026-06-05T08:00:00Z", "close_reason": "fixed"
@@ -294,7 +302,7 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 ```
 atctl init     [--prefix X]
 atctl create   --title T [--description[-file] --type --priority --assignee
-                          --label… --parent --blocked-by… --related…]
+                          --creator --label… --parent --blocked-by… --related…]
 atctl show     <id>
 atctl list     [-q <expr>] [--all --sort --reverse --limit]
 atctl search   <text> [--all --sort --reverse --limit]

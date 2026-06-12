@@ -125,6 +125,35 @@ func TestValidateReplaces_Empty(t *testing.T) {
 	}
 }
 
+// TestValidateReplaces_EarlierInStream verifies that validateReplaces enforces
+// the TASK-STORAGE-SPEC §4.4 / §10 "earlier in the stream" rule:
+//   - An ID found in the pre-append stream is earlier → accepted.
+//   - An ID NOT found in the pre-append stream is not earlier → rejected.
+//
+// The pre-append stream is passed as-is by the callers (EditComment /
+// DeleteComment), so every document in it is by definition earlier than the
+// document about to be appended.
+func TestValidateReplaces_EarlierInStream(t *testing.T) {
+	stream := []Comment{
+		{ID: "11111111", Body: "first\n"},
+		{ID: "22222222", Body: "second\n"},
+	}
+
+	// Both IDs are in the pre-append stream → earlier → accepted.
+	if err := validateReplaces("11111111", stream); err != nil {
+		t.Errorf("replaces first comment: want nil, got %v", err)
+	}
+	if err := validateReplaces("22222222", stream); err != nil {
+		t.Errorf("replaces second comment: want nil, got %v", err)
+	}
+
+	// An ID not in the stream (e.g. the ID of the doc being appended, or an
+	// entirely made-up one) is not earlier → must be rejected.
+	if err := validateReplaces("33333333", stream); err == nil {
+		t.Error("replaces ID not in stream: want error, got nil")
+	}
+}
+
 // ── L2 (Mem): AddComment returns (*Comment, error) ────────────────────────
 
 // TestAddComment_ReturnsSelf verifies that AddComment returns the new comment

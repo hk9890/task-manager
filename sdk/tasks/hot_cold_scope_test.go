@@ -37,7 +37,8 @@ func TestReferencesClosedWork(t *testing.T) {
 		// status == "closed" (various spacings).
 		{`status == "closed"`, true},
 		{`status=="closed"`, true},
-		{`status != "closed"`, true},
+		// QUERY-SPEC §5: != selects active work and must NOT auto-scan cold.
+		{`status != "closed"`, false},
 
 		// closed field comparisons.
 		{`closed > "2026-01-01"`, true},
@@ -159,6 +160,10 @@ func TestAll_NeverDescendsIntoComments(t *testing.T) {
 
 	// Write a garbled file in comments/ — if All() descends, it would try to parse
 	// it as an issue and fail.
+	// MkdirAll is required: Mem now requires the parent dir to exist (matching osFS).
+	if err := m.MkdirAll("/.tasks/comments", 0o755); err != nil {
+		t.Fatalf("MkdirAll comments: %v", err)
+	}
 	garbledPath := "/.tasks/comments/garbage.md"
 	if err := m.WriteAtomic(garbledPath, []byte("GARBLED COMMENT FILE"), 0o644); err != nil {
 		t.Fatalf("WriteAtomic comments garble: %v", err)
@@ -330,5 +335,49 @@ func TestReady_HotOnly(t *testing.T) {
 	}
 	if len(ready) != 2 {
 		t.Errorf("Ready() = %d, want 2 (both open issues are ready)", len(ready))
+	}
+}
+
+// TestList_StatusNeq_Closed_HotOnly verifies that
+// List(Filter{Expr: "status != \"closed\""}) does NOT auto-scan the cold
+// partition (QUERY-SPEC §5). The != operator selects active work only; its
+// cold-scope predicate is false, so closed/ is never opened and the closed
+// issue is excluded from the result set even though it technically satisfies
+// "status != closed" (its status string is "closed", so != "closed" is false
+// for that issue — the filter correctly excludes it regardless).
+//
+// This test is specifically about partition scoping: even if the cold partition
+// were scanned, the filter would exclude the closed issue. The key invariant is
+// that cold/ must NOT be opened when the expression is "status != \"closed\"".
+// We verify this structurally by poisoning closed/ so that if it were read, the
+// test would return an error.
+func TestList_StatusNeq_Closed_HotOnly(t *testing.T) {
+	s, m, _, _, closedID := newScopedMemStore(t)
+
+	// Poison the closed/ file so that if List descends into it, Unmarshal fails.
+	poisonPath := "/.tasks/closed/" + closedID + ".md"
+	if err := m.WriteAtomic(poisonPath, []byte("GARBLED NOT YAML"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic poison: %v", err)
+	}
+
+	// List with "status != \"closed\"" must NOT scan cold and must NOT error.
+	issues, err := s.List(Filter{Expr: `status != "closed"`})
+	if err != nil {
+		t.Fatalf(`List(status != "closed") returned error (likely scanned cold/): %v`, err)
+	}
+
+	// Must return only active (open) issues — the closed one must not appear.
+	for _, iss := range issues {
+		if iss.ID == closedID {
+			t.Errorf(`List(status != "closed") returned closed issue %s — cold partition must not be scanned`, closedID)
+		}
+		if iss.Status.IsClosed() {
+			t.Errorf(`List(status != "closed") returned closed issue %s`, iss.ID)
+		}
+	}
+
+	// The two open issues should be present.
+	if len(issues) != 2 {
+		t.Errorf(`List(status != "closed") = %d issues, want 2 (hot-only)`, len(issues))
 	}
 }

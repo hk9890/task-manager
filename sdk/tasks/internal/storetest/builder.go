@@ -32,6 +32,8 @@ type issueSpec struct {
 	blockers []string
 	labels   []string
 	title    string
+	creator  string
+	assignee string
 }
 
 // commentSpec holds the declarative description of one comment to add.
@@ -91,6 +93,16 @@ func Label(ls ...string) Opt {
 // IssueType sets the issue type.
 func IssueType(tp tasks.Type) Opt {
 	return func(s *issueSpec) { s.issType = tp }
+}
+
+// Creator sets the creator of the issue.
+func Creator(name string) Opt {
+	return func(s *issueSpec) { s.creator = name }
+}
+
+// Assignee sets the assignee of the issue.
+func Assignee(name string) Opt {
+	return func(s *issueSpec) { s.assignee = name }
 }
 
 // Issue registers an open issue with the given ID. Apply functional Opt values
@@ -155,9 +167,9 @@ func fixedClock() func() time.Time {
 func (b *Builder) materialize(s *tasks.Store) {
 	b.t.Helper()
 
-	// Pass 1: create every issue with title, type, priority and labels only.
-	// No parent or blocker refs yet — those may reference issues that do not
-	// exist on disk at this point.
+	// Pass 1: create every issue with title, type, priority, labels, creator,
+	// and assignee only. No parent or blocker refs yet — those may reference
+	// issues that do not exist on disk at this point.
 	for _, spec := range b.issues {
 		p := spec.priority
 		in := tasks.CreateInput{
@@ -165,6 +177,8 @@ func (b *Builder) materialize(s *tasks.Store) {
 			Type:     spec.issType,
 			Priority: &p,
 			Labels:   spec.labels,
+			Creator:  spec.creator,
+			Assignee: spec.assignee,
 		}
 		iss, err := s.Create(in)
 		if err != nil {

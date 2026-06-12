@@ -129,6 +129,7 @@ status: in_progress
 type: bug
 priority: 1
 assignee: hans
+creator: hans
 labels: [area:details, triage:fix-as-is]
 parent: dtt-0007
 blocked_by: [dtt-0040]
@@ -151,6 +152,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `type` | enum | yes | always |
 | `priority` | int | yes | always |
 | `assignee` | string | no | non-empty |
+| `creator` | string | no | non-empty |
 | `labels` | [string] | no | non-empty |
 | `parent` | string | no | non-empty |
 | `blocked_by` | [string] | no | non-empty |
@@ -170,6 +172,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`. |
 | `priority` | integer `0`–`4` (0 = critical … 4 = trivial); default `2`. |
 | `assignee` | 0–128 chars; single line; no control characters. |
+| `creator` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
 | `labels` | 0–64 items; each 1–64 chars matching `^[a-z0-9][a-z0-9:._/-]*$`; unique. |
 | `parent` | a valid ID (§3); must reference an existing issue; not self. |
 | `blocked_by` | 0–256 items; each a valid ID; unique; no self; no cycles. |
@@ -321,18 +324,26 @@ An issue is **active** while its file lives in the store's hot directory and
   optional fields omitted (never written as `null` / `[]` / `""`). String scalars
   that span multiple lines use block scalars.
 - **Atomic on disk:** every file write is temp-file + `fsync` + `rename` over the
-  target, so a reader never observes a torn file. The **one** exception is the
-  comment sidecar (§4.4), which is append-only — grown with an `O_APPEND` + `fsync`
-  write rather than rewritten. Both forms happen under the store lock (§7).
+  target, followed by an `fsync` of the parent directory so the new directory
+  entry (the rename, or a newly created file) is itself durable across a crash —
+  a reader never observes a torn file, and a survived rename never reverts. The
+  **one** exception is the comment sidecar (§4.4), which is append-only — grown
+  with an `O_APPEND` + `fsync` write rather than rewritten (a newly created
+  sidecar still triggers a parent-dir `fsync`). Both forms happen under the store
+  lock (§7).
 
 ---
 
 ## 7. Concurrency & durability
 
-- **Single writer.** Every mutation runs under an exclusive advisory lock (`flock`
-  on `.tasks/.lock`). Concurrent writers serialize; they never interleave writes.
-  The lock covers the whole store, including comment-sidecar appends.
-- **Reads are lock-free.** Atomic renames make this safe.
+- **Single writer.** Every mutation serializes against all others — goroutines via
+  an in-process mutex, processes via an exclusive advisory `flock` on `.tasks/.lock`;
+  writes never interleave. The lock covers the whole store, including comment-sidecar
+  appends.
+- **Reads are lock-free** (atomic renames make this safe). A scan spanning the hot
+  directory and `closed/` reads two directories, so it is not a single atomic
+  snapshot; readers dedup by ID so a concurrent close/reopen can never yield a
+  duplicate (a transient omission, if any, clears on the next read).
 - **Throughput ceiling.** The write path `fsync`s inside the lock, so write
   throughput is bounded by `fsync` latency. In-lock work is kept minimal; the hot
   scan is the main cost, which §2/§5 keep O(open).
@@ -365,6 +376,13 @@ There is no same-type constraint: any issue may parent or block any other.
   first), then oldest `created`, then ID.
 - **Blocked** = non-closed issues with at least one open blocker.
 - **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection).
+
+Ready/blocked are **derived from the dependency graph, not from the `status`
+field**. The `blocked` *status value* is a manual label: the engine never sets or
+clears it in response to dependencies, and it is not kept in sync with the
+computed `blocked` predicate above. An issue may hold `status: blocked` with no
+open blocker, or be blocked (by dependency) while its status is `open` or
+`in_progress`.
 
 ---
 

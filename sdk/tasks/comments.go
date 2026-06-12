@@ -207,6 +207,19 @@ func parseTimestamp(s string) (time.Time, error) {
 // each replaces-chain is reduced to its newest document (later append wins
 // on duplicate replaces); tombstones (Deleted: true) are omitted.
 //
+// Cycle safety: the sidecar is human-/git-merge-editable (TASK-STORAGE-SPEC
+// §4.4), so a bad merge or hand-edit can introduce a replaces cycle (A→B→A
+// or A→A). This function guards every chain-following loop with a visited-set
+// bounded by len(stream). On detecting a revisit the current node is treated
+// as its own chain root — the resolution degrades gracefully instead of
+// hanging. No panic, no error: the caller receives a best-effort effective
+// log.
+//
+// Dangling replaces: if a document's replaces target is absent from the
+// stream (e.g. a sidecar truncated by a bad merge), the document is treated
+// as its own root and survives as an independent comment. This is intentional
+// fail-open behaviour.
+//
 // This is a PURE function: no I/O, no imports of os or vfs.
 func resolveComments(stream []Comment) []Comment {
 	if len(stream) == 0 {
@@ -246,11 +259,22 @@ func resolveComments(stream []Comment) []Comment {
 		}
 	}
 	// Propagate roots through the chain.
+	// Guard: use a per-walk visited set to break cycles. A cycle exists when we
+	// revisit a node we have already stepped through on this walk. The visited
+	// set is bounded by len(stream), so the loop terminates in O(n).
 	for _, c := range stream {
 		if c.Replaces != "" {
 			// Follow the chain to find the root.
 			root := c.Replaces
+			visited := make(map[string]struct{}, len(stream))
+			visited[c.ID] = struct{}{}
 			for {
+				if _, cycle := visited[root]; cycle {
+					// Cycle detected: treat the current node as its own root
+					// rather than looping forever.
+					chainRoot[c.ID] = c.ID
+					break
+				}
 				if r, ok := chainRoot[root]; ok {
 					chainRoot[c.ID] = r
 					break
@@ -258,9 +282,13 @@ func resolveComments(stream []Comment) []Comment {
 				// root not yet resolved; look for what replaces it.
 				prev, ok2 := byID[root]
 				if !ok2 || prev.Replaces == "" {
+					// Dangling or terminal: treat root as the chain root.
+					// Dangling (ok2 == false): target absent from stream —
+					// fail-open, the current node becomes its own root.
 					chainRoot[c.ID] = root
 					break
 				}
+				visited[root] = struct{}{}
 				root = prev.Replaces
 			}
 		}
@@ -368,8 +396,13 @@ func validateCommentDoc(c Comment) error {
 }
 
 // validateReplaces checks that the given replaces ID (if non-empty) names an
-// existing comment in stream (TASK-STORAGE-SPEC §10). The stream is the current
-// raw append-order stream for the issue.
+// existing **earlier** comment in the stream (TASK-STORAGE-SPEC §4.4/§10).
+//
+// stream is the raw append-order stream at the point the new document is being
+// added — i.e. the pre-append contents of the sidecar. Every document in
+// stream is by definition earlier than the document about to be appended, so
+// any ID found in stream satisfies the "earlier in the stream" requirement.
+// An ID not found in stream is not earlier and is therefore rejected.
 //
 // This is a PURE function.
 func validateReplaces(replacesID string, stream []Comment) error {
@@ -381,5 +414,5 @@ func validateReplaces(replacesID string, stream []Comment) error {
 			return nil
 		}
 	}
-	return invalid("replaces", "comment %q does not exist in the issue's comment stream", replacesID)
+	return invalid("replaces", "comment %q does not exist as an earlier comment in the issue's comment stream", replacesID)
 }

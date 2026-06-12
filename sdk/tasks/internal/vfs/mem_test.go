@@ -2,6 +2,7 @@ package vfs_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,6 +12,9 @@ import (
 // TestMem_WriteAtomicReadFile verifies a basic write+read round-trip.
 func TestMem_WriteAtomicReadFile(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/agt-0001.md"
 	data := []byte("hello")
 
@@ -30,6 +34,9 @@ func TestMem_WriteAtomicReadFile(t *testing.T) {
 // content.
 func TestMem_WriteAtomicOverwrite(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/agt-0001.md"
 
 	if err := m.WriteAtomic(name, []byte("v1"), 0o644); err != nil {
@@ -50,6 +57,9 @@ func TestMem_WriteAtomicOverwrite(t *testing.T) {
 // TestMem_AppendAccumulates verifies that Append grows the file content.
 func TestMem_AppendAccumulates(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/comments.log"
 
 	if err := m.Append(name, []byte("line1\n"), 0o644); err != nil {
@@ -71,6 +81,9 @@ func TestMem_AppendAccumulates(t *testing.T) {
 // TestMem_ReadDirLists verifies that ReadDir returns written files.
 func TestMem_ReadDirLists(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	files := []string{
 		"/tasks/agt-0001.md",
@@ -100,6 +113,9 @@ func TestMem_ReadDirLists(t *testing.T) {
 // TestMem_RenameMovesFile verifies Rename removes src and makes dst readable.
 func TestMem_RenameMovesFile(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	src := "/tasks/src.md"
 	dst := "/tasks/dst.md"
 
@@ -124,6 +140,9 @@ func TestMem_RenameMovesFile(t *testing.T) {
 // TestMem_RemoveDeletes verifies Remove removes the file.
 func TestMem_RemoveDeletes(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/agt-0001.md"
 
 	if err := m.WriteAtomic(name, []byte("x"), 0o644); err != nil {
@@ -150,6 +169,9 @@ func TestMem_ReadFileNotExist(t *testing.T) {
 // TestMem_StatReturnsInfo verifies Stat returns size info for existing files.
 func TestMem_StatReturnsInfo(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/agt-0001.md"
 	data := []byte("hello world")
 
@@ -241,6 +263,9 @@ func TestMem_FailOn_WriteAtomic(t *testing.T) {
 // Rename matching the glob to fail.
 func TestMem_FailOn_Rename(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	src := "/tasks/src.md"
 	dst := "/tasks/dst.md"
 	if err := m.WriteAtomic(src, []byte("content"), 0o644); err != nil {
@@ -272,6 +297,9 @@ func TestMem_FailOn_Rename(t *testing.T) {
 // and then the subsequent call succeeds.
 func TestMem_FailOn_FaultsAreConsumed(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	name := "/tasks/agt-0001.md"
 	m.FailOn("WriteAtomic", name, errInjected)
 
@@ -300,6 +328,9 @@ func TestMem_FailOn_GlobMatchesSuffix(t *testing.T) {
 // that does not match the glob.
 func TestMem_FailOn_GlobNoMatch(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	m.FailOn("WriteAtomic", "/other/*.md", errInjected)
 
 	// This path does not match the glob — write should succeed.
@@ -378,6 +409,9 @@ func TestMem_ReadDirDir(t *testing.T) {
 // TestMem_ReadDirReturnsBasenames verifies ReadDir entries have base names.
 func TestMem_ReadDirReturnsBasenames(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	if err := m.WriteAtomic("/tasks/agt-0001.md", []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +431,12 @@ func TestMem_ReadDirReturnsBasenames(t *testing.T) {
 // TestMem_MultipleFilesInDifferentDirs verifies ReadDir scopes to one directory.
 func TestMem_MultipleFilesInDifferentDirs(t *testing.T) {
 	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll /tasks: %v", err)
+	}
+	if err := m.MkdirAll("/other", 0o755); err != nil {
+		t.Fatalf("MkdirAll /other: %v", err)
+	}
 	if err := m.WriteAtomic("/tasks/agt-0001.md", []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -413,5 +453,192 @@ func TestMem_MultipleFilesInDifferentDirs(t *testing.T) {
 	// Entry name must match only the file in /tasks.
 	if entries[0].Name() != filepath.Base("/tasks/agt-0001.md") {
 		t.Errorf("unexpected entry: %s", entries[0].Name())
+	}
+}
+
+// ---- Parent-dir enforcement (osFS fidelity) ----------------------------------
+
+// TestMem_WriteAtomic_RequiresParentDir verifies that WriteAtomic returns an
+// os.ErrNotExist-wrapped error when the parent directory has not been created.
+// This matches osFS behaviour: os.CreateTemp fails with ENOENT when the parent
+// dir is absent.
+func TestMem_WriteAtomic_RequiresParentDir(t *testing.T) {
+	m := vfs.NewMem()
+
+	// No MkdirAll — parent /tasks does not exist.
+	err := m.WriteAtomic("/tasks/agt-0001.md", []byte("data"), 0o644)
+	if err == nil {
+		t.Fatal("WriteAtomic to missing parent dir: expected error, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("WriteAtomic to missing parent dir: want os.ErrNotExist, got %v", err)
+	}
+
+	// After MkdirAll the write must succeed.
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := m.WriteAtomic("/tasks/agt-0001.md", []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic after MkdirAll: %v", err)
+	}
+}
+
+// TestMem_Append_RequiresParentDir verifies that Append returns an
+// os.ErrNotExist-wrapped error when the parent directory has not been created.
+// This matches osFS behaviour: os.OpenFile with O_APPEND fails with ENOENT
+// when the parent dir is absent.
+func TestMem_Append_RequiresParentDir(t *testing.T) {
+	m := vfs.NewMem()
+
+	// No MkdirAll — parent /tasks/comments does not exist.
+	err := m.Append("/tasks/comments/agt-0001.yml", []byte("entry\n"), 0o644)
+	if err == nil {
+		t.Fatal("Append to missing parent dir: expected error, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Append to missing parent dir: want os.ErrNotExist, got %v", err)
+	}
+
+	// After MkdirAll the append must succeed.
+	if err := m.MkdirAll("/tasks/comments", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := m.Append("/tasks/comments/agt-0001.yml", []byte("entry\n"), 0o644); err != nil {
+		t.Fatalf("Append after MkdirAll: %v", err)
+	}
+}
+
+// TestMem_Rename_RequiresDstParentDir verifies that Rename returns an
+// os.ErrNotExist-wrapped error when the destination parent directory does not
+// exist, matching real os.Rename behaviour.
+func TestMem_Rename_RequiresDstParentDir(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	src := "/tasks/src.md"
+	if err := m.WriteAtomic(src, []byte("content"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	// Destination parent /tasks/closed does not exist yet.
+	err := m.Rename(src, "/tasks/closed/src.md")
+	if err == nil {
+		t.Fatal("Rename to missing dst parent: expected error, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Rename to missing dst parent: want os.ErrNotExist, got %v", err)
+	}
+	// Source must still exist (rename was not applied).
+	if _, err := m.ReadFile(src); err != nil {
+		t.Errorf("src should still exist after failed rename: %v", err)
+	}
+
+	// After MkdirAll the rename must succeed.
+	if err := m.MkdirAll("/tasks/closed", 0o755); err != nil {
+		t.Fatalf("MkdirAll /tasks/closed: %v", err)
+	}
+	if err := m.Rename(src, "/tasks/closed/src.md"); err != nil {
+		t.Fatalf("Rename after MkdirAll: %v", err)
+	}
+}
+
+// TestMem_Rename_DirectoryUnsupported verifies that Rename returns a clear
+// error when the source is a directory.  Mem.Rename supports files only;
+// renaming a directory would silently orphan child-path keys.
+func TestMem_Rename_DirectoryUnsupported(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks/subdir", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := m.MkdirAll("/tasks/newdir", 0o755); err != nil {
+		t.Fatalf("MkdirAll /tasks/newdir: %v", err)
+	}
+
+	err := m.Rename("/tasks/subdir", "/tasks/newdir/subdir")
+	if err == nil {
+		t.Fatal("Rename of directory: expected error, got nil")
+	}
+	// The error should be distinct (not ErrNotExist — the dir exists).
+	if errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Rename of directory: should not be ErrNotExist, got %v", err)
+	}
+}
+
+// ---- Fault/durability path tests (L2) ---------------------------------------
+
+// TestMem_FaultInjection_RenameStep models the durability path exercised by
+// closeMove: (1) MkdirAll closed/, (2) WriteAtomic to closed/<id>.md,
+// (3) Rename hot/<id>.md → closed/<id>.md. A fault is injected at step 3.
+// The invariant is no-torn-state: after the failed rename both the hot-dir
+// file and the destination file are in a consistent state — the hot file is
+// still readable (the rename did not start), and any previously written
+// destination file from the WriteAtomic is intact.
+func TestMem_FaultInjection_RenameStep(t *testing.T) {
+	m := vfs.NewMem()
+
+	// Set up directories: hot/ and closed/ (as closeMove would).
+	hotDir := "/tasks"
+	closedDir := "/tasks/closed"
+	if err := m.MkdirAll(hotDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll hot: %v", err)
+	}
+	if err := m.MkdirAll(closedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll closed: %v", err)
+	}
+
+	hotPath := "/tasks/agt-0001.md"
+	closedPath := "/tasks/closed/agt-0001.md"
+	originalContent := []byte("original task content")
+	updatedContent := []byte("updated for closing")
+
+	// Step 1: hot file exists.
+	if err := m.WriteAtomic(hotPath, originalContent, 0o644); err != nil {
+		t.Fatalf("WriteAtomic hot: %v", err)
+	}
+
+	// Step 2: WriteAtomic to closed/ (mirrors what closeMove does before rename).
+	if err := m.WriteAtomic(closedPath, updatedContent, 0o644); err != nil {
+		t.Fatalf("WriteAtomic closed: %v", err)
+	}
+
+	// Step 3: inject fault on Rename and verify no-torn-state.
+	m.FailOn("Rename", hotPath, errInjected)
+	err := m.Rename(hotPath, closedPath)
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("expected injected rename error, got %v", err)
+	}
+
+	// Hot file must still be readable and intact.
+	got, err := m.ReadFile(hotPath)
+	if err != nil {
+		t.Fatalf("hot file must still exist after failed rename: %v", err)
+	}
+	if string(got) != string(originalContent) {
+		t.Errorf("hot file content = %q, want %q", got, originalContent)
+	}
+
+	// Closed file (written in step 2 before the rename) must still be intact.
+	got, err = m.ReadFile(closedPath)
+	if err != nil {
+		t.Fatalf("closed file must still be readable: %v", err)
+	}
+	if string(got) != string(updatedContent) {
+		t.Errorf("closed file content = %q, want %q", got, updatedContent)
+	}
+
+	// After the fault is consumed, a retry of the rename must succeed.
+	if err := m.Rename(hotPath, closedPath); err != nil {
+		t.Fatalf("Rename retry after fault: %v", err)
+	}
+	if _, err := m.ReadFile(hotPath); !vfs.IsNotExist(err) {
+		t.Error("hot file should be gone after successful rename")
+	}
+	got, err = m.ReadFile(closedPath)
+	if err != nil {
+		t.Fatalf("closed file after rename: %v", err)
+	}
+	if string(got) != string(originalContent) {
+		t.Errorf("closed file after rename = %q, want original content %q", got, originalContent)
 	}
 }

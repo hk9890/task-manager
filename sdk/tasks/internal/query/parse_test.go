@@ -346,10 +346,13 @@ func TestParse_Error_MalformedValue_PriorityNotInt(t *testing.T) {
 	}
 }
 
-func TestParse_Error_MalformedValue_PriorityOutOfRange(t *testing.T) {
-	pe := mustFail(t, `priority == 5`)
-	if pe.Pos < 0 {
-		t.Errorf("Pos=%d want >= 0", pe.Pos)
+// TestParse_Priority_OutOfRange verifies that priority values > 4 are now
+// accepted (QUERY-SPEC §2/§3/§4: priority is a non-negative integer with no
+// upper bound). Out-of-range bounds evaluate normally at query time.
+func TestParse_Priority_OutOfRange(t *testing.T) {
+	// priority == 5 and priority == 7 must parse without error.
+	for _, expr := range []string{`priority == 5`, `priority == 7`, `priority < 100`} {
+		mustParse(t, expr)
 	}
 }
 
@@ -548,5 +551,238 @@ func TestParseError_Implements_Error(t *testing.T) {
 	s := pe.Error()
 	if s == "" {
 		t.Error("Error() should not return empty string")
+	}
+}
+
+// ---- §3: bare ISO dates and digit-leading barewords (QUERY-SPEC §3) ---------
+
+// TestParse_BareISODate_Created verifies that a bare (unquoted) YYYY-MM-DD date
+// parses as a DateValue for a date field. QUERY-SPEC §3: "Either form may be
+// quoted or bare (an ISO timestamp is a valid bareword)."
+func TestParse_BareISODate_Created(t *testing.T) {
+	n := mustParse(t, `created > 2026-01-01`)
+	cmp, ok := n.(*query.CmpNode)
+	if !ok {
+		t.Fatalf("expected CmpNode, got %T", n)
+	}
+	if cmp.Field != "created" || cmp.Op != ">" {
+		t.Errorf("field=%q op=%q want created/>", cmp.Field, cmp.Op)
+	}
+	dv, ok := cmp.Value.(*query.DateValue)
+	if !ok {
+		t.Errorf("value: got %T %v, want DateValue", cmp.Value, cmp.Value)
+		return
+	}
+	if dv.T.UTC().Format("2006-01-02") != "2026-01-01" {
+		t.Errorf("date mismatch: got %v", dv.T)
+	}
+}
+
+// TestParse_BareISODate_Updated verifies bare date for updated field.
+func TestParse_BareISODate_Updated(t *testing.T) {
+	mustParse(t, `updated < 2026-06-01`)
+}
+
+// TestParse_BareISODate_Closed verifies bare date for closed field.
+func TestParse_BareISODate_Closed(t *testing.T) {
+	n := mustParse(t, `closed > 2026-01-01`)
+	cmp, ok := n.(*query.CmpNode)
+	if !ok {
+		t.Fatalf("expected CmpNode, got %T", n)
+	}
+	dv, ok := cmp.Value.(*query.DateValue)
+	if !ok {
+		t.Errorf("value: got %T %v, want DateValue", cmp.Value, cmp.Value)
+	}
+	_ = dv
+}
+
+// TestParse_BareTimestamp verifies that a bare full RFC3339 timestamp parses.
+func TestParse_BareTimestamp(t *testing.T) {
+	n := mustParse(t, `created > 2026-01-01T00:00:00Z`)
+	cmp, ok := n.(*query.CmpNode)
+	if !ok {
+		t.Fatalf("expected CmpNode, got %T", n)
+	}
+	dv, ok := cmp.Value.(*query.DateValue)
+	if !ok {
+		t.Fatalf("expected DateValue, got %T", cmp.Value)
+	}
+	if dv.T.Hour() != 0 {
+		t.Errorf("expected midnight, got hour=%d", dv.T.Hour())
+	}
+}
+
+// TestParse_BareTimestamp_NonMidnight verifies a bare timestamp with non-zero time.
+func TestParse_BareTimestamp_NonMidnight(t *testing.T) {
+	n := mustParse(t, `created > 2026-03-15T14:30:00Z`)
+	cmp := n.(*query.CmpNode)
+	dv, ok := cmp.Value.(*query.DateValue)
+	if !ok {
+		t.Fatalf("expected DateValue, got %T", cmp.Value)
+	}
+	if dv.T.Hour() != 14 || dv.T.Minute() != 30 {
+		t.Errorf("expected 14:30, got %v", dv.T)
+	}
+}
+
+// TestParse_DigitLeadingBareword_Label verifies that a digit-leading bareword
+// like "2024roadmap" is parsed as a single word token (not split at the first
+// non-digit). QUERY-SPEC §3: bareword = [A-Za-z0-9_:./@-]+.
+func TestParse_DigitLeadingBareword_Label(t *testing.T) {
+	n := mustParse(t, `label == 2024roadmap`)
+	cmp, ok := n.(*query.CmpNode)
+	if !ok {
+		t.Fatalf("expected CmpNode, got %T", n)
+	}
+	sv, ok := cmp.Value.(*query.StringValue)
+	if !ok {
+		t.Fatalf("expected StringValue, got %T", cmp.Value)
+	}
+	if sv.S != "2024roadmap" {
+		t.Errorf("got %q want %q", sv.S, "2024roadmap")
+	}
+}
+
+// TestParse_DigitLeadingBareword_Assignee verifies digit-leading bareword for assignee.
+func TestParse_DigitLeadingBareword_Assignee(t *testing.T) {
+	n := mustParse(t, `assignee == 3rdparty`)
+	cmp := n.(*query.CmpNode)
+	sv, ok := cmp.Value.(*query.StringValue)
+	if !ok {
+		t.Fatalf("expected StringValue, got %T", cmp.Value)
+	}
+	if sv.S != "3rdparty" {
+		t.Errorf("got %q want %q", sv.S, "3rdparty")
+	}
+}
+
+// TestParse_QuotedDate_StillWorks verifies that quoted dates still parse (regression).
+func TestParse_QuotedDate_StillWorks(t *testing.T) {
+	cases := []string{
+		`created > "2026-01-01"`,
+		`updated < "2026-06-01"`,
+		`closed > "2026-01-01"`,
+		`created == "2026-01-15T10:30:00Z"`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			n := mustParse(t, expr)
+			cmp, ok := n.(*query.CmpNode)
+			if !ok {
+				t.Fatalf("expected CmpNode, got %T", n)
+			}
+			if _, ok := cmp.Value.(*query.DateValue); !ok {
+				t.Errorf("expected DateValue, got %T", cmp.Value)
+			}
+		})
+	}
+}
+
+// TestParse_Section3_AllLiteralExamples verifies every literal date example
+// from QUERY-SPEC §3 in both bare and quoted forms.
+func TestParse_Section3_AllLiteralExamples(t *testing.T) {
+	cases := []string{
+		// quoted forms (already worked before)
+		`closed > "2026-01-01"`,
+		`created == "2026-01-15"`,
+		`created == "2026-01-15T10:30:00Z"`,
+		// bare forms (the bug fix)
+		`closed > 2026-01-01`,
+		`created == 2026-01-15`,
+		`created > 2026-01-01T00:00:00Z`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			n := mustParse(t, expr)
+			cmp, ok := n.(*query.CmpNode)
+			if !ok {
+				t.Fatalf("expected CmpNode, got %T", n)
+			}
+			if _, ok := cmp.Value.(*query.DateValue); !ok {
+				t.Errorf("expected DateValue, got %T", cmp.Value)
+			}
+		})
+	}
+}
+
+// TestParse_PureNumberIsStillNumber verifies that a pure digit sequence is still
+// treated as a number token (for priority).
+func TestParse_PureNumberIsStillNumber(t *testing.T) {
+	n := mustParse(t, `priority == 3`)
+	cmp := n.(*query.CmpNode)
+	if _, ok := cmp.Value.(*query.IntValue); !ok {
+		t.Errorf("expected IntValue for pure digit, got %T", cmp.Value)
+	}
+}
+
+// ---- at-dny.8: priority non-negative + cold-scope predicate precision -------
+
+// TestParse_Priority_AboveRange verifies that priority values > 4 now parse
+// without error (QUERY-SPEC §2/§3/§4: non-negative integer, no upper bound).
+// Out-of-range bounds evaluate normally: priority < 5 matches every issue,
+// priority == 7 matches none.
+func TestParse_Priority_AboveRange(t *testing.T) {
+	cases := []string{
+		`priority == 5`,
+		`priority == 7`,
+		`priority < 5`,
+		`priority >= 10`,
+		`priority != 99`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			mustParse(t, expr)
+		})
+	}
+}
+
+// TestParse_Priority_NegativeStillRejected verifies that a negative priority
+// literal (when somehow constructible) is still rejected. The grammar cannot
+// lex a negative literal, but the guard is kept defensively. A minus sign
+// before a number is two tokens; the parser sees a dangling minus.
+func TestParse_Priority_NegativeStillRejected(t *testing.T) {
+	// "-1" is lexed as a minus operator then "1"; the parser sees an unexpected
+	// token after the expression and returns a ParseError.
+	pe := mustFail(t, `priority == -1`)
+	if pe.Pos < 0 {
+		t.Errorf("Pos=%d want >= 0", pe.Pos)
+	}
+}
+
+// TestReferencesClosedWork_StatusEq verifies that status == "closed" is
+// recognized as referencing closed work (QUERY-SPEC §5).
+func TestReferencesClosedWork_StatusEq(t *testing.T) {
+	if !query.ReferencesClosedWork(`status == "closed"`) {
+		t.Error(`ReferencesClosedWork("status == \"closed\"") want true`)
+	}
+}
+
+// TestReferencesClosedWork_StatusNeq verifies that status != "closed" does
+// NOT count as referencing closed work (QUERY-SPEC §5: != selects active work
+// and must not auto-scan the cold partition).
+func TestReferencesClosedWork_StatusNeq(t *testing.T) {
+	if query.ReferencesClosedWork(`status != "closed"`) {
+		t.Error(`ReferencesClosedWork("status != \"closed\"") want false`)
+	}
+}
+
+// TestReferencesClosedWork_ClosedDateAnyOp verifies that any comparison
+// against the "closed" date field (any operator) counts as referencing closed
+// work (QUERY-SPEC §5).
+func TestReferencesClosedWork_ClosedDateAnyOp(t *testing.T) {
+	cases := []string{
+		`closed > "2026-01-01"`,
+		`closed < "2026-01-01"`,
+		`closed >= "2026-01-01T00:00:00Z"`,
+		`closed == "2026-01-01"`,
+		`closed != "2026-01-01"`,
+	}
+	for _, expr := range cases {
+		t.Run(expr, func(t *testing.T) {
+			if !query.ReferencesClosedWork(expr) {
+				t.Errorf("ReferencesClosedWork(%q) want true (closed date field)", expr)
+			}
+		})
 	}
 }

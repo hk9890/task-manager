@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,70 @@ func TestUnmarshalOpenIssueNoClosed(t *testing.T) {
 	}
 	if !out.Closed.IsZero() {
 		t.Errorf("expected zero closed time, got %v", out.Closed)
+	}
+}
+
+// TestMarshal_TruncatesSubSecondTimestamps verifies that Marshal truncates
+// Created/Updated/Closed to whole seconds in UTC before serialization
+// (TASK-STORAGE-SPEC §6: "truncated to whole seconds").
+// SDK callers that build an Issue from time.Now() (which has nanosecond
+// precision) must not produce non-conforming timestamps in the output.
+func TestMarshal_TruncatesSubSecondTimestamps(t *testing.T) {
+	// Construct a time with sub-second precision and a non-UTC location.
+	subSecond := time.Date(2026, 6, 5, 14, 30, 45, 123456789, time.UTC)
+	closedSubSecond := time.Date(2026, 6, 6, 9, 0, 0, 999999999, time.UTC)
+
+	iss := &Issue{
+		ID:       "tst-0001",
+		Title:    "ts truncation test",
+		Status:   StatusClosed,
+		Type:     TypeTask,
+		Priority: 2,
+		Created:  subSecond,
+		Updated:  subSecond,
+		Closed:   closedSubSecond,
+	}
+
+	data, err := Marshal(iss)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Each timestamp line must match the whole-second UTC pattern
+	// (TASK-STORAGE-SPEC §4.3: "^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$").
+	tsPattern := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
+
+	for _, line := range strings.Split(string(data), "\n") {
+		for _, field := range []string{"created:", "updated:", "closed:"} {
+			if strings.HasPrefix(strings.TrimSpace(line), field) {
+				parts := strings.SplitN(line, ": ", 2)
+				if len(parts) != 2 {
+					t.Errorf("unexpected line format: %q", line)
+					continue
+				}
+				tsStr := strings.TrimSpace(parts[1])
+				if !tsPattern.MatchString(tsStr) {
+					t.Errorf("field %s timestamp %q does not match whole-second UTC pattern", field, tsStr)
+				}
+			}
+		}
+	}
+
+	// Round-trip: parsed timestamps must equal whole-second values.
+	out, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	wantCreated := time.Date(2026, 6, 5, 14, 30, 45, 0, time.UTC)
+	wantClosed := time.Date(2026, 6, 6, 9, 0, 0, 0, time.UTC)
+	if !out.Created.Equal(wantCreated) {
+		t.Errorf("Created = %v, want %v (truncated)", out.Created, wantCreated)
+	}
+	if !out.Updated.Equal(wantCreated) {
+		t.Errorf("Updated = %v, want %v (truncated)", out.Updated, wantCreated)
+	}
+	if !out.Closed.Equal(wantClosed) {
+		t.Errorf("Closed = %v, want %v (truncated)", out.Closed, wantClosed)
 	}
 }
 

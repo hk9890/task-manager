@@ -39,6 +39,7 @@ func compileExpr(expr string) (query.Predicate, error) {
 //   - "type"     → *StringValue(string(iss.Type))
 //   - "priority" → *IntValue(iss.Priority)
 //   - "assignee" → *StringValue(iss.Assignee)
+//   - "creator"  → *StringValue(iss.Creator)
 //   - "parent"   → *StringValue(iss.Parent)
 //   - "label"    → *StringSetValue{Members: iss.Labels}
 //   - "text"     → *StringValue(lower(id+" "+title+" "+description))
@@ -72,6 +73,8 @@ func (r *issueRow) Field(name string) (query.Value, bool) {
 		return &query.IntValue{N: iss.Priority}, true
 	case "assignee":
 		return &query.StringValue{S: iss.Assignee}, true
+	case "creator":
+		return &query.StringValue{S: iss.Creator}, true
 	case "parent":
 		return &query.StringValue{S: iss.Parent}, true
 	case "label":

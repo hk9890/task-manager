@@ -68,6 +68,22 @@ jobs:
         working-directory: sdk
         run: CGO_ENABLED=1 go test -race -tags integration ./...
 
+      # ── bench module (standalone; excluded from root/sdk build) ──────────
+
+      - name: build (bench)
+        working-directory: bench
+        run: go build ./...
+
+      - name: vet (bench)
+        working-directory: bench
+        run: go vet ./...
+
+      # ── fuzz seed corpora (no-ops if no fuzz targets exist yet) ──────────
+
+      - name: fuzz seeds (sdk)
+        working-directory: sdk
+        run: CGO_ENABLED=1 go test -run=Fuzz ./...
+
       # ── binary ────────────────────────────────────────────────────────────
 
       - name: build atctl

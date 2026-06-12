@@ -119,8 +119,6 @@ func (l *lexer) next() token {
 		return token{Kind: tokGT, Val: ">", Pos: start}
 	case ch == '"':
 		return l.lexString(start)
-	case isDigit(ch):
-		return l.lexNumber(start)
 	case isWordChar(ch):
 		return l.lexWord(start)
 	default:
@@ -163,18 +161,25 @@ func (l *lexer) lexString(start int) token {
 	return token{Kind: tokError, Pos: start}
 }
 
-func (l *lexer) lexNumber(start int) token {
-	for l.pos < len(l.src) && isDigit(l.src[l.pos]) {
-		l.pos++
-	}
-	return token{Kind: tokNumber, Val: l.src[start:l.pos], Pos: start}
-}
-
 func (l *lexer) lexWord(start int) token {
 	for l.pos < len(l.src) && isWordChar(l.src[l.pos]) {
 		l.pos++
 	}
-	return token{Kind: tokWord, Val: l.src[start:l.pos], Pos: start}
+	val := l.src[start:l.pos]
+	// A run that is entirely decimal digits is a number token; anything else
+	// (including ISO dates like "2026-01-01" or mixed barewords like
+	// "2024roadmap") is a word token per QUERY-SPEC §3.
+	allDigits := true
+	for i := 0; i < len(val); i++ {
+		if !isDigit(val[i]) {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return token{Kind: tokNumber, Val: val, Pos: start}
+	}
+	return token{Kind: tokWord, Val: val, Pos: start}
 }
 
 func isWhitespace(b byte) bool {

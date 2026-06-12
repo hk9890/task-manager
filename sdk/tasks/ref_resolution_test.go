@@ -259,14 +259,14 @@ func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Detail: %v", err)
 	}
-	if len(d.BlockedBy) != 1 {
-		t.Fatalf("Detail.BlockedBy = %v, want 1 entry", d.BlockedBy)
+	if len(d.BlockedByRefs) != 1 {
+		t.Fatalf("Detail.BlockedByRefs = %v, want 1 entry", d.BlockedByRefs)
 	}
-	if d.BlockedBy[0].ID != blocker.ID {
-		t.Errorf("BlockedBy[0].ID = %q, want %q", d.BlockedBy[0].ID, blocker.ID)
+	if d.BlockedByRefs[0].ID != blocker.ID {
+		t.Errorf("BlockedByRefs[0].ID = %q, want %q", d.BlockedByRefs[0].ID, blocker.ID)
 	}
-	if d.BlockedBy[0].Status != StatusClosed {
-		t.Errorf("BlockedBy[0].Status = %q, want closed", d.BlockedBy[0].Status)
+	if d.BlockedByRefs[0].Status != StatusClosed {
+		t.Errorf("BlockedByRefs[0].Status = %q, want closed", d.BlockedByRefs[0].Status)
 	}
 }
 
@@ -292,14 +292,14 @@ func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Detail: %v", err)
 	}
-	if len(d.Related) != 1 {
-		t.Fatalf("Detail.Related = %v, want 1 entry", d.Related)
+	if len(d.RelatedRefs) != 1 {
+		t.Fatalf("Detail.RelatedRefs = %v, want 1 entry", d.RelatedRefs)
 	}
-	if d.Related[0].ID != related.ID {
-		t.Errorf("Related[0].ID = %q, want %q", d.Related[0].ID, related.ID)
+	if d.RelatedRefs[0].ID != related.ID {
+		t.Errorf("RelatedRefs[0].ID = %q, want %q", d.RelatedRefs[0].ID, related.ID)
 	}
-	if d.Related[0].Status != StatusClosed {
-		t.Errorf("Related[0].Status = %q, want closed", d.Related[0].Status)
+	if d.RelatedRefs[0].Status != StatusClosed {
+		t.Errorf("RelatedRefs[0].Status = %q, want closed", d.RelatedRefs[0].Status)
 	}
 }
 

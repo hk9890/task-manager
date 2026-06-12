@@ -28,6 +28,7 @@ type issueDTO struct {
 	Type        string     `json:"type"`
 	Priority    int        `json:"priority"`
 	Assignee    string     `json:"assignee,omitempty"`
+	Creator     string     `json:"creator,omitempty"`
 	Labels      []string   `json:"labels,omitempty"`
 	Parent      string     `json:"parent,omitempty"`
 	BlockedBy   []string   `json:"blocked_by,omitempty"`
@@ -68,7 +69,7 @@ type detailDTO struct {
 func toIssueDTO(i *tasks.Issue) issueDTO {
 	d := issueDTO{
 		ID: i.ID, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
-		Priority: i.Priority, Assignee: i.Assignee, Labels: i.Labels,
+		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator, Labels: i.Labels,
 		Parent: i.Parent, BlockedBy: i.BlockedBy, Related: i.Related,
 		Created: i.Created, Updated: i.Updated, CloseReason: i.CloseReason,
 	}
@@ -98,8 +99,8 @@ func toDetailDTO(d *tasks.Detail) detailDTO {
 	out := detailDTO{
 		issueDTO:      toIssueDTO(&d.Issue),
 		Description:   d.Description,
-		BlockedByRefs: toRefDTOs(d.BlockedBy),
-		RelatedRefs:   toRefDTOs(d.Related),
+		BlockedByRefs: toRefDTOs(d.BlockedByRefs),
+		RelatedRefs:   toRefDTOs(d.RelatedRefs),
 		Blocks:        toRefDTOs(d.Blocks),
 		Children:      toRefDTOs(d.Children),
 	}
@@ -149,9 +150,9 @@ func printDetail(d *tasks.Detail) {
 	if d.ParentRef != nil {
 		fmt.Printf("  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
 	}
-	printRefLine("blocked by", d.BlockedBy)
+	printRefLine("blocked by", d.BlockedByRefs)
 	printRefLine("blocks", d.Blocks)
-	printRefLine("related", d.Related)
+	printRefLine("related", d.RelatedRefs)
 	printRefLine("children", d.Children)
 	fmt.Printf("  created:  %s\n", d.Created.Format(time.RFC3339))
 	fmt.Printf("  updated:  %s\n", d.Updated.Format(time.RFC3339))
