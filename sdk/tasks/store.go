@@ -339,13 +339,13 @@ func (s *Store) allClosed() ([]*Issue, error) {
 	return issues, nil
 }
 
-// nextID allocates the next sequential ID by scanning existing files for the
-// highest number and adding one. There is no counter file, so the only way two
-// IDs collide is concurrent creation on different git branches.
+// nextID allocates a fresh, collision-resistant ID: a random base36 token (see
+// newIDFromNames in ids.go). There is no counter file and no high-water scan, so
+// issues created in parallel on different branches no longer collide on merge.
 //
-// The computation is delegated to the pure nextIDFromNames function in ids.go;
-// this method is responsible for reading BOTH the hot directory AND the closed/
-// subdirectory via the vfs seam, then passing the union to nextIDFromNames.
+// This method reads BOTH the hot directory AND the closed/ subdirectory via the
+// vfs seam and passes the union to newIDFromNames, which retries against those
+// existing names as defence in depth so an ID never collides within one store.
 // If closed/ does not yet exist, it is treated as empty (TASK-STORAGE-SPEC §3).
 func (s *Store) nextID() (string, error) {
 	hotEntries, err := s.fs.ReadDir(s.dir)
@@ -366,7 +366,26 @@ func (s *Store) nextID() (string, error) {
 		names = append(names, e.Name())
 	}
 
-	return nextIDFromNames(s.cfg.Prefix, names), nil
+	return newIDFromNames(s.cfg.Prefix, names), nil
+}
+
+// validateNewID checks a caller-supplied issue ID (CreateInput.ID): it must
+// match the ID grammar, carry the store prefix, and not already exist in any
+// partition. Auto-allocated IDs skip this — they are well-formed by
+// construction and unique by allocation.
+func (s *Store) validateNewID(id string) error {
+	if len(id) > maxIDLen || !idRe.MatchString(id) {
+		return invalid("id", "%q is not a valid issue ID", id)
+	}
+	if !strings.HasPrefix(id, s.cfg.Prefix+"-") {
+		return invalid("id", "%q does not carry the store prefix %q", id, s.cfg.Prefix)
+	}
+	if _, err := s.Get(id); err == nil {
+		return fmt.Errorf("%w: %s", ErrAlreadyExists, id)
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return nil
 }
 
 // writeIssue atomically writes an issue to disk via the FS seam. The
@@ -420,6 +439,12 @@ func (s *Store) withLock(fn func() error) error {
 // CreateInput describes a new issue. Zero values fall back to sensible
 // defaults (TypeTask, PriorityDefault, StatusOpen).
 type CreateInput struct {
+	// ID, when non-empty, is used verbatim instead of allocating a fresh one.
+	// It must carry the store prefix, match the ID grammar, and not already
+	// exist. This is an escape hatch for import/migration (and test fixtures)
+	// that need to preserve known IDs; normal callers leave it empty and let
+	// the store allocate a collision-resistant ID.
+	ID          string
 	Title       string
 	Description string
 	Type        Type
@@ -436,8 +461,13 @@ type CreateInput struct {
 func (s *Store) Create(in CreateInput) (*Issue, error) {
 	var created *Issue
 	err := s.withLock(func() error {
-		id, err := s.nextID()
-		if err != nil {
+		id := strings.TrimSpace(in.ID)
+		if id == "" {
+			var err error
+			if id, err = s.nextID(); err != nil {
+				return err
+			}
+		} else if err := s.validateNewID(id); err != nil {
 			return err
 		}
 		now := s.now()

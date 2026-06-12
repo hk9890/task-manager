@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,16 +76,49 @@ func TestOpenNoStore(t *testing.T) {
 	}
 }
 
-func TestCreateAllocatesSequentialIDs(t *testing.T) {
+func TestCreateAllocatesUniqueIDs(t *testing.T) {
 	s := newTestStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "first"})
 	b := mustCreate(t, s, CreateInput{Title: "second"})
-	if a.ID != "agt-0001" || b.ID != "agt-0002" {
-		t.Fatalf("ids = %q, %q", a.ID, b.ID)
+	for _, id := range []string{a.ID, b.ID} {
+		if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+			t.Errorf("id = %q, want a valid agt- prefixed ID", id)
+		}
+	}
+	if a.ID == b.ID {
+		t.Fatalf("allocated IDs must be unique, both = %q", a.ID)
 	}
 	// Defaults applied.
 	if a.Type != TypeTask || a.Priority != PriorityDefault || a.Status != StatusOpen {
 		t.Errorf("defaults wrong: %+v", a)
+	}
+}
+
+// TestCreateExplicitID covers the CreateInput.ID escape hatch (at-2fb): a
+// caller-supplied ID is honoured when valid, and rejected when malformed,
+// carrying the wrong prefix, or already in use.
+func TestCreateExplicitID(t *testing.T) {
+	s := newTestStore(t)
+
+	// Valid explicit ID (incl. legacy numeric form) is used verbatim.
+	got := mustCreate(t, s, CreateInput{ID: "agt-0042", Title: "pinned"})
+	if got.ID != "agt-0042" {
+		t.Fatalf("explicit ID not honoured: got %q, want agt-0042", got.ID)
+	}
+	if _, err := s.Get("agt-0042"); err != nil {
+		t.Fatalf("Get(agt-0042): %v", err)
+	}
+
+	// Duplicate is rejected.
+	if _, err := s.Create(CreateInput{ID: "agt-0042", Title: "dup"}); !errors.Is(err, ErrAlreadyExists) {
+		t.Errorf("duplicate explicit ID: err = %v, want ErrAlreadyExists", err)
+	}
+
+	// Wrong prefix and malformed IDs are rejected.
+	for _, bad := range []string{"xyz-0001", "agt_0001", "AGT-0001", "agt-", "nodash"} {
+		if _, err := s.Create(CreateInput{ID: bad, Title: "bad"}); err == nil {
+			t.Errorf("explicit ID %q should have been rejected", bad)
+		}
 	}
 }
 

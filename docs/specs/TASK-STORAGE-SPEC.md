@@ -60,22 +60,27 @@ Rules:
 
 ## 3. Identifiers
 
-- **Format:** `<prefix>-<NNNN>`, e.g. `dtt-0042`. `NNNN` is decimal, zero-padded to
-  at least four digits, and grows past four when needed (`dtt-12345`).
-- **Full pattern:** `^[a-z][a-z0-9]*-[0-9]{4,}$`, max length 64.
+- **Format:** `<prefix>-<token>`, e.g. `dtt-3k9f2x`. `token` is a random base36
+  string (`[0-9a-z]`), 6 characters by default. Legacy sequential IDs
+  (`<prefix>-0042`, zero-padded decimal) created under the previous scheme
+  remain valid and resolvable.
+- **Full pattern:** `^[a-z][a-z0-9]*-[0-9a-z]+$`, max length 64.
 - **Prefix:** matches `^[a-z][a-z0-9]*$`, max length 32; declared in
   `config.yaml`. Every issue ID in the store shares it.
 - **Canonical and stable.** An ID never changes. It appears in three places that
-  must agree: the filename (`dtt-0042.md`), the frontmatter `id` field, and any
+  must agree: the filename (`dtt-3k9f2x.md`), the frontmatter `id` field, and any
   references to it from other issues.
-- **Allocation:** `max(existing) + 1`, where `existing` is scanned across **all
-  partitions of the store** — the hot directory **and** `closed/` (and any
-  future cold partition). There is no counter file (it would be the worst git
-  merge hotspot). Scanning closed issues for the high-water mark is mandatory:
-  skipping it re-issues an ID already taken by a closed task.
-- **Collisions:** two branches creating issues in parallel can pick the same
-  number and collide on merge. This is accepted for the mostly-single-writer
-  workflow; detection/renumber is a tooling concern, not a storage one.
+- **Allocation:** a random base36 token. Existing IDs are scanned across **all
+  partitions of the store** — the hot directory **and** `closed/` (and any future
+  cold partition) — and used to reject duplicates, regenerating on the
+  (astronomically unlikely) event of a collision. There is no counter file (it
+  would be the worst git merge hotspot) and no high-water scan. A caller may also
+  supply an explicit ID (import/migration) provided it matches this grammar,
+  carries the prefix, and is not already in use.
+- **Collisions:** the random token removes the parallel-branch merge-collision
+  class by construction. Two branches each allocate independently from a
+  ~2×10⁹ keyspace, so they effectively never pick the same ID on merge — no
+  renumber/doctor tooling is required.
 
 Hierarchy is expressed by the `parent` **field**, not by the ID. IDs are flat;
 an epic is just an issue that others name as `parent`.
@@ -166,7 +171,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 
 | Field | Constraint |
 |---|---|
-| `id` | `^[a-z][a-z0-9]*-[0-9]{4,}$`, max 64; equals the filename stem. |
+| `id` | `^[a-z][a-z0-9]*-[0-9a-z]+$`, max 64; equals the filename stem. |
 | `title` | 1–200 chars after trim; single line (no `LF`); no control characters. |
 | `status` | exactly one of `open`, `in_progress`, `blocked`, `closed`. |
 | `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`. |

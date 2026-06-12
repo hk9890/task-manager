@@ -6,6 +6,7 @@ package tasks_test
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
@@ -124,11 +125,11 @@ func TestStoretest_L3_EquivalentToMem(t *testing.T) {
 	}
 }
 
-// TestNextID_L3_HighWaterAcrossClosedPartition is the L3 regression test for
-// at-zib.2.1: a high-numbered file placed directly in the closed/ subdirectory
-// (real temp dir, osFS) must be included in the high-water mark so the next
-// Create allocates a strictly greater ID.
-func TestNextID_L3_HighWaterAcrossClosedPartition(t *testing.T) {
+// TestNextID_L3_ScansClosedPartition is the L3 regression test for
+// at-zib.2.1 / at-2fb: a file placed directly in the closed/ subdirectory (real
+// temp dir, osFS) must be folded into nextID's dedup set so the next Create
+// reads closed/ without error and never re-issues that closed ID.
+func TestNextID_L3_ScansClosedPartition(t *testing.T) {
 	root := t.TempDir()
 	s, err := tasks.Init(root, "tst")
 	if err != nil {
@@ -147,14 +148,17 @@ func TestNextID_L3_HighWaterAcrossClosedPartition(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// The hot directory has no active issues. Without the fix nextID returns
-	// tst-0001; with the fix it must return tst-0100.
+	// The hot directory has no active issues; closed/ has tst-0099. Create must
+	// read closed/ without error and allocate a fresh ID, never the closed one.
 	iss, err := s.Create(tasks.CreateInput{Title: "new issue after closed"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if iss.ID != "tst-0100" {
-		t.Errorf("Create().ID = %q, want tst-0100 (high-water from closed/ not respected)", iss.ID)
+	if !strings.HasPrefix(iss.ID, "tst-") || len(iss.ID) <= len("tst-") {
+		t.Errorf("Create().ID = %q, want a tst- prefixed ID", iss.ID)
+	}
+	if iss.ID == "tst-0099" {
+		t.Errorf("Create re-issued the closed ID %q", iss.ID)
 	}
 }
 

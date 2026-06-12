@@ -259,7 +259,7 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 	}
 	fmt.Printf("   All() over C returned %d issues; closed leaked in: %v (subdir is skipped, no SDK change)\n", len(all), leaked)
 	if iss, err := open(rootC).Create(tasks.CreateInput{Title: "probe"}); err == nil {
-		fmt.Printf("   nextID saw only %d hot files and allocated %s -> ID-REUSE RISK vs closed/ (see bug at-zib.2.1)\n", nC, iss.ID)
+		fmt.Printf("   nextID saw %d hot files and allocated %s -> collision-resistant token, no closed/ reuse risk (at-2fb)\n", nC, iss.ID)
 	}
 
 	// sidecar append vs whole-file rewrite

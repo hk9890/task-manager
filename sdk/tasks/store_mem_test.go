@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +41,8 @@ func TestMemStore_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if iss.ID != "agt-0001" {
-		t.Errorf("id = %q, want agt-0001", iss.ID)
+	if !strings.HasPrefix(iss.ID, "agt-") || !idRe.MatchString(iss.ID) {
+		t.Errorf("id = %q, want a valid agt- prefixed ID", iss.ID)
 	}
 
 	got, err := s.Get(iss.ID)
@@ -97,13 +98,14 @@ func TestMemStore_All(t *testing.T) {
 	}
 }
 
-// TestNextID_HighWaterAcrossClosedPartition is the regression test for the
-// nextID bug (at-zib.2.1): when a high-numbered issue file exists in the
-// closed/ subdirectory, the next Create must allocate a strictly greater ID
-// rather than re-issuing one already in use.
+// TestNextID_ScansClosedPartition is the regression test for the nextID bug
+// (at-zib.2.1), updated for collision-resistant IDs (at-2fb): closed/ is still
+// scanned and folded into the dedup set, so an ID already living in closed/ is
+// never re-issued. (Random tokens make the original high-water collision class
+// structurally impossible; this guards the closed/ read path and dedup wiring.)
 //
 // This is an L2 test: it uses vfs.Mem so no real disk is touched.
-func TestNextID_HighWaterAcrossClosedPartition(t *testing.T) {
+func TestNextID_ScansClosedPartition(t *testing.T) {
 	m := vfs.NewMem()
 	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
 		t.Fatalf("MkdirAll hot: %v", err)
@@ -127,22 +129,26 @@ func TestNextID_HighWaterAcrossClosedPartition(t *testing.T) {
 		return tick
 	}
 
-	// The hot directory has no issues — but closed/ has agt-0042. The next
-	// allocated ID must be strictly greater than 42.
+	// The hot directory has no issues; closed/ has agt-0042. nextID must read
+	// closed/ without error and return a valid ID that does not re-use agt-0042.
 	id, err := s.nextID()
 	if err != nil {
 		t.Fatalf("nextID: %v", err)
 	}
-	if id != "agt-0043" {
-		t.Errorf("nextID = %q, want agt-0043 (high-water from closed/ not respected)", id)
+	if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+		t.Errorf("nextID = %q, want a valid agt- prefixed ID", id)
+	}
+	if id == "agt-0042" {
+		t.Errorf("nextID re-issued the closed ID %q", id)
 	}
 }
 
-// TestNextID_HighWaterClosedDirAbsent verifies that nextID works correctly
-// when the closed/ directory does not exist yet (treat absent as empty).
+// TestNextID_ClosedDirAbsent verifies that nextID works correctly when the
+// closed/ directory does not exist yet (treat absent as empty) and never
+// re-issues an ID already present in the hot dir.
 //
 // This is an L2 test: uses vfs.Mem.
-func TestNextID_HighWaterClosedDirAbsent(t *testing.T) {
+func TestNextID_ClosedDirAbsent(t *testing.T) {
 	m := vfs.NewMem()
 	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -164,16 +170,20 @@ func TestNextID_HighWaterClosedDirAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nextID: %v", err)
 	}
-	if id != "agt-0006" {
-		t.Errorf("nextID = %q, want agt-0006", id)
+	if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+		t.Errorf("nextID = %q, want a valid agt- prefixed ID", id)
+	}
+	if id == "agt-0005" {
+		t.Errorf("nextID re-issued the existing ID %q", id)
 	}
 }
 
-// TestNextID_HotHigherThanClosed verifies that when the hot dir has a higher
-// number than closed/, the hot dir wins.
+// TestNextID_BothPartitionsPopulated verifies that nextID reads both the hot
+// dir and closed/ without error and returns a valid ID that collides with
+// neither existing entry.
 //
 // This is an L2 test: uses vfs.Mem.
-func TestNextID_HotHigherThanClosed(t *testing.T) {
+func TestNextID_BothPartitionsPopulated(t *testing.T) {
 	m := vfs.NewMem()
 	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -201,8 +211,11 @@ func TestNextID_HotHigherThanClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nextID: %v", err)
 	}
-	if id != "agt-0101" {
-		t.Errorf("nextID = %q, want agt-0101 (hot dir wins)", id)
+	if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+		t.Errorf("nextID = %q, want a valid agt- prefixed ID", id)
+	}
+	if id == "agt-0100" || id == "agt-0042" {
+		t.Errorf("nextID re-issued an existing ID %q", id)
 	}
 }
 

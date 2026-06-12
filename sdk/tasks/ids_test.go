@@ -1,111 +1,86 @@
 package tasks
 
 import (
+	"strings"
 	"testing"
 )
 
-// TestNextIDFromNames covers the pure high-water computation over a name list.
-// This is an L1 test: no FS, no store, just the function.
-func TestNextIDFromNames(t *testing.T) {
+// TestIDStem covers the pure stem parser for both legacy numeric IDs and the
+// new base36 tokens. L1: no FS, no store.
+func TestIDStem(t *testing.T) {
 	tests := []struct {
-		name   string
-		prefix string
-		names  []string
-		want   string
+		name     string
+		prefix   string
+		input    string
+		wantStem string
+		wantOK   bool
 	}{
-		{
-			name:   "empty list allocates first",
-			prefix: "agt",
-			names:  nil,
-			want:   "agt-0001",
-		},
-		{
-			name:   "single entry",
-			prefix: "agt",
-			names:  []string{"agt-0001.md"},
-			want:   "agt-0002",
-		},
-		{
-			name:   "high water mark across gap",
-			prefix: "agt",
-			names:  []string{"agt-0001.md", "agt-0005.md", "agt-0003.md"},
-			want:   "agt-0006",
-		},
-		{
-			name:   "ignores different prefix",
-			prefix: "agt",
-			names:  []string{"agt-0002.md", "other-0099.md"},
-			want:   "agt-0003",
-		},
-		{
-			name:   "ignores malformed names (no number)",
-			prefix: "agt",
-			names:  []string{"agt-0001.md", "agt-badnum.md", "agt-.md"},
-			want:   "agt-0002",
-		},
-		{
-			name:   "ignores directories and hidden files",
-			prefix: "agt",
-			names:  []string{"agt-0001.md", "agt-0002", ".lock"},
-			want:   "agt-0002",
-		},
-		{
-			name:   "names without extension skipped",
-			prefix: "agt",
-			names:  []string{"agt-0010"},
-			want:   "agt-0001",
-		},
-		{
-			name:   "different prefix",
-			prefix: "xyz",
-			names:  []string{"xyz-0007.md", "xyz-0002.md"},
-			want:   "xyz-0008",
-		},
-		{
-			name:   "handles closed/ subdir entries if names include them",
-			prefix: "agt",
-			// store.go only passes the top-level .tasks/ dir entries; closed/
-			// sub-entries would not appear but the function should still be robust.
-			names: []string{"agt-0003.md", "agt-0001.md"},
-			want:  "agt-0004",
-		},
+		{"legacy numeric", "agt", "agt-0042.md", "agt-0042", true},
+		{"base36 token", "agt", "agt-3k9f2x.md", "agt-3k9f2x", true},
+		{"wrong prefix", "agt", "xyz-0001.md", "", false},
+		{"no extension", "agt", "agt-0001", "", false},
+		{"empty token after dash", "agt", "agt-.md", "", false},
+		{"hidden file", "agt", ".lock", "", false},
+		{"prefix substring is not a match", "ag", "agt-0001.md", "", false},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := nextIDFromNames(tc.prefix, tc.names)
-			if got != tc.want {
-				t.Errorf("nextIDFromNames(%q, %v) = %q; want %q", tc.prefix, tc.names, got, tc.want)
+			stem, ok := idStem(tc.prefix, tc.input)
+			if ok != tc.wantOK || stem != tc.wantStem {
+				t.Errorf("idStem(%q, %q) = (%q, %v); want (%q, %v)",
+					tc.prefix, tc.input, stem, ok, tc.wantStem, tc.wantOK)
 			}
 		})
 	}
 }
 
-// TestParseIDNum exercises the low-level numeric parser.
-func TestParseIDNum(t *testing.T) {
-	tests := []struct {
-		name   string
-		prefix string
-		input  string
-		wantN  int
-		wantOK bool
-	}{
-		{"valid", "agt", "agt-0042.md", 42, true},
-		{"leading zeros", "agt", "agt-0001.md", 1, true},
-		{"wrong prefix", "agt", "xyz-0001.md", 0, false},
-		{"no extension", "agt", "agt-0001", 0, false},
-		{"non-numeric suffix", "agt", "agt-abc.md", 0, false},
-		{"empty suffix after dash", "agt", "agt-.md", 0, false},
-		{"hidden file", "agt", ".lock", 0, false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			n, ok := parseIDNum(tc.prefix, tc.input)
-			if ok != tc.wantOK || n != tc.wantN {
-				t.Errorf("parseIDNum(%q, %q) = (%d, %v); want (%d, %v)",
-					tc.prefix, tc.input, n, ok, tc.wantN, tc.wantOK)
+// TestRandToken checks length and alphabet.
+func TestRandToken(t *testing.T) {
+	for _, n := range []int{1, 6, 12} {
+		tok := randToken(n)
+		if len(tok) != n {
+			t.Errorf("randToken(%d) length = %d, want %d", n, len(tok), n)
+		}
+		for _, c := range tok {
+			if !strings.ContainsRune(idAlphabet, c) {
+				t.Errorf("randToken(%d) = %q contains non-base36 rune %q", n, tok, c)
 			}
-		})
+		}
 	}
+}
+
+// TestNewIDFromNames covers the collision-resistant allocator: every ID is
+// well-formed, carries the prefix, and never collides with an existing entry
+// (including legacy numeric IDs already on disk — back-compat).
+func TestNewIDFromNames(t *testing.T) {
+	t.Run("format and prefix", func(t *testing.T) {
+		id := newIDFromNames("agt", nil)
+		if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+			t.Errorf("newIDFromNames(agt, nil) = %q, want a valid agt- prefixed ID", id)
+		}
+		if want := len("agt-") + idTokenLen; len(id) != want {
+			t.Errorf("len(%q) = %d, want %d", id, len(id), want)
+		}
+	})
+
+	t.Run("never collides with existing names", func(t *testing.T) {
+		// Mix of legacy numeric and base36 entries; generate many and assert
+		// none reuse an existing stem and all are unique among themselves.
+		existing := []string{"agt-0001.md", "agt-0002.md", "agt-3k9f2x.md", "other-0099.md"}
+		taken := map[string]bool{"agt-0001": true, "agt-0002": true, "agt-3k9f2x": true}
+		seen := map[string]bool{}
+		for i := 0; i < 1000; i++ {
+			id := newIDFromNames("agt", existing)
+			if taken[id] {
+				t.Fatalf("newIDFromNames re-issued existing ID %q", id)
+			}
+			if seen[id] {
+				t.Fatalf("newIDFromNames returned duplicate %q within run", id)
+			}
+			seen[id] = true
+			if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {
+				t.Fatalf("newIDFromNames produced malformed ID %q", id)
+			}
+		}
+	})
 }
