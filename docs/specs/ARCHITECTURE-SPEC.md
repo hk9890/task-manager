@@ -166,6 +166,11 @@ Reads take a fresh snapshot of the directory and never hold the lock.
   parallel-branch ID collisions that sequential numbering caused.
 - **Hot/cold separation.** Active issues and closed history are physically
   separated so the common path stays proportional to open work, not total history.
+  The partition axis is **open-vs-closed only** — deferred or long-parked issues
+  stay in the hot set; there is deliberately no `parked/` partition (decision
+  at-zib.2.5). The hot scan is O(open) at ~13µs/file, so it degrades gracefully
+  even at a few thousand hot issues; a status-based split would add routing
+  complexity for no correctness benefit.
 
 ---
 
