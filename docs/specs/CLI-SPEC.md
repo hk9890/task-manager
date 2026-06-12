@@ -165,6 +165,55 @@ Create a new issue and allocate its ID.
 
 - **Output:** the new ID (`{"id"}` in JSON).
 
+### `taskmgr import [--file <path>] [--batch]`
+
+Import a complete, externally-sourced issue **verbatim** — its final status
+(including `closed`), original `created`/`updated`/`closed` timestamps, labels,
+edges, and full comment log — in a single validated write. Unlike `create` (which
+authors a new, open issue stamped with the store clock), `import` is a direct
+write of an end-state: it is the low-level primitive a migration adapter (beads,
+Jira, …) drives. All source-specific mapping lives in the adapter; taskmgr only
+validates the envelope against the data model and writes it.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--file <path>` | `-` | Read the import envelope from a file (`-` = stdin). |
+| `--batch` | off | Input is a stream of envelopes (NDJSON / concatenated JSON); each is imported independently (best-effort). |
+
+The envelope is a JSON object (timestamps RFC3339):
+
+```jsonc
+{
+  "source_id": "bd-1",            // optional; echoed in the result, not stored
+  "id": "at-keepme",              // optional caller-supplied taskmgr ID (else allocated)
+  "title": "…", "type": "bug", "priority": 1,
+  "status": "closed",             // any valid status; default open
+  "assignee": "…", "creator": "…",
+  "labels": ["beads:bd-1"],
+  "parent": "<id>", "blocked_by": ["<id>"], "related": ["<id>"],
+  "created_at": "2025-01-02T10:00:00Z",
+  "updated_at": "2025-03-01T09:00:00Z",
+  "closed_at": "2025-03-01T09:00:00Z", "close_reason": "fixed",
+  "description": "markdown body",
+  "comments": [{"author": "alice", "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
+}
+```
+
+- **Edges** (`parent`/`blocked_by`/`related`) are taskmgr IDs that **must already
+  exist** — `import` enforces referential integrity and acyclicity exactly like
+  `create`. Import in dependency order and translate foreign IDs to taskmgr IDs in
+  the adapter.
+- **Timestamps** are preserved as given. An unset `updated_at` inherits
+  `created_at`; an unset `created_at` inherits the store clock. A `closed` status
+  requires (or defaults `closed_at` to `updated_at`).
+- **Validation is strict and atomic**: the whole envelope — fields, references,
+  and every comment — is validated before anything is written, so control
+  characters, bad enums, or dangling edges reject the record wholesale. The adapter
+  is responsible for sanitizing source data to fit the model.
+- **Output:** `{"source_id", "id"}` for a single import; with `--batch`, a JSON
+  array of `{"source_id", "id", "error"}` (one per record) and a **non-zero exit
+  if any record failed** (the others still land).
+
 ### `taskmgr update <id> [options]`
 
 Apply a partial update. Only the flags you pass change; everything else is left
@@ -304,6 +353,7 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 taskmgr init     [--prefix X]
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
+taskmgr import   [--file <path>] [--batch]   # JSON envelope on stdin/file
 taskmgr show     <id>
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
