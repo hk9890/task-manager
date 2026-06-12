@@ -457,9 +457,9 @@ func TestCriteria_Build_UnknownType_ValidationError(t *testing.T) {
 
 func TestCriteria_Build_Combination(t *testing.T) {
 	expr, err := tasks.Criteria{
-		Statuses:  []tasks.Status{tasks.StatusOpen},
-		Types:     []tasks.Type{tasks.TypeBug},
-		Assignee:  "alice",
+		Statuses:    []tasks.Status{tasks.StatusOpen},
+		Types:       []tasks.Type{tasks.TypeBug},
+		Assignee:    "alice",
 		PriorityMax: ptr(2),
 	}.Build()
 	if err != nil {
@@ -746,8 +746,8 @@ func TestFind_CriteriaAndExpr_IdenticalResults(t *testing.T) {
 // List, not from inspecting the Criteria struct.
 func TestFind_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
 	s := storetest.New(t).
-		Issue("tst-0001").               // hot (open)
-		Closed("tst-0002").              // cold (closed)
+		Issue("tst-0001").  // hot (open)
+		Closed("tst-0002"). // cold (closed)
 		Mem()
 
 	// Find only closed issues. No IncludeClosed override needed — the expression
@@ -780,8 +780,8 @@ func TestFind_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
 // QUERY-SPEC §5 (any closed-field comparison triggers cold scope).
 func TestFind_ColdScope_ClosedField_AutoScansClosedPartition(t *testing.T) {
 	s := storetest.New(t).
-		Issue("tst-0001").     // hot
-		Closed("tst-0002").    // cold
+		Issue("tst-0001").  // hot
+		Closed("tst-0002"). // cold
 		Mem()
 
 	// Use a ClosedFrom bound far in the past so it matches any closed issue.
@@ -883,4 +883,3 @@ func TestFind_FindPage_ValidationError_NoScan(t *testing.T) {
 		t.Fatalf("expected *tasks.ValidationError, got %T: %v", err, err)
 	}
 }
-

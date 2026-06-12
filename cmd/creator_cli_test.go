@@ -3,12 +3,13 @@
 // creator_cli_test.go — L4 CLI tests for the --creator flag and issueDTO creator field.
 //
 // Acceptance criteria covered (at-dny.4):
-//   AC1  atctl create --creator x persists x (verify via show --json).
-//   AC2  With no --creator, creator defaults to $USER.
-//   AC3  issueDTO includes creator (omitempty) for show/list/search/ready and
-//        nested DTOs; omitted when empty.
-//   AC4  atctl create --json output shape is unchanged ({id}).
-//   AC5  atctl update has no --creator flag.
+//
+//	AC1  atctl create --creator x persists x (verify via show --json).
+//	AC2  With no --creator, creator defaults to $USER.
+//	AC3  issueDTO includes creator (omitempty) for show/list/search/ready and
+//	     nested DTOs; omitted when empty.
+//	AC4  atctl create --json output shape is unchanged ({id}).
+//	AC5  atctl update has no --creator flag.
 package cmd_test
 
 import (
