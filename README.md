@@ -28,3 +28,7 @@ taskmgr ready                              # the dependent is now ready
 ```
 
 Add `--json` to any command for machine-readable output.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

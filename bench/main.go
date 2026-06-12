@@ -117,9 +117,14 @@ func scaling(recs []rec, idset map[string]bool, work string) {
 	st2, _ := tasks.Open(root)
 	fmt.Printf("All() scan:        %v  (runs inside the lock on every Create/Update/AddDep)\n", scanAll(st2, 20))
 
-	ids := make([]string, len(recs))
-	for i, r := range recs {
-		ids[i] = r.ID
+	// at-y1x: AddComment/Update reject closed issues (immutable), so the
+	// write-latency loops below must target only OPEN ids — the synthetic
+	// corpus is ~90% closed and an unfiltered random pick frequently fatals.
+	var ids []string
+	for _, r := range recs {
+		if mapStatus(r.Status) != tasks.StatusClosed {
+			ids = append(ids, r.ID)
+		}
 	}
 	var ac, up time.Duration
 	const reps = 30
