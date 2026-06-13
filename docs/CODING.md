@@ -19,8 +19,9 @@ mise run quality           # vet + lint + test  (pre-commit gate)
 ## Single-writer rule
 
 Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `cmd/`
-and every consumer go through the `Store` API. **Only `internal/vfs` may import
-`os`/`syscall`;** the pure core imports neither.
+and every consumer go through the `Store` API. **Only the two seams `internal/vfs`
+(disk) and `internal/exec` (hook processes) may import `os`/`syscall`;** the pure
+core imports neither.
 
 ## Where changes go
 
@@ -30,6 +31,8 @@ and every consumer go through the `Store` API. **Only `internal/vfs` may import
 | Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
+| Spawning a hook process | `sdk/tasks/internal/exec` (the process seam) — never inline `os/exec` elsewhere |
+| Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
 | Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
 
 ## How to test

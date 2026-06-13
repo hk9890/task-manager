@@ -101,7 +101,8 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | **The only package that calls `os`/`syscall`.** `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/vfs` | disk seam | One of two packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/exec` | process seam | The other `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
 ### Pure-core files (no `os`, no `internal/vfs`)
@@ -121,16 +122,19 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
 
-### vfs seam and os/syscall confinement
+### Seams and os/syscall confinement
 
-`internal/vfs` is the **sole** location for `os`/`syscall` calls. Every other
-package (pure core and imperative shell alike) calls filesystem operations via
-the `vfs.FS` interface. This confinement is enforced at two levels:
+`internal/vfs` (disk) and `internal/exec` (hook processes) are the **only** two
+locations for `os`/`syscall` calls. Every other package — pure core and
+imperative shell alike — reaches the filesystem via the `vfs.FS` interface and
+spawns hook processes via the `exec.Runner` interface, so both can be swapped for
+in-memory/scripted fakes in tests. This confinement is enforced at two levels:
 
-- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`.
+- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`
+  and `internal/exec`.
 - **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
-  fails the build if any non-test, non-vfs file imports `os` or `syscall`;
-  `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
+  fails the build if any non-test file outside those two seams imports `os` or
+  `syscall`; `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
   `internal/vfs` import.
 
 ---

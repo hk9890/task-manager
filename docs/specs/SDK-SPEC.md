@@ -17,8 +17,11 @@ without pulling in any CLI dependencies.
 ## 1. Opening a store
 
 ```go
-func Init(root, prefix string) (*Store, error)
-func Open(start string) (*Store, error)
+func Init(root, prefix string, opts ...Option) (*Store, error)
+func Open(start string, opts ...Option) (*Store, error)
+
+type Option func(*Store)
+func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
 ```
 
 - **`Init`** creates a new project store under `root` with the given ID `prefix`
@@ -27,6 +30,11 @@ func Open(start string) (*Store, error)
 - **`Open`** locates a store by walking up from `start` (or the current working
   directory if `start == ""`) and loads its config. Returns `ErrNoStore` if none
   is found.
+- **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
+  logger the store writes observability records to (hook timing, writes, IO
+  errors; see MONITORING.md); without it the store is silent. The SDK never reads
+  the environment itself — a front end maps `TASKMGR_LOG` to a level and injects
+  the logger.
 
 `Store` is the single gateway to a project's files; every read and write goes
 through it. It is safe for concurrent use within a process and across processes; the
@@ -391,11 +399,11 @@ type FindOptions struct {
 ### Write (validated, under the lock)
 
 ```go
-func (s *Store) Create(in CreateInput) (*Issue, error)
+func (s *Store) Create(in CreateInput) (*MutationResult, error)
 func (s *Store) Import(in ImportInput) (*Issue, error)     // direct write of a complete end-state
-func (s *Store) Update(id string, in UpdateInput) (*Issue, error)
-func (s *Store) Close(id, reason string) (*Issue, error)   // idempotent; moves to closed/
-func (s *Store) Reopen(id string) (*Issue, error)          // moves back to active
+func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error)
+func (s *Store) Close(id, reason string) (*MutationResult, error)   // idempotent; moves to closed/
+func (s *Store) Reopen(id string) (*MutationResult, error)          // moves back to active
 func (s *Store) AddComment(id, author, body string) (*Comment, error)         // returns the new comment (with its id)
 func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) // appends a revision; returns the new effective comment
 func (s *Store) DeleteComment(id, commentID, author string) error             // appends a tombstone
@@ -408,8 +416,21 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
 - Every write allocates/validates, then performs an atomic file write while holding
   the project lock. Configured lifecycle hooks ([HOOK-SPEC.md](HOOK-SPEC.md)) run on the
   transition: pre-hooks gate the write under the lock, post-hooks notify after it. A
-  pre-hook denial returns `*HookDeniedError` (§6) and writes nothing; advisory hints from
-  hooks are surfaced per HOOK-SPEC §6.2.
+  pre-hook denial returns `*HookDeniedError` (§6) and writes nothing.
+- **`Create`/`Update`/`Close`/`Reopen` return a `*MutationResult`** — the resulting
+  `Issue` plus the advisory hook output (HOOK-SPEC §6.2): `Hints`, aggregated from every
+  pre- and post-hook that allowed, and `Warnings`, the post-hook failures (which never
+  fail the write). Both are nil when no hooks ran or none had anything to say. A no-op
+  mutation (nothing changes on disk) returns the unchanged issue with no hints/warnings
+  and fires no hooks (HOOK-SPEC §2.1).
+
+  ```go
+  type MutationResult struct {
+      Issue    *Issue
+      Hints    []string
+      Warnings []string
+  }
+  ```
 - **`Create`** allocates a fresh collision-resistant ID (random base36 token; see
   TASK-STORAGE-SPEC §3), applies defaults (`TypeTask`, `PriorityDefault`,
   `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
@@ -518,11 +539,18 @@ func (e *ParseError) Error() string
 The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §1.
 
 A **pre-hook denial** returns a typed error naming the gate that refused — the event, hook
-id, exit code, and reason ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2). It fails the mutation with
-nothing written:
+id, issue, exit code, and reason, plus any hints gathered from hooks that allowed before it
+([HOOK-SPEC.md](HOOK-SPEC.md) §6.2). It fails the mutation with nothing written:
 
 ```go
-type HookDeniedError struct { Event, Hook, Reason string; Exit int }
+type HookDeniedError struct {
+    Event   string   // the gated event, e.g. "pre-close"
+    Hook    string   // the denying hook's id
+    IssueID string   // the issue the transition targeted
+    Exit    int      // the hook's exit code (-1 when it never exited: spawn error/timeout)
+    Reason  string   // the denial reason
+    Hints   []string // hints from hooks that allowed before the denial
+}
 func (e *HookDeniedError) Error() string
 ```
 
