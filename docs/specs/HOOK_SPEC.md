@@ -1,211 +1,214 @@
 # Hook Specification — lifecycle gates
 
-> **Status: Proposed — not yet implemented.** This document specifies a feature that
-> does not exist in the engine yet. It is the design contract to build against, not a
-> description of current behaviour. Until it ships, the other specs in `specs/` remain
-> the authoritative description of the system.
+> **Status: Proposed — not yet implemented.** This is the design contract to build
+> against, not current behaviour. Until it ships, the other specs in `specs/` are the
+> authoritative description of the system.
 
-This document specifies **hooks**: user-supplied scripts the engine runs at specific
-issue **state transitions** to *gate* the transition. A hook's job is to answer one
-question — **may this change be written?** — and, on refusal, to say why.
+**Hooks** are scripts the engine runs at issue state transitions. A **pre-hook** can
+*block* a transition — refuse to close a task until tests pass. A **post-hook** *reacts*
+to one after it commits — send a notification. Either kind may also hand back a short
+**hint** for the agent that triggered it.
 
-Hooks exist so that policy lives **outside** the core schema. The engine knows only
-about issues, dependencies, and ready-work (ARCHITECTURE-SPEC.md §1); everything else
-— "tests must pass before a task closes", "a feature must carry a Definition-of-Done
-section before it is created" — is expressed as a hook. The core stays minimal; the
-policy is pluggable and lives with the repository that needs it.
+Hooks keep policy out of the core. The engine knows only issues, dependencies, and
+ready-work (ARCHITECTURE-SPEC.md §1); rules like "tests must pass before close" or
+"a feature needs a Definition-of-Done section" are hooks, declared per-repository in
+`config.yaml`.
 
-The model is **engine-classified named transition events with a uniform contract**:
+The contract is uniform:
 
-- the **engine** decides what kind of transition is happening and fires the matching
-  named event (`pre-close`, `pre-create`, …) — a script never has to diff old/new to
-  discover "a close happened";
-- every event carries the **same input shape** (`{event, old, new}`), so there is one
-  input contract to learn regardless of the event;
-- a hook is a **pure decider**: it may *allow* or *deny* (with a reason). It may **not**
-  return a rewritten issue. The engine's write path stays the sole author of on-disk
-  state (ARCHITECTURE-SPEC.md §7, "one writer").
+- the **engine** classifies the transition and fires the matching named event
+  (`pre-close`, `post-create`, …) — a script never diffs `old`/`new` to discover what
+  happened;
+- every event delivers the **same input** — `{event, old, new}` on stdin;
+- a hook **decides or reacts; it never edits the issue**. The write path stays the sole
+  author of on-disk state (ARCHITECTURE-SPEC.md §7).
 
 ---
 
 ## 1. Principles
 
-1. **Gate, don't mutate.** A hook decides allow/deny. It never edits the issue; the
-   engine writes exactly what it validated.
+1. **Gate or notify, never mutate.** A pre-hook allows/denies; a post-hook reacts.
+   Neither edits the issue — the engine writes exactly what it validated.
 2. **Classified by transition, not by command.** `pre-close` fires whenever an issue
-   *becomes* closed — whether via `taskmgr close` or `taskmgr update --status closed`.
-   A gate keyed on a CLI verb would be trivially evaded; gates key on the state
-   transition.
-3. **One transition → one event.** The most specific event wins. A close is a
-   `pre-close`, never *also* a `pre-update`, so a slow close-gate never fires on an
-   ordinary edit.
-4. **Fail closed.** If a hook cannot produce a clean *allow* — it is missing, not
-   executable, times out, or emits malformed output — the transition is **denied**. A
-   gate that fails open is not a gate.
-5. **Deterministic.** For a given event and store state, the set of hooks that run, the
-   order they run in, and the decision are fully determined by `config.yaml`.
+   *becomes* closed — `taskmgr close` or `taskmgr update --status closed` alike. A gate
+   keyed on a verb would be trivially evaded.
+3. **One transition → one pre-event and one post-event.** The most specific event wins;
+   a close is a close, never also an update.
+4. **Pre fails closed; post cannot fail the operation.** If a pre-hook can't cleanly
+   *allow* (missing, not executable, times out), the transition is **denied**. A post-hook
+   runs after the write has committed, so its failure is a logged warning, never a rollback.
+5. **Deterministic.** For a given event and store state, which hooks run, in what order,
+   and the decision are fixed by `config.yaml`.
 6. **Engine-level.** Hooks fire inside the `Store` write path, so every front end (the
-   `taskmgr` CLI today, any future consumer) is gated identically with no per-front-end
-   logic (ARCHITECTURE-SPEC.md §3).
+   `taskmgr` CLI, any future consumer) is gated identically (ARCHITECTURE-SPEC.md §3).
 
 ---
 
 ## 2. Events and trigger points
 
-There are exactly four events in v1. Each fires **once**, on the in-memory *proposed*
-state, after engine validation has passed and before the atomic write (§4).
+Each transition fires up to two events: a **pre-event** before the write (gating) and a
+**post-event** after it commits (notification).
 
-| Event | Fires when the engine is about to… | `old` | `new` |
-|---|---|---|---|
-| `pre-create` | write a brand-new issue (`create`) | `null` | the proposed issue (id already allocated) |
-| `pre-update` | modify a live (non-closed) issue **without** changing its closed-ness | current | proposed |
-| `pre-close` | transition an issue **into** `closed` (was not closed → will be closed) | current | proposed (`status: closed`) |
-| `pre-reopen` | transition an issue **out of** `closed` (was closed → will be active) | current | proposed |
+| Transition | Pre-event (gates) | Post-event (notifies) | `old` | `new` |
+|---|---|---|---|---|
+| create a new issue | `pre-create` | `post-create` | `null` | proposed issue |
+| modify a live issue (no closed-ness change) | `pre-update` | `post-update` | current | proposed |
+| transition **into** `closed` | `pre-close` | `post-close` | current | proposed (`closed`) |
+| transition **out of** `closed` | `pre-reopen` | `post-reopen` | current | proposed |
 
 ### 2.1 Transition classification (normative)
 
-The engine computes the proposed `new` issue, compares it to `old`, and selects the
-**single** event by this priority:
+The engine computes the proposed `new` issue, compares it to `old`, and picks the
+**single** transition by this priority:
 
-1. `old` is absent → **`pre-create`**.
-2. `old.status != closed` and `new.status == closed` → **`pre-close`**.
-3. `old.status == closed` and `new.status != closed` → **`pre-reopen`**.
-4. otherwise (a live issue changing among non-closed states/fields) → **`pre-update`**.
+1. `old` absent → **create**.
+2. `old.status != closed` and `new.status == closed` → **close**.
+3. `old.status == closed` and `new.status != closed` → **reopen**.
+4. otherwise (a live issue changing among non-closed states/fields) → **update**.
 
 Consequences:
 
-- An update that *also* closes (`update --status closed --priority 0`) is a **`pre-close`**;
-  `new` reflects *all* changes (the new priority included). A close-gate therefore always
-  sees the complete proposed state.
-- A **no-op** mutation (nothing would change on disk) writes nothing and fires **no**
-  hook.
-- A vetoed `pre-create` writes nothing and **burns no id** — id allocation is a
-  `max+1` scan with no counter file (ARCHITECTURE-SPEC.md §7), so an aborted create
-  leaves no trace and the number is reused by the next create.
+- An update that *also* closes (`update --status closed --priority 0`) is a **close**;
+  `new` carries *all* the changes, so a close-gate always sees the complete proposed state.
+- A **no-op** mutation (nothing would change on disk) writes nothing and fires **nothing**.
+- A denied `pre-create` creates no file — the issue simply never comes into existence.
 
 ### 2.2 Not hooked in v1
 
-Deliberately out of scope, to keep the trigger set tight; all are additive later:
+Out of scope, additive later:
 
 - comment add/edit/remove;
-- dependency edits (`dep add` / `dep rm`) and other `blocked_by`/`related` changes made
-  via `update` — these fire `pre-update` only insofar as they change the issue file, but
-  no dependency-specific event exists;
-- any **`post-*`** (after-write, non-vetoing notification) event. Hooks in v1 are
-  *pre*-only. A post-event for notifications/side-effects is a likely future addition.
+- dependency-specific events — `dep add`/`dep rm` and `blocked_by`/`related` changes via
+  `update` fire `pre-update`/`post-update` like any other edit, but there is no event
+  dedicated to dependency changes.
 
 ---
 
 ## 3. Configuration
 
-Hooks are declared in the store's `config.yaml` (TASK-STORAGE-SPEC.md §4.2), under a
-top-level `hooks:` key, as an ordered list. Being in `config.yaml` means hooks are
-committed with the repository and shared across everyone (and every agent) working in it.
+Hooks live in the store's `config.yaml` (TASK-STORAGE-SPEC.md §4.2), so they are
+committed with the repository and shared across everyone — and every agent — who works
+in it.
 
 ```yaml
 prefix: dtt
 
+hook_timeout: 2s                  # global: max runtime for ANY single hook. Default 2s.
+
 hooks:
-  - id: tests-before-close          # optional label, used in messages and logs
-    event: pre-close                # required — one of the four events (§2)
-    when: 'type == "feature"'       # optional — QUERY-SPEC filter over `new`; default: always
-    run: ["make", "test"]           # required — argv, executed directly (no shell)
-    timeout: 300s                   # optional — Go duration; default 60s; 0 = no timeout
-    workdir: "."                    # optional — relative to repo root; default: repo root
+  - id: tests-before-close        # optional label, shown in messages and logs
+    event: pre-close              # required — one of the eight events (§2)
+    when: 'type == "feature"'     # optional — QUERY-SPEC filter over `new`; default: always
+    run: ["make", "test"]         # required — argv, executed directly (no shell)
 
   - id: require-dod
     event: pre-create
     run: [".tasks/validators/dod.sh"]
+
+  - id: notify-on-close
+    event: post-close
+    run: [".tasks/hooks/notify.sh"]
 ```
 
-### 3.1 Fields
+### 3.1 `hook_timeout` (top-level)
+
+A single, **global** wall-clock limit applied to **every** hook process; there is no
+per-hook timeout. Go duration string (`"2s"`, `"5m"`); default **`2s`**; `0` disables it.
+
+The 2-second default suits fast structural validators. **A project that runs a test
+suite on close must raise it** (e.g. `hook_timeout: 5m`) — and should weigh the lock
+cost in §8. Exceeding the limit is a hook error (§7): a deny for pre-hooks, a warning
+for post-hooks.
+
+### 3.2 Hook fields
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | no | Stable label for the hook. Used in denial messages, logs, and (future) audit. Need not be unique, but unique ids make diagnostics clearer. Defaults to `<event>#<index>`. |
-| `event` | **yes** | One of `pre-create`, `pre-update`, `pre-close`, `pre-reopen`. Any other value is a config error (§3.3). |
-| `when` | no | A QUERY-SPEC.md filter expression. The hook runs only if it matches the **`new`** issue. Omitted/empty → always matches. See §3.2. |
-| `run` | **yes** | A non-empty argv array. Executed **directly** via `execve`, with **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. |
-| `timeout` | no | Go duration string (`"90s"`, `"5m"`). Default `60s`. `0` disables the timeout (the write lock is then held for as long as the hook runs — see §8). A test-suite gate will usually need a value well above the default. |
-| `workdir` | no | Working directory for the process, resolved relative to the **repo root** (the directory that contains `.tasks/`). Default: the repo root. |
+| `id` | no | Label used in messages, logs, and the structured denial. Defaults to `<event>#<index>`. |
+| `event` | **yes** | One of the eight events (§2). Any other value is a config error (§3.4). |
+| `when` | no | A QUERY-SPEC.md filter expression. The hook runs only if it matches **`new`** (§3.3). Omitted → always. |
+| `run` | **yes** | Non-empty argv array, executed **directly** via `execve` — **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. |
 
-### 3.2 `when` semantics
+There is no per-hook `timeout`, `workdir`, or error policy. Timeout is the one global
+`hook_timeout`; the working directory is always the **repo root** (the directory that
+contains `.tasks/`); fail-closed (§4) is uniform.
 
-`when` reuses the filter-expression language unchanged (QUERY-SPEC.md): the same fields,
-operators, and grammar used by `taskmgr list -q`. It is evaluated against the **proposed
-(`new`)** issue:
+### 3.3 `when` semantics
 
-- field predicates (`type`, `priority`, `label`, `assignee`, `status`, `created`, …)
-  read `new`'s fields;
-- the derived predicates `ready` / `blocked` are computed against the store state as of
-  the moment the hook fires (pre-write).
+`when` reuses the filter-expression language unchanged (QUERY-SPEC.md) — the same fields,
+operators, and grammar as `taskmgr list -q` — evaluated against the **`new`** issue:
 
-`when` only **scopes** a hook; it does not decide the transition (the event already did
-that). `event: pre-close` + `when: 'type == "feature"'` reads as "gate the closing of
-features". A `when` that fails to parse is a config error (§3.3).
+- field predicates (`type`, `priority`, `label`, `status`, …) read `new`'s fields;
+- the derived `ready` / `blocked` predicates are computed against the store as of the
+  moment the hook fires.
 
-> v1 deliberately does **not** add `old.`/`new.` qualifiers to the grammar. `when`
-> sees only `new`. Cross-state predicates ("priority dropped") are a possible additive
-> extension (§10); they are not needed for the motivating use cases.
+`when` reads **only `new`**; there are no `old.`/`new.` qualifiers. It *scopes* a hook, it
+does not decide the transition (the event already did). `event: pre-close` +
+`when: 'type == "feature"'` reads as "gate the closing of features". A `when` that fails to
+parse is a config error (§3.4).
 
-### 3.3 Config validation
+### 3.4 Config validation
 
-The `hooks:` block is validated when the store is opened for a **write**. If it is
-malformed — an unknown `event`, an empty/missing `run`, a `when` that does not parse, an
-unparseable `timeout` — **every mutation fails** with a clear configuration error until
-it is fixed. This is the fail-closed principle (§1.4) applied to configuration: a broken
-gate config must not silently let changes through. **Reads are never affected** by hook
-configuration.
-
-Unknown keys *within* a hook entry are ignored (forward-compatibility), consistent with
-TASK-STORAGE-SPEC.md §4.2. An unknown top-level key other than `hooks`/`prefix` is also
-ignored.
+The `hooks:` block and `hook_timeout` are validated when the store is opened for a
+**write**. If malformed — unknown `event`, empty/missing `run`, unparseable `when` or
+`hook_timeout` — **every mutation fails** with a clear configuration error until fixed
+(fail-closed config; §1.4). **Reads are never affected.** Unknown keys within a hook
+entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
 
 ---
 
 ## 4. Execution and the write path
 
-Hooks extend the write path of ARCHITECTURE-SPEC.md §6. The added step is **4a**:
+This extends the write path of ARCHITECTURE-SPEC.md §6. Pre-hooks run **inside** the
+lock; post-hooks run **after** it is released.
 
-1. **Acquire the store lock** (in-process mutex, then `flock` on `.tasks/.lock`).
-2. **Apply** the change to an in-memory `Issue`, producing `new`; `old` is the current
-   on-disk issue (or `null` for create).
-3. **Validate** field invariants and referential integrity (existing engine validation).
-   *Hooks never run on an issue the engine itself would reject.*
-4. **Classify** the transition → the event (§2.1). Select the hooks whose `event`
-   matches **and** whose `when` matches `new`, in **config order**.
-   - **4a. Run each selected hook** (§5–§7), in order, **sequentially**.
-     - The first hook that does not cleanly *allow* (a deny or a hook error) **aborts**
-       the mutation: release the lock, write nothing, surface the reason.
-     - If every selected hook allows, continue.
+1. **Acquire** the store lock.
+2. **Apply** the change in memory → `new`; `old` is the current on-disk issue (or `null`).
+3. **Validate** field invariants and referential integrity. *Hooks never run on an issue
+   the engine itself would reject.*
+4. **Classify** the transition (§2.1) → the pre-event. Select pre-hooks whose `event`
+   matches **and** whose `when` matches `new`, in **config order**, and run each
+   sequentially (each bounded by `hook_timeout`):
+   - collect a **hint** from every hook that allows (§6);
+   - the **first** hook that does not cleanly allow (a deny or a hook error) **stops the
+     chain** and **aborts** the mutation — release the lock, write nothing, return its
+     reason together with any hints collected so far.
 5. **Write atomically** (temp + `fsync` + `rename`).
-6. **Release the lock.**
+6. **Release** the lock.
+7. **Post-hooks.** Select post-hooks for the transition (same `event`/`when` rule) and run
+   each sequentially, **outside the lock**, bounded by `hook_timeout`. They are
+   **non-vetoing**: the write has already committed, so an exit code or timeout never
+   rolls it back — a failure is recorded as a **warning**. Hints are collected as for
+   pre-hooks.
+8. **Return** success, surfacing all collected hints and any post-hook warnings (§6.2).
 
 Notes:
 
-- **Short-circuit.** Execution stops at the first non-allow. The returned reason is that
-  hook's reason. (Aggregating all failures is a possible future ergonomic improvement,
-  §10.)
-- **No partial state.** Because hooks run before step 5, a denied transition leaves the
-  store byte-for-byte unchanged.
-- **Environment.** Each hook process receives the parent environment plus:
+- **Deny short-circuits; hints aggregate.** Only the *decision* stops early (at the first
+  deny). Advisory hints from every hook that ran are gathered and surfaced together.
+- **No partial state.** A denied transition (step 4) leaves the store byte-for-byte
+  unchanged.
+- **"Fire-and-forget" = non-vetoing, not asynchronous.** Post-hooks run synchronously
+  after the write so their hints and warnings can be surfaced; they simply cannot change
+  the outcome. With the 2-second default the added wait is small.
+- **Environment.** Each hook process inherits the parent environment plus:
 
   | Variable | Value |
   |---|---|
-  | `TASKMGR_HOOK_EVENT` | the event name, e.g. `pre-close` |
+  | `TASKMGR_HOOK_EVENT` | the event, e.g. `pre-close` / `post-close` |
   | `TASKMGR_HOOK_ID` | the hook's `id` |
   | `TASKMGR_ISSUE_ID` | the issue's id |
   | `TASKMGR_STORE` | absolute path to the `.tasks/` directory |
   | `TASKMGR_PAYLOAD_SCHEMA` | the input-payload schema version (§5) |
 
-  The **canonical** contract is the JSON on **stdin** (§5); the env vars are conveniences
-  for scripts that need only an id or a path. `cwd` is the resolved `workdir`.
+  The **canonical** input is the JSON on **stdin** (§5); the env vars are conveniences.
+  `cwd` is always the repo root.
 
 ---
 
 ## 5. Input contract (stdin)
 
-The engine writes a single JSON object to the hook's **stdin** and closes it. The object:
+The engine writes one JSON object to the hook's **stdin** and closes it:
 
 ```json
 {
@@ -222,14 +225,13 @@ The engine writes a single JSON object to the hook's **stdin** and closes it. Th
 | `schema` | int | Payload schema version. `1` for this spec. Additive growth only (§9). |
 | `event` | string | The event being fired (§2). |
 | `issue_id` | string | The issue's canonical id (equals `new.id`). |
-| `old` | object \| null | The issue **before** the change. `null` for `pre-create`. |
-| `new` | object | The issue **as it would be written** if allowed. |
+| `old` | object \| null | The issue **before** the change. `null` for create. |
+| `new` | object | The issue **as it would be / has been written**. |
 
 ### 5.1 The hook issue object
 
-`old` and `new` are a **hook issue object**: the stable JSON DTO of an issue
-(CLI-SPEC.md §6 `issueDTO`) **plus** the `description` body. Optional fields are omitted
-when empty, exactly as in the CLI's JSON output.
+`old` and `new` are the stable issue DTO (CLI-SPEC.md §6 `issueDTO`) **plus** the
+`description` body. Empty optional fields are omitted, exactly as in the CLI's JSON output.
 
 ```json
 {
@@ -244,10 +246,9 @@ when empty, exactly as in the CLI's JSON output.
 }
 ```
 
-**Derived relationships (`blocks`, `children`) are intentionally not included** — they
-require a store scan and most gates do not need them. A hook that needs them queries the
-store itself (it has `TASKMGR_STORE` and the CLI on `PATH`), e.g. to refuse closing an
-epic with open children:
+**Derived relationships (`blocks`, `children`) are not included** — they need a store
+scan and most hooks don't use them. A hook that does can query the store itself (it has
+`TASKMGR_STORE` and the CLI on `PATH`), e.g. to refuse closing an epic with open children:
 
 ```sh
 open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
@@ -272,141 +273,130 @@ open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
 }
 ```
 
-A DoD validator reads `new.description`, checks for a `## Definition of Done` section
-with at least one checklist item, and exits `0` or non-zero accordingly.
+A DoD validator reads `new.description`, checks for a `## Definition of Done` section with
+at least one checklist item, and exits `0` or non-zero accordingly.
 
 ---
 
 ## 6. Output contract
 
-**The exit status is the single source of truth for the decision.**
+A hook communicates through its **exit code** (the decision) and its **stdout/stderr**
+(a message). It never returns a modified issue.
+
+### 6.1 Decision and message
+
+**Exit code is the single source of truth for the decision** (it matters only for
+pre-hooks; a post-hook's code only distinguishes success from a warning):
 
 | Exit code | Meaning |
 |---|---|
-| `0` | **Allow.** The transition may proceed. |
-| `1`–`125` | **Deny.** A well-formed refusal. The mutation is aborted. |
-| `126`, `127` | **Hook error** — not executable / not found. Treated as deny (fail-closed, §7). |
-| `128 + N` | **Hook error** — killed by signal `N`. Treated as deny (fail-closed, §7). |
+| `0` | **Allow** (pre) / **OK** (post). |
+| `1`–`125` | **Deny** (pre) / **warning** (post). A well-formed refusal. |
+| `126`, `127` | **Hook error** — not executable / not found (§7). |
+| `128 + N` | **Hook error** — killed by signal `N` (§7). |
 
-A hook does **not** override its exit code by printing `allow` in JSON: to allow, exit
-`0`; to deny, exit non-zero. There is exactly one source of truth.
+The hook's **message** is plain text — its **stdout**, or its **stderr** if stdout is
+empty — interpreted by outcome:
 
-### 6.1 Reason resolution
+- **on allow (exit 0): the message is a hint** — short advice surfaced to the caller
+  (e.g. for the LLM that triggered the change: "remember to update CHANGELOG"). Optional.
+- **on deny (non-zero): the message is the reason.** If both streams are empty, the
+  engine supplies a generic reason naming the hook.
 
-When a hook denies, the engine resolves a human/agent-readable reason, in order:
+Hooks are **not** expected to emit JSON, and the engine does **not** parse their output as
+a structured verdict. There is no mechanism for a hook to write labels or any other field
+onto the issue — hooks never change tasks.
 
-1. If **stdout**, trimmed, **begins with `{`**, it is parsed as a verdict object
-   `{ "reason": string }`. A parse failure or a non-object is a **hook error** (§7),
-   reported as "hook emitted invalid output". On success the reason is `.reason` (which
-   may be empty).
-2. Otherwise the reason is the trimmed **stderr**.
-3. If both are empty, the engine supplies a generic reason naming the hook
-   (`denied by hook 'tests-before-close'`).
+### 6.2 Surfacing
 
-stdout that does **not** begin with `{` is treated as informational text, not a verdict,
-and does not by itself change the decision (the exit code does).
-
-> v1 defines only `reason` in the stdout verdict object. A future version may let a hook
-> return `labels` to stamp on the issue (e.g. `dod:ok`) so policy outcomes become
-> queryable; this is an explicit non-goal here (§10) to keep the core schema untouched.
-
-### 6.2 How callers surface a denial
-
-A denied mutation fails the operation:
-
-- **CLI:** exit code `1`, message on stderr prefixed `taskmgr: ` (CLI-SPEC.md §1). With
-  `--json`, a structured error so an agent can act on it:
+- **Hints aggregate.** Every hint from every hook that ran (pre and post) is collected and
+  returned together, even when the overall result is *allow*.
+- **First deny wins.** The pre-chain stops at the first denying hook (§4); that hook's
+  reason is the denial reason. Hints gathered before it are still surfaced.
+- **CLI.** On success, hints print as notes (and post-hook warnings, if any). With
+  `--json`, the result carries `"hints": [...]` and `"warnings": [...]`. On a pre-deny:
+  exit `1`, a `taskmgr: ` message on stderr, and with `--json` a structured error:
 
   ```json
   { "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
     "issue_id": "dtt-0042", "exit": 1,
-    "reason": "3 unit tests failing; HEAD not clean" }
+    "reason": "3 unit tests failing; HEAD not clean",
+    "hints": ["run `make fmt` before retrying"] }
   ```
 
-- **SDK:** a typed error carrying the same fields (event, hook id, exit code, reason),
-  distinguishable from validation and I/O errors.
+- **SDK.** A typed error on denial (event, hook id, exit code, reason); hints and
+  post-hook warnings are returned to the caller on success.
 
 ---
 
-## 7. Errors and invalid output
+## 7. Errors
 
-A **deny** (§6, exit `1`–`125`) is an *expected* outcome — the gate did its job. A
-**hook error** is the gate itself misbehaving. Both **block the write** (fail-closed,
-§1.4); they differ only in the reported category, for diagnosis. Hook errors:
+A **deny** (exit `1`–`125` on a pre-hook) is the gate doing its job. A **hook error** is
+the hook itself misbehaving. For pre-hooks both **block the write** (fail-closed); for
+post-hooks both are **warnings** (the write already committed). They differ only in the
+reported category, for diagnosis.
 
-| Condition | Handling |
-|---|---|
-| Binary missing / not executable (exit `126`/`127`, or spawn failure) | Deny. Reason: `hook '<id>': command not found` / `not executable`. Category `hook_error`. |
-| **Timeout** (§3.1) exceeded | The process is sent `SIGTERM`, then `SIGKILL` after a short grace period. Deny. Reason: `hook '<id>' timed out after <d>`. Category `hook_error`. |
-| Killed by a signal | Deny. Reason names the signal. Category `hook_error`. |
-| stdout begins with `{` but is not a valid verdict object | Deny. Reason: `hook '<id>' emitted invalid output`. Category `hook_error`. |
-| Hook writes to the store while running | Undefined and unsupported. The store lock is held (§4); a hook **must not** invoke `taskmgr` *mutations* (it would deadlock on the lock). Read-only queries are fine. |
+| Condition | Pre-hook | Post-hook |
+|---|---|---|
+| Binary missing / not executable (`126`/`127`, spawn failure) | Deny, category `hook_error` | Warning |
+| `hook_timeout` exceeded (§3.1) | `SIGTERM`, then `SIGKILL` after a grace period → Deny, `hook_error` | Warning |
+| Killed by a signal | Deny, `hook_error` | Warning |
 
-The fail-closed default means a **misconfigured hook wedges the relevant mutations**
-until fixed (e.g. a typo'd `run` blocks all closes). This is intentional — the safety of
-a gate is the point — and is why the **bypass mechanism (§10) is the operational escape
-hatch**, and why config is validated up front (§3.3) so the failure is a clear config
-error rather than a mysterious per-close failure.
+A hook **must not** invoke `taskmgr` *mutations*: a pre-hook runs while the store lock is
+held and would deadlock; a post-hook could trigger further hooks. Read-only queries are
+fine.
+
+Fail-closed means a **misconfigured pre-hook wedges the relevant mutations** until fixed
+(a typo'd `run` blocks all closes). This is intentional — the point of a gate is that it
+cannot be skipped. **There is no bypass flag** (§10): to relax or remove a gate you edit
+`config.yaml`. Up-front config validation (§3.4) makes the failure a clear config error
+rather than a mysterious per-close one.
 
 ---
 
-## 8. Concurrency and the write lock
+## 8. Concurrency and the lock
 
-Hooks run **inside** the store write lock (§4), after validation and before the atomic
-write. This is the v1 choice, and it is the simplest model that is fully correct:
+Pre-hooks run **inside** the store write lock (§4), after validation and before the atomic
+write. It is the simplest fully-correct model: the decision is made against exactly the
+state that will be written (no check/use gap), and a denial is atomic.
 
-- the decision is made against exactly the state that will be written — no
-  time-of-check/time-of-use gap;
-- a denied transition is atomic — nothing is written;
-- it slots into the existing write path as a single inserted step.
+**The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
+block until it returns. With the 2-second default this is negligible; **if you raise
+`hook_timeout` to run a test suite on close, you serialize all writes for that duration.**
+Post-hooks avoid this by running outside the lock.
 
-**The cost:** while a hook runs, the store-wide `flock` is held, so other writers (any
-process, any agent, the human) block until it finishes. A slow gate — running a full
-test suite on `pre-close` — serializes *all* writes for its duration, not just other
-closes. The per-hook `timeout` (§3.1) bounds this; choose it deliberately.
-
-> **Future option (not v1): optimistic, out-of-lock guards.** Slow guards could run
-> *before* taking the lock, then the engine would acquire the lock, re-validate, confirm
-> the issue has not changed since the snapshot the hook saw (else abort with a conflict
-> for the caller to retry), and write. This removes the global stall at the cost of a
-> conflict/retry concept. It is deliberately deferred: the dominant workflow is a single
-> writer per repo, where there is nothing to stall. Revisit if multi-agent write
-> contention proves to be a real problem.
+> **Future option (not v1): optimistic, out-of-lock pre-hooks.** A slow gate could run
+> before taking the lock, then the engine would lock, re-validate, confirm the issue is
+> unchanged since the snapshot (else abort for retry), and write — removing the stall at
+> the cost of a conflict/retry concept. Deferred: the dominant workflow is a single writer
+> per repo, where there is nothing to stall.
 
 ---
 
 ## 9. Surface and versioning
 
 - **Engine-level.** Hooks fire from the `Store` mutation path, so the CLI and every SDK
-  consumer are gated uniformly (ARCHITECTURE-SPEC.md §3). There is no CLI-only hook path.
+  consumer are gated uniformly (ARCHITECTURE-SPEC.md §3); there is no CLI-only hook path.
 - **Suppression for bulk tooling.** The SDK exposes a way to run a mutation with hooks
-  disabled (e.g. an option/variant used by import, migration, or `bench/` tooling that
-  must write many issues without firing per-issue gates). The `taskmgr` CLI always runs
-  with hooks **enabled** (the only exception being a future bypass flag, §10).
-- **Payload version.** The stdin payload carries `schema` (§5). Adding a field is
-  additive and does not bump it in a breaking way; a removal/repurpose is breaking and is
-  versioned with the SDK module, mirroring QUERY-SPEC.md §7.
-- **Spec sync.** When implemented, this feature also extends TASK-STORAGE-SPEC.md §4.2
-  (the `config.yaml` schema gains `hooks`) and is referenced from OVERVIEW.md; per
-  CODING.md, those updates land in the same change.
+  disabled (for import, migration, or `bench/` tooling that writes many issues). The
+  `taskmgr` CLI always runs with hooks **enabled**.
+- **Payload version.** The stdin payload carries `schema` (§5). Adding a field is additive;
+  a removal/repurpose is breaking and is versioned with the SDK module (cf. QUERY-SPEC.md §7).
+- **Spec sync.** When implemented, this extends TASK-STORAGE-SPEC.md §4.2 (the
+  `config.yaml` schema gains `hook_timeout` and `hooks`) and is referenced from
+  OVERVIEW.md; per CODING.md those updates land in the same change.
 
 ---
 
-## 10. Open decisions
+## 10. Non-goals
 
-Tracked here so they are not silently resolved by implementation:
+Deliberately excluded, with rationale:
 
-1. **Bypass / enforcement (the primary open decision).** What, if anything, lets a
-   transition skip its gates? Candidates: (a) hard-enforce, no bypass; (b) a `--no-verify`
-   flag that is always recorded (e.g. as a comment) so it is visible in review;
-   (c) bypass available to humans but not agents (gated on something an agent lacks, e.g.
-   an interactive TTY or an env flag). Recommendation: **(a) for v1**, revisit if it
-   proves too rigid — (b)/(c) are additive.
-2. **Failure aggregation.** v1 short-circuits at the first deny (§4). Running all matching
-   hooks and returning every reason would give an agent the full fix-list in one pass, at
-   the cost of always paying every hook's time.
-3. **`old.`/`new.` qualifiers in `when`** (§3.2) for cross-state predicates.
-4. **`labels` in the stdout verdict** (§6.1) to make policy outcomes queryable, weighed
-   against keeping the core schema untouched.
-5. **`post-*` events** (§2.2) for non-vetoing notifications/side-effects.
-6. **Per-hook `on_error: allow|deny`** to opt specific hooks out of fail-closed.
+- **No bypass / skip mechanism.** A gate that can be skipped is not a gate. To relax or
+  remove one, edit `config.yaml`.
+- **Hooks never mutate issues.** No writing labels or any field from a hook output; hooks
+  gate (pre) or notify (post) only. The engine stays the sole author.
+- **No per-hook `timeout`, `workdir`, or error policy.** One global `hook_timeout`; cwd is
+  always the repo root; fail-closed (pre) / warn (post) is uniform.
+- **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.
+- **No comment- or dependency-specific events** (§2.2).
