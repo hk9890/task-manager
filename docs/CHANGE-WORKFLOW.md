@@ -5,18 +5,18 @@ request. **No direct commits to `main`.**
 
 ## Branch + worktree per feature
 
-Use an isolated worktree so `main` stays clean and parallel work can coexist:
+Every feature starts in an isolated **worktree** so `main` stays clean and
+parallel work can coexist. Use Claude Code's built-in worktree feature rather
+than running `git worktree` by hand:
 
-```bash
-git worktree add ../task-manager-<feature> -b <feature>
-cd ../task-manager-<feature>
-```
+- **Start** the work with the `EnterWorktree` tool. It creates an isolated
+  worktree under `.claude/worktrees/` on a fresh branch (branched from
+  `origin/<default-branch>` by default) and switches the session into it.
+- **Finish** the work with the `ExitWorktree` tool once the PR has landed:
+  `action: "remove"` for a clean exit, or `action: "keep"` to come back later.
 
-When the change has landed, remove it:
-
-```bash
-git worktree remove ../task-manager-<feature>
-```
+The word "worktree" in this instruction is intentional — it is what tells Claude
+Code to use the built-in feature for this repo.
 
 ## Change loop
 
