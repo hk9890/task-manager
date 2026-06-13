@@ -163,6 +163,32 @@ type UpdateInput struct {
     RemoveLabels []string
     ClearLabels  bool
 }
+
+type ImportInput struct {
+    ID          string    // optional explicit ID; empty → store allocates
+    Title       string
+    Description string
+    Type        Type
+    Priority    *int
+    Status      Status    // final status (incl. closed); empty → StatusOpen
+    Assignee    string
+    Creator     string
+    Labels      []string
+    Parent      string    // edges: taskmgr IDs that must already exist
+    BlockedBy   []string
+    Related     []string
+    Created     time.Time // zero → now()
+    Updated     time.Time // zero → Created
+    Closed      time.Time // required when Status == closed; zero → Updated
+    CloseReason string
+    Comments    []ImportComment
+}
+
+type ImportComment struct {
+    Author  string
+    Created time.Time // zero → the issue's Created
+    Body    string
+}
 ```
 
 `UpdateInput` uses pointers so the zero value means "leave unchanged"; only set
@@ -365,6 +391,7 @@ type FindOptions struct {
 
 ```go
 func (s *Store) Create(in CreateInput) (*Issue, error)
+func (s *Store) Import(in ImportInput) (*Issue, error)     // direct write of a complete end-state
 func (s *Store) Update(id string, in UpdateInput) (*Issue, error)
 func (s *Store) Close(id, reason string) (*Issue, error)   // idempotent; moves to closed/
 func (s *Store) Reopen(id string) (*Issue, error)          // moves back to active
@@ -382,6 +409,18 @@ func (s *Store) RemoveDep(dependent, blocker string) error
   `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
   `CreateInput.ID` is honoured verbatim instead (import/migration) when it is
   well-formed, carries the store prefix, and is not already in use.
+- **`Import`** is a direct write of a complete issue **end-state** from an external
+  system — not a `Create`→`Update`→`Close` replay. Unlike `Create` it takes the
+  final `Status` (including `closed`) and the original `Created`/`Updated`/`Closed`
+  timestamps and the full comment log, validates the whole record (fields,
+  references, and every comment) **before** any write, and materializes it in one
+  locked operation in the correct partition (a closed issue lands directly in
+  `closed/` via the same git-rename anchor as `Close`). Edge targets must already
+  exist (same referential/acyclicity checks as `Create`), so an importing caller
+  works in dependency order and translates foreign IDs to taskmgr IDs. It writes the
+  comment sidecar with the supplied authors and timestamps. Because validation is
+  up-front, a rejected record (e.g. a control character in a comment body) leaves
+  **nothing** behind.
 - **`Update`** applies the partial field changes and routes lifecycle transitions
   through the same path the CLI uses: setting `Status` to `closed` routes through the
   close flow (stamps the close time, moves the file to `closed/`); setting a

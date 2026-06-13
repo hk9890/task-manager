@@ -15,3 +15,6 @@ coverage.out
 
 # beads import id-map (generated)
 scripts/.beads-import-map.json
+
+# python bytecode cache
+__pycache__/

@@ -48,7 +48,7 @@ func commandsByName(c catalog) map[string]catCommand {
 
 // allUserFacingCommands is the full surface the catalog must cover (at-lwt).
 var allUserFacingCommands = []string{
-	"create", "init", "show", "update", "close", "reopen",
+	"create", "import", "init", "show", "update", "close", "reopen",
 	"dep", "dep add", "dep rm",
 	"comment", "comment add", "comment edit", "comment rm",
 	"list", "search", "ready", "blocked", "labels", "statuses", "types",
