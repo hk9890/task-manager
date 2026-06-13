@@ -58,6 +58,13 @@ type ImportInput struct {
 	Closed      time.Time // required when Status == closed; defaults to Updated
 	CloseReason string
 	Comments    []ImportComment
+	// RunHooks gates this import through the create lifecycle hooks (HOOK-SPEC
+	// §9). Default false: bulk loading omits hooks, so re-importing N issues does
+	// not fire N gates. When true, the import is treated like an ordinary write —
+	// a pre-create denial rejects it (returning *HookDeniedError, nothing
+	// written) and post-create hooks notify. Regardless of this flag, a malformed
+	// hooks config fails the import closed (fail-closed config, §3.4).
+	RunHooks bool
 }
 
 // Import writes a complete externally-sourced issue and its comment log in one
@@ -66,8 +73,13 @@ type ImportInput struct {
 // fields, references, and every comment — before anything touches disk, so a
 // malformed record is rejected atomically. See ImportInput.
 func (s *Store) Import(in ImportInput) (*Issue, error) {
+	// Validate the hooks config (fail-closed, §3.4) even when not running hooks.
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
 	var out *Issue
-	err := s.withLock(func() error {
+	err = s.withLock(func() error {
 		id, err := s.resolveID(in.ID)
 		if err != nil {
 			return err
@@ -136,6 +148,16 @@ func (s *Store) Import(in ImportInput) (*Issue, error) {
 			docs = append(docs, doc)
 		}
 
+		// An import is a create transition (no prior issue), even when it lands
+		// closed (HOOK-SPEC §2.1). Gate it through pre-create when requested.
+		if in.RunHooks {
+			if _, denial, herr := s.runPre(hs, transCreate.preEvent(), nil, iss); herr != nil {
+				return herr
+			} else if denial != nil {
+				return denial
+			}
+		}
+
 		// Write the issue into the correct partition: closeMove lands a closed
 		// issue directly in closed/ (preserving the git-rename history anchor);
 		// otherwise it goes to the hot dir.
@@ -159,5 +181,14 @@ func (s *Store) Import(in ImportInput) (*Issue, error) {
 		out = iss
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	// Post-create hooks run outside the lock; for the bulk import path their
+	// hints/warnings are not returned (Import yields just the issue) but are
+	// logged like any hook invocation (HOOK-SPEC §4 Observability).
+	if in.RunHooks {
+		s.runPost(hs, transCreate.postEvent(), nil, out)
+	}
+	return out, nil
 }

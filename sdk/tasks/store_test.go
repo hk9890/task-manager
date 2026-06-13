@@ -27,7 +27,7 @@ func newTestStore(t *testing.T) *Store {
 
 func mustCreate(t *testing.T, s *Store, in CreateInput) *Issue {
 	t.Helper()
-	iss, err := s.Create(in)
+	iss, err := unwrap(s.Create(in))
 	if err != nil {
 		t.Fatalf("Create(%q): %v", in.Title, err)
 	}
@@ -160,7 +160,7 @@ func TestUpdatePartial(t *testing.T) {
 	newTitle := "changed"
 	pr := 0
 	st := StatusInProgress
-	out, err := s.Update(iss.ID, UpdateInput{Title: &newTitle, Priority: &pr, Status: &st})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle, Priority: &pr, Status: &st}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,17 +181,17 @@ func TestUpdateLabels(t *testing.T) {
 	s := newTestStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x", Labels: []string{"a", "b"}})
 
-	out, _ := s.Update(iss.ID, UpdateInput{AddLabels: []string{"c"}, RemoveLabels: []string{"a"}})
+	out, _ := unwrap(s.Update(iss.ID, UpdateInput{AddLabels: []string{"c"}, RemoveLabels: []string{"a"}}))
 	if got := labelSet(out.Labels); !got["b"] || !got["c"] || got["a"] {
 		t.Errorf("add/remove labels wrong: %v", out.Labels)
 	}
 
-	out, _ = s.Update(iss.ID, UpdateInput{SetLabels: []string{"x", "y"}})
+	out, _ = unwrap(s.Update(iss.ID, UpdateInput{SetLabels: []string{"x", "y"}}))
 	if len(out.Labels) != 2 || out.Labels[0] != "x" {
 		t.Errorf("set labels wrong: %v", out.Labels)
 	}
 
-	out, _ = s.Update(iss.ID, UpdateInput{ClearLabels: true})
+	out, _ = unwrap(s.Update(iss.ID, UpdateInput{ClearLabels: true}))
 	if len(out.Labels) != 0 {
 		t.Errorf("clear labels wrong: %v", out.Labels)
 	}
@@ -202,12 +202,12 @@ func TestStatusClosedStampsAndClears(t *testing.T) {
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 
 	closedStatus := StatusClosed
-	out, _ := s.Update(iss.ID, UpdateInput{Status: &closedStatus})
+	out, _ := unwrap(s.Update(iss.ID, UpdateInput{Status: &closedStatus}))
 	if out.Closed.IsZero() {
 		t.Error("closing via update should stamp Closed")
 	}
 	openStatus := StatusOpen
-	out, _ = s.Update(iss.ID, UpdateInput{Status: &openStatus})
+	out, _ = unwrap(s.Update(iss.ID, UpdateInput{Status: &openStatus}))
 	if !out.Closed.IsZero() || out.CloseReason != "" {
 		t.Errorf("reopening should clear Closed/reason: %v / %q", out.Closed, out.CloseReason)
 	}
@@ -217,7 +217,7 @@ func TestCloseIdempotent(t *testing.T) {
 	s := newTestStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 
-	first, err := s.Close(iss.ID, "done")
+	first, err := unwrap(s.Close(iss.ID, "done"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestCloseIdempotent(t *testing.T) {
 	// CLI-SPEC §"taskmgr close" says Close is idempotent. Re-closing an
 	// already-closed issue must succeed (nil error) and return the existing
 	// closed issue unchanged. The new reason is ignored; original is preserved.
-	second, err := s.Close(iss.ID, "again")
+	second, err := unwrap(s.Close(iss.ID, "again"))
 	if err != nil {
 		t.Errorf("re-close must succeed (idempotent), got: %v", err)
 	}

@@ -105,7 +105,7 @@ func TestSpec_SDK_ErrImmutable_FromUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	iss, err := s.Create(tasks.CreateInput{Title: "immutable test"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "immutable test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -188,11 +188,11 @@ func TestSpec_SDK_Close_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	iss, err := s.Create(tasks.CreateInput{Title: "close twice"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "close twice"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	first, err := s.Close(iss.ID, "first reason")
+	first, err := unwrap(s.Close(iss.ID, "first reason"))
 	if err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestSpec_SDK_Close_Idempotent(t *testing.T) {
 	}
 
 	// Second Close on an already-closed issue: must succeed and return nil error.
-	second, err := s.Close(iss.ID, "second reason")
+	second, err := unwrap(s.Close(iss.ID, "second reason"))
 	if err != nil {
 		t.Fatalf("second Close (re-close) must return nil (idempotent), got: %v", err)
 	}
@@ -223,11 +223,11 @@ func TestSpec_SDK_AddDep_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(tasks.CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(tasks.CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestSpec_SDK_AddDep_RejectsSelfDependency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	iss, err := s.Create(tasks.CreateInput{Title: "self"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "self"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -276,11 +276,11 @@ func TestSpec_SDK_AddDep_RejectsCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	a, err := s.Create(tasks.CreateInput{Title: "A"})
+	a, err := unwrap(s.Create(tasks.CreateInput{Title: "A"}))
 	if err != nil {
 		t.Fatalf("Create A: %v", err)
 	}
-	b, err := s.Create(tasks.CreateInput{Title: "B"})
+	b, err := unwrap(s.Create(tasks.CreateInput{Title: "B"}))
 	if err != nil {
 		t.Fatalf("Create B: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestSpec_SDK_AddComment_EmptyBodyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	iss, err := s.Create(tasks.CreateInput{Title: "has comment"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "has comment"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

@@ -115,7 +115,7 @@ func TestUpdate_NoOpWritesNothing(t *testing.T) {
 	s.SetNow(func() time.Time { return iss.Updated.Add(time.Hour) })
 
 	sameTitle := "orig"
-	out, err := s.Update(iss.ID, UpdateInput{Title: &sameTitle})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &sameTitle}))
 	if err != nil {
 		t.Fatalf("redundant Update: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestUpdate_NoOpWritesNothing(t *testing.T) {
 
 	// A real change still advances Updated.
 	newTitle := "changed"
-	out2, err := s.Update(iss.ID, UpdateInput{Title: &newTitle})
+	out2, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -99,11 +99,11 @@ var updateCmd = &cobra.Command{
 			in.Parent = &updateFlags.parent
 		}
 
-		iss, err := s.Update(args[0], in)
+		res, err := s.Update(args[0], in)
 		if err != nil {
 			return err
 		}
-		return reportMutation(iss, "Updated")
+		return reportMutation(res.Issue, "Updated")
 	},
 }
 
@@ -118,11 +118,11 @@ var closeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		iss, err := s.Close(args[0], closeReason)
+		res, err := s.Close(args[0], closeReason)
 		if err != nil {
 			return err
 		}
-		return reportMutation(iss, "Closed")
+		return reportMutation(res.Issue, "Closed")
 	},
 }
 
@@ -138,11 +138,11 @@ hot directory.`,
 		if err != nil {
 			return err
 		}
-		iss, err := s.Reopen(args[0])
+		res, err := s.Reopen(args[0])
 		if err != nil {
 			return err
 		}
-		return reportMutation(iss, "Reopened")
+		return reportMutation(res.Issue, "Reopened")
 	},
 }
 

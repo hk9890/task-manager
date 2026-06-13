@@ -37,7 +37,7 @@ func newMemStore(t *testing.T) *Store {
 func TestMemStore_CreateAndGet(t *testing.T) {
 	s := newMemStore(t)
 
-	iss, err := s.Create(CreateInput{Title: "hello mem"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "hello mem"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -58,13 +58,13 @@ func TestMemStore_CreateAndGet(t *testing.T) {
 func TestMemStore_UpdateAndClose(t *testing.T) {
 	s := newMemStore(t)
 
-	iss, err := s.Create(CreateInput{Title: "issue"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "issue"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	newTitle := "updated issue"
-	out, err := s.Update(iss.ID, UpdateInput{Title: &newTitle})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle}))
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestMemStore_UpdateAndClose(t *testing.T) {
 		t.Errorf("title = %q, want updated issue", out.Title)
 	}
 
-	closed, err := s.Close(iss.ID, "done")
+	closed, err := unwrap(s.Close(iss.ID, "done"))
 	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestMemStore_FailOn_WriteAtomic_NoTornState(t *testing.T) {
 	}
 
 	// Create an issue in the open state.
-	iss, err := s.Create(CreateInput{Title: "test issue"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "test issue"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

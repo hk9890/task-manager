@@ -40,7 +40,7 @@ func TestCheckRefs_ClosedParentAccepted(t *testing.T) {
 	s := newMemStoreRef(t)
 
 	// Create and close a future parent issue.
-	parent, err := s.Create(CreateInput{Title: "epic parent"})
+	parent, err := unwrap(s.Create(CreateInput{Title: "epic parent"}))
 	if err != nil {
 		t.Fatalf("Create parent: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestCheckRefs_ClosedParentAccepted(t *testing.T) {
 	}
 
 	// Now create a child that references the closed parent.
-	child, err := s.Create(CreateInput{Title: "child of closed parent", Parent: parent.ID})
+	child, err := unwrap(s.Create(CreateInput{Title: "child of closed parent", Parent: parent.ID}))
 	if err != nil {
 		t.Errorf("Create with closed parent must succeed, got: %v", err)
 		return
@@ -64,7 +64,7 @@ func TestCheckRefs_ClosedParentAccepted(t *testing.T) {
 func TestCheckRefs_ClosedBlockerAccepted(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCheckRefs_ClosedBlockerAccepted(t *testing.T) {
 		t.Fatalf("Close blocker: %v", err)
 	}
 
-	dep, err := s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Errorf("Create with closed blocker must succeed, got: %v", err)
 		return
@@ -87,7 +87,7 @@ func TestCheckRefs_ClosedBlockerAccepted(t *testing.T) {
 func TestCheckRefs_ClosedRelatedAccepted(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	rel, err := s.Create(CreateInput{Title: "related"})
+	rel, err := unwrap(s.Create(CreateInput{Title: "related"}))
 	if err != nil {
 		t.Fatalf("Create related: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestCheckRefs_ClosedRelatedAccepted(t *testing.T) {
 		t.Fatalf("Close related: %v", err)
 	}
 
-	iss, err := s.Create(CreateInput{Title: "issue with closed related", Related: []string{rel.ID}})
+	iss, err := unwrap(s.Create(CreateInput{Title: "issue with closed related", Related: []string{rel.ID}}))
 	if err != nil {
 		t.Errorf("Create with closed related must succeed, got: %v", err)
 		return
@@ -141,11 +141,11 @@ func TestCheckRefs_DanglingBlockerFails(t *testing.T) {
 func TestReady_ClosedBlockerCountsAsResolved(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -179,11 +179,11 @@ func TestReady_ClosedBlockerCountsAsResolved(t *testing.T) {
 func TestBlocked_ClosedBlockerNoLongerBlocks(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestBlocked_ClosedBlockerNoLongerBlocks(t *testing.T) {
 func TestDetail_ResolvesClosedParentRef(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	parent, err := s.Create(CreateInput{Title: "closed parent"})
+	parent, err := unwrap(s.Create(CreateInput{Title: "closed parent"}))
 	if err != nil {
 		t.Fatalf("Create parent: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestDetail_ResolvesClosedParentRef(t *testing.T) {
 		t.Fatalf("Close parent: %v", err)
 	}
 
-	child, err := s.Create(CreateInput{Title: "child", Parent: parent.ID})
+	child, err := unwrap(s.Create(CreateInput{Title: "child", Parent: parent.ID}))
 	if err != nil {
 		t.Fatalf("Create child with closed parent: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestDetail_ResolvesClosedParentRef(t *testing.T) {
 func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "closed blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "closed blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
 		t.Fatalf("Close blocker: %v", err)
 	}
 
-	dep, err := s.Create(CreateInput{Title: "dep", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dep", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Fatalf("Create dep with closed blocker: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
 func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	related, err := s.Create(CreateInput{Title: "closed related"})
+	related, err := unwrap(s.Create(CreateInput{Title: "closed related"}))
 	if err != nil {
 		t.Fatalf("Create related: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
 		t.Fatalf("Close related: %v", err)
 	}
 
-	iss, err := s.Create(CreateInput{Title: "issue", Related: []string{related.ID}})
+	iss, err := unwrap(s.Create(CreateInput{Title: "issue", Related: []string{related.ID}}))
 	if err != nil {
 		t.Fatalf("Create issue with closed related: %v", err)
 	}
@@ -308,11 +308,11 @@ func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
 func TestUpdate_ClosedBlockerRemainsValid(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dep", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dep", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
@@ -335,11 +335,11 @@ func TestUpdate_ClosedBlockerRemainsValid(t *testing.T) {
 func TestAddDep_ClosedBlockerAccepted(t *testing.T) {
 	s := newMemStoreRef(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dep"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dep"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}

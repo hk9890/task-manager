@@ -65,10 +65,11 @@ var createCmd = &cobra.Command{
 			in.Priority = &p
 		}
 
-		iss, err := s.Create(in)
+		res, err := s.Create(in)
 		if err != nil {
 			return err
 		}
+		iss := res.Issue
 		if flagJSON {
 			return printJSON(map[string]string{"id": iss.ID})
 		}

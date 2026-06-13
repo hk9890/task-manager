@@ -31,11 +31,11 @@ func newStoreWithOpenAndClosed(t *testing.T) (root, openID, closedID string) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	open, err := s.Create(tasks.CreateInput{Title: "active task", Labels: []string{"area:hot"}})
+	open, err := unwrap(s.Create(tasks.CreateInput{Title: "active task", Labels: []string{"area:hot"}}))
 	if err != nil {
 		t.Fatalf("Create open: %v", err)
 	}
-	closed, err := s.Create(tasks.CreateInput{Title: "done task", Labels: []string{"area:cold"}})
+	closed, err := unwrap(s.Create(tasks.CreateInput{Title: "done task", Labels: []string{"area:cold"}}))
 	if err != nil {
 		t.Fatalf("Create closed: %v", err)
 	}

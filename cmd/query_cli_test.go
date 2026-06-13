@@ -53,7 +53,7 @@ func queryFixture(t *testing.T) (root string, ids map[string]string) {
 
 	create := func(in tasks.CreateInput) *tasks.Issue {
 		t.Helper()
-		iss, err := s.Create(in)
+		iss, err := unwrap(s.Create(in))
 		if err != nil {
 			t.Fatalf("Create(%q): %v", in.Title, err)
 		}

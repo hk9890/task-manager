@@ -564,10 +564,18 @@ type CreateInput struct {
 	Related     []string
 }
 
-// Create validates and writes a new issue, allocating its ID.
-func (s *Store) Create(in CreateInput) (*Issue, error) {
+// Create validates and writes a new issue, allocating its ID. It runs the
+// create lifecycle hooks (HOOK-SPEC §4): a pre-create gate can refuse the write
+// (returning *HookDeniedError, nothing written); post-create hooks notify after
+// it commits. Hints and post-hook warnings are returned in the MutationResult.
+func (s *Store) Create(in CreateInput) (*MutationResult, error) {
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
 	var created *Issue
-	err := s.withLock(func() error {
+	var preHints []string
+	err = s.withLock(func() error {
 		id, err := s.resolveID(in.ID)
 		if err != nil {
 			return err
@@ -591,13 +599,17 @@ func (s *Store) Create(in CreateInput) (*Issue, error) {
 		if err := s.checkRefs(iss); err != nil {
 			return err
 		}
-		if err := s.writeIssue(iss); err != nil {
+		preHints, err = s.gateWrite(hs, transCreate, nil, iss, func() error { return s.writeIssue(iss) })
+		if err != nil {
 			return err
 		}
 		created = iss
 		return nil
 	})
-	return created, err
+	if err != nil {
+		return nil, err
+	}
+	return s.postFinish(hs, true, transCreate, nil, created, preHints), nil
 }
 
 // UpdateInput holds partial changes. Nil pointer fields are left unchanged.
@@ -621,11 +633,19 @@ type UpdateInput struct {
 //   - Setting Status to StatusClosed routes through Close (moves .md to closed/).
 //   - Setting Status to a non-closed value on a closed issue routes through Reopen
 //     (moves .md back to hot dir), then applies the remaining field changes.
-func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
+func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error) {
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
+
 	// Detect early lifecycle-routing cases that must run under a single lock.
 	// We acquire the lock once and handle all cases inside.
-	var updated *Issue
-	err := s.withLock(func() error {
+	var old, newIss *Issue
+	var trans transition
+	var preHints []string
+	var fired bool
+	err = s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
@@ -638,7 +658,7 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 
 		if requestsClose {
 			// Route through the close flow: apply non-status field changes, then close.
-			// (No in-place write to hot dir is needed since Close does the write + move.)
+			old = cloneIssue(iss)
 			applyNonStatusFields(iss, in)
 			iss.Updated = s.now()
 			if err := validateFields(iss); err != nil {
@@ -647,40 +667,43 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			if err := s.checkRefs(iss); err != nil {
 				return err
 			}
-			// Apply close fields and move.
+			// Apply close fields, gate, and move.
 			s.applyStatus(iss, StatusClosed, "")
 			iss.Updated = s.now()
-			if err := s.closeMove(iss); err != nil {
+			trans = transClose
+			preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.closeMove(iss) })
+			if err != nil {
 				return err
 			}
-			updated = iss
+			newIss, fired = iss, true
 			return nil
 		}
 
 		if requestsReopen {
-			// Route through the reopen flow.
-			reopened, err := s.reopenLocked(iss)
+			// Route through the reopen flow: materialize the reopened end-state,
+			// gate it, then write it back to the hot dir in one move.
+			old = cloneIssue(iss)
+			iss.Status = StatusOpen
+			iss.Closed = time.Time{}
+			iss.CloseReason = ""
+			// Override with the requested non-closed status so that e.g.
+			// Update(..., {Status: in_progress}) lands on in_progress, not open
+			// (SDK-SPEC §4: "the issue ends in the requested status").
+			iss.Status = *in.Status
+			applyNonStatusFields(iss, in)
+			iss.Updated = s.now()
+			if err := validateFields(iss); err != nil {
+				return err
+			}
+			if err := s.checkRefs(iss); err != nil {
+				return err
+			}
+			trans = transReopen
+			preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.reopenWrite(iss) })
 			if err != nil {
 				return err
 			}
-			// reopenLocked forces StatusOpen; override with the requested non-closed
-			// status so that e.g. Update(..., {Status: in_progress}) lands on
-			// in_progress, not open. (SDK-SPEC §4: "the issue ends in the requested
-			// status".)
-			reopened.Status = *in.Status
-			// Apply remaining (non-status) field changes to the reopened issue.
-			applyNonStatusFields(reopened, in)
-			reopened.Updated = s.now()
-			if err := validateFields(reopened); err != nil {
-				return err
-			}
-			if err := s.checkRefs(reopened); err != nil {
-				return err
-			}
-			if err := s.writeIssue(reopened); err != nil {
-				return err
-			}
-			updated = reopened
+			newIss, fired = iss, true
 			return nil
 		}
 
@@ -689,7 +712,7 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			return fmt.Errorf("%w: %s", ErrImmutable, id)
 		}
 
-		old := cloneIssue(iss) // snapshot before applying changes
+		old = cloneIssue(iss) // snapshot before applying changes
 		applyNonStatusFields(iss, in)
 		if in.Status != nil {
 			s.applyStatus(iss, *in.Status, "")
@@ -697,10 +720,10 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 		iss.Updated = s.now()
 
 		// No-op: if nothing would change on disk (ignoring the stamped Updated),
-		// write nothing and return the issue unchanged. The engine detects this
-		// for every front end, not as a CLI-level short-circuit (HOOK-SPEC §2.1).
+		// write nothing and run no hooks. The engine detects this for every front
+		// end, not as a CLI-level short-circuit (HOOK-SPEC §2.1).
 		if issuesEqualIgnoringUpdated(old, iss) {
-			updated = old
+			newIss, fired = old, false
 			return nil
 		}
 
@@ -710,13 +733,18 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 		if err := s.checkRefs(iss); err != nil {
 			return err
 		}
-		if err := s.writeIssue(iss); err != nil {
+		trans = transUpdate
+		preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.writeIssue(iss) })
+		if err != nil {
 			return err
 		}
-		updated = iss
+		newIss, fired = iss, true
 		return nil
 	})
-	return updated, err
+	if err != nil {
+		return nil, err
+	}
+	return s.postFinish(hs, fired, trans, old, newIss, preHints), nil
 }
 
 // applyNonStatusFields applies all UpdateInput fields except Status to iss.
@@ -799,33 +827,44 @@ func applyLabels(iss *Issue, in UpdateInput) {
 // then Close again with the new reason.
 //
 // Use Reopen to restore mutability, or AddComment to append a post-close note.
-func (s *Store) Close(id, reason string) (*Issue, error) {
-	var out *Issue
-	err := s.withLock(func() error {
+func (s *Store) Close(id, reason string) (*MutationResult, error) {
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
+	var old, newIss *Issue
+	var preHints []string
+	var fired bool
+	err = s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
 		}
 		// If the issue is already closed, return a successful no-op.
 		// No in-place write to closed/ is attempted, preserving the immutability
-		// invariant (TASK-STORAGE-SPEC §5).
+		// invariant (TASK-STORAGE-SPEC §5); no hooks fire (HOOK-SPEC §2.1).
 		inClosed, err := s.isInClosed(id)
 		if err != nil {
 			return err
 		}
 		if inClosed {
-			out = iss
+			newIss, fired = iss, false
 			return nil
 		}
+		old = cloneIssue(iss)
 		s.applyStatus(iss, StatusClosed, reason)
 		iss.Updated = s.now()
-		if err := s.closeMove(iss); err != nil {
+		preHints, err = s.gateWrite(hs, transClose, old, iss, func() error { return s.closeMove(iss) })
+		if err != nil {
 			return err
 		}
-		out = iss
+		newIss, fired = iss, true
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	return s.postFinish(hs, fired, transClose, old, newIss, preHints), nil
 }
 
 // closeMove writes the issue to closed/ and removes its hot-dir file.
@@ -874,10 +913,18 @@ func (s *Store) closeMove(iss *Issue) error {
 }
 
 // Reopen moves a closed issue back to the active set, clears its closed
-// timestamp/reason, sets status open, and bumps updated.
-func (s *Store) Reopen(id string) (*Issue, error) {
-	var out *Issue
-	err := s.withLock(func() error {
+// timestamp/reason, sets status open, and bumps updated. It runs the reopen
+// lifecycle hooks (HOOK-SPEC §4): a pre-reopen gate can refuse; post-reopen
+// hooks notify after the move commits.
+func (s *Store) Reopen(id string) (*MutationResult, error) {
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
+	var old, newIss *Issue
+	var preHints []string
+	var fired bool
+	err = s.withLock(func() error {
 		iss, err := s.Get(id)
 		if err != nil {
 			return err
@@ -888,48 +935,44 @@ func (s *Store) Reopen(id string) (*Issue, error) {
 			return err
 		}
 		if !inClosed {
-			// Not in closed/ — nothing to reopen (treat as a no-op or error).
-			// The spec says "Reopen moves it back"; if it's already in hot, we
-			// just return the issue unchanged (idempotent).
-			out = iss
+			// Not in closed/ — nothing to reopen. Idempotent no-op: return the
+			// issue unchanged, no write, no hooks.
+			newIss, fired = iss, false
 			return nil
 		}
-		reopened, err := s.reopenLocked(iss)
+		old = cloneIssue(iss)
+		iss.Status = StatusOpen
+		iss.Closed = time.Time{}
+		iss.CloseReason = ""
+		iss.Updated = s.now()
+		preHints, err = s.gateWrite(hs, transReopen, old, iss, func() error { return s.reopenWrite(iss) })
 		if err != nil {
 			return err
 		}
-		out = reopened
+		newIss, fired = iss, true
 		return nil
 	})
-	return out, err
-}
-
-// reopenLocked implements the Reopen logic assuming the caller already holds
-// the store lock and has verified the issue is in closed/. It moves the .md
-// back to the hot dir, clears close fields, sets status open, and bumps updated.
-func (s *Store) reopenLocked(iss *Issue) (*Issue, error) {
-	src := s.closedFilePath(iss.ID)
-	dst := s.filePath(iss.ID)
-
-	// Clear close fields and set status open.
-	iss.Status = StatusOpen
-	iss.Closed = time.Time{}
-	iss.CloseReason = ""
-	iss.Updated = s.now()
-
-	// Write the updated content to the closed-dir path first (still atomic).
-	data, err := Marshal(iss)
 	if err != nil {
 		return nil, err
 	}
+	return s.postFinish(hs, fired, transReopen, old, newIss, preHints), nil
+}
+
+// reopenWrite moves a reopened issue's .md from closed/ back to the hot dir,
+// writing the supplied (already-materialized and validated) end-state. The
+// caller holds the store lock. It writes the content to the closed-dir path
+// atomically and then renames it to the hot dir, preserving git rename history.
+func (s *Store) reopenWrite(iss *Issue) error {
+	src := s.closedFilePath(iss.ID)
+	dst := s.filePath(iss.ID)
+	data, err := Marshal(iss)
+	if err != nil {
+		return err
+	}
 	if err := s.fs.WriteAtomic(src, data, 0o644); err != nil {
-		return nil, err
+		return err
 	}
-	// Then rename from closed/ back to hot dir.
-	if err := s.fs.Rename(src, dst); err != nil {
-		return nil, err
-	}
-	return iss, nil
+	return s.fs.Rename(src, dst)
 }
 
 // Comments returns the resolved effective comment log for an issue: each

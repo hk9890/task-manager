@@ -35,12 +35,12 @@ func newMemStoreForClose(t *testing.T) *Store {
 func TestClose_MovesToClosedDir(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "to close"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "to close"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	closed, err := s.Close(iss.ID, "done")
+	closed, err := unwrap(s.Close(iss.ID, "done"))
 	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestClose_MovesToClosedDir(t *testing.T) {
 func TestClose_SidecarStaysInComments(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "has comment"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "has comment"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestClose_SidecarStaysInComments(t *testing.T) {
 func TestClose_GetFallsThroughToClosedDir(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "to find after close"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "to find after close"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestClose_GetFallsThroughToClosedDir(t *testing.T) {
 func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "immutable"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "immutable"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -154,11 +154,11 @@ func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
 func TestClose_Idempotent(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "close twice"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "close twice"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	first, err := s.Close(iss.ID, "first")
+	first, err := unwrap(s.Close(iss.ID, "first"))
 	if err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestClose_Idempotent(t *testing.T) {
 	}
 
 	// Second Close on an already-closed issue: must succeed (no-op).
-	second, err := s.Close(iss.ID, "second")
+	second, err := unwrap(s.Close(iss.ID, "second"))
 	if err != nil {
 		t.Fatalf("second Close (re-close) must succeed (idempotent), got: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestClose_Idempotent(t *testing.T) {
 func TestClose_CommentOnClosedIssue(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "comment after close"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "comment after close"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestClose_CommentOnClosedIssue(t *testing.T) {
 func TestReopen_MovesBackToHot(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "reopen me"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "reopen me"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestReopen_MovesBackToHot(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := s.Reopen(iss.ID)
+	reopened, err := unwrap(s.Reopen(iss.ID))
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestReopen_MovesBackToHot(t *testing.T) {
 func TestReopen_EnablesWrites(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "original"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "original"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestReopen_EnablesWrites(t *testing.T) {
 	}
 
 	newTitle := "updated after reopen"
-	out, err := s.Update(iss.ID, UpdateInput{Title: &newTitle})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle}))
 	if err != nil {
 		t.Fatalf("Update after Reopen: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestClose_FaultInjection_WriteAtomicToClosedDir(t *testing.T) {
 		return tick
 	}
 
-	iss, err := s.Create(CreateInput{Title: "fault test"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "fault test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestClose_FaultInjection_RenameAfterWrite(t *testing.T) {
 		return tick
 	}
 
-	iss, err := s.Create(CreateInput{Title: "rename fault test"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "rename fault test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -392,13 +392,13 @@ func TestClose_FaultInjection_RenameAfterWrite(t *testing.T) {
 func TestUpdateStatus_ClosedRoutesThroughClose(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "via update"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "via update"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	st := StatusClosed
-	out, err := s.Update(iss.ID, UpdateInput{Status: &st})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Status: &st}))
 	if err != nil {
 		t.Fatalf("Update --status closed: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestUpdateStatus_ClosedRoutesThroughClose(t *testing.T) {
 func TestUpdateStatus_OpenRoutesThroughReopen(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "reopen via update"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "reopen via update"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestUpdateStatus_OpenRoutesThroughReopen(t *testing.T) {
 	}
 
 	st := StatusOpen
-	out, err := s.Update(iss.ID, UpdateInput{Status: &st})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Status: &st}))
 	if err != nil {
 		t.Fatalf("Update --status open (reopen): %v", err)
 	}
@@ -452,7 +452,7 @@ func TestUpdateStatus_OpenRoutesThroughReopen(t *testing.T) {
 func TestUpdateReopen_InProgress(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "reopen to in_progress"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "reopen to in_progress"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestUpdateReopen_InProgress(t *testing.T) {
 	}
 
 	st := StatusInProgress
-	out, err := s.Update(iss.ID, UpdateInput{Status: &st})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Status: &st}))
 	if err != nil {
 		t.Fatalf("Update --status in_progress: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestUpdateReopen_InProgress(t *testing.T) {
 func TestUpdateReopen_Open(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "reopen to open"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "reopen to open"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestUpdateReopen_Open(t *testing.T) {
 	}
 
 	st := StatusOpen
-	out, err := s.Update(iss.ID, UpdateInput{Status: &st})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Status: &st}))
 	if err != nil {
 		t.Fatalf("Update --status open: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestUpdateReopen_Open(t *testing.T) {
 func TestUpdateReopen_BlockedWithTitle(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "original title"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "original title"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestUpdateReopen_BlockedWithTitle(t *testing.T) {
 
 	st := StatusBlocked
 	newTitle := "new title after reopen"
-	out, err := s.Update(iss.ID, UpdateInput{Status: &st, Title: &newTitle})
+	out, err := unwrap(s.Update(iss.ID, UpdateInput{Status: &st, Title: &newTitle}))
 	if err != nil {
 		t.Fatalf("Update --status blocked --title: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestUpdateReopen_BlockedWithTitle(t *testing.T) {
 func TestReopen_AlwaysLandsOnOpen(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "reopen lands on open"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "reopen lands on open"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -570,7 +570,7 @@ func TestReopen_AlwaysLandsOnOpen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	reopened, err := s.Reopen(iss.ID)
+	reopened, err := unwrap(s.Reopen(iss.ID))
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -585,12 +585,12 @@ func TestReopen_AlwaysLandsOnOpen(t *testing.T) {
 func TestReopen_ActiveIssue_NoOp(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "already active"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "already active"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// Issue is open (active). Reopen must be a no-op.
-	got, err := s.Reopen(iss.ID)
+	got, err := unwrap(s.Reopen(iss.ID))
 	if err != nil {
 		t.Fatalf("Reopen on active issue: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestReopen_ActiveIssue_NoOp(t *testing.T) {
 func TestUpdateReopen_RegressionGuard_ClosedStatusErrImmutable(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	iss, err := s.Create(CreateInput{Title: "regression guard"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "regression guard"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

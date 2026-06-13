@@ -84,15 +84,15 @@ func newScopedMemStore(t *testing.T) (*Store, *vfs.Mem, string, string, string) 
 		return tick
 	}
 
-	open1, err := s.Create(CreateInput{Title: "open one", Labels: []string{"area:hot"}})
+	open1, err := unwrap(s.Create(CreateInput{Title: "open one", Labels: []string{"area:hot"}}))
 	if err != nil {
 		t.Fatalf("Create open1: %v", err)
 	}
-	open2, err := s.Create(CreateInput{Title: "open two", Labels: []string{"area:hot"}})
+	open2, err := unwrap(s.Create(CreateInput{Title: "open two", Labels: []string{"area:hot"}}))
 	if err != nil {
 		t.Fatalf("Create open2: %v", err)
 	}
-	closed1, err := s.Create(CreateInput{Title: "closed one", Labels: []string{"area:cold"}})
+	closed1, err := unwrap(s.Create(CreateInput{Title: "closed one", Labels: []string{"area:cold"}}))
 	if err != nil {
 		t.Fatalf("Create closed1: %v", err)
 	}

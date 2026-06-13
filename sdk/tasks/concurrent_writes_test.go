@@ -47,11 +47,11 @@ func TestConcurrentWrites_NoRace(t *testing.T) {
 	s := newConcurrentMemStore(t)
 
 	// Pre-create two seed issues that workers can reference and mutate.
-	seed1, err := s.Create(CreateInput{Title: "seed-1"})
+	seed1, err := unwrap(s.Create(CreateInput{Title: "seed-1"}))
 	if err != nil {
 		t.Fatalf("Create seed-1: %v", err)
 	}
-	seed2, err := s.Create(CreateInput{Title: "seed-2"})
+	seed2, err := unwrap(s.Create(CreateInput{Title: "seed-2"}))
 	if err != nil {
 		t.Fatalf("Create seed-2: %v", err)
 	}
@@ -139,11 +139,11 @@ func TestConcurrentWrites_DepRace(t *testing.T) {
 
 	s := newConcurrentMemStore(t)
 
-	dep, err := s.Create(CreateInput{Title: "dep"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dep"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
-	issue, err := s.Create(CreateInput{Title: "issue"})
+	issue, err := unwrap(s.Create(CreateInput{Title: "issue"}))
 	if err != nil {
 		t.Fatalf("Create issue: %v", err)
 	}

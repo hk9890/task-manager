@@ -27,10 +27,10 @@ import (
 func TestCreator_PersistAndRoundTrip(t *testing.T) {
 	s := storetest.New(t).Mem()
 
-	iss, err := s.Create(tasks.CreateInput{
+	iss, err := unwrap(s.Create(tasks.CreateInput{
 		Title:   "has creator",
 		Creator: "alice",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -52,10 +52,10 @@ func TestCreator_PersistAndRoundTrip(t *testing.T) {
 func TestCreator_MarshalUnmarshalRoundTrip(t *testing.T) {
 	// Use the Store to create a proper issue so Marshal gets a fully-populated Issue.
 	s := storetest.New(t).Mem()
-	iss, err := s.Create(tasks.CreateInput{
+	iss, err := unwrap(s.Create(tasks.CreateInput{
 		Title:   "creator round-trip",
 		Creator: "bob",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCreator_MarshalUnmarshalRoundTrip(t *testing.T) {
 func TestCreator_EmptyStaysEmpty(t *testing.T) {
 	s := storetest.New(t).Mem()
 
-	iss, err := s.Create(tasks.CreateInput{Title: "no creator"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "no creator"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -189,10 +189,10 @@ func TestCreator_ValidationRejectsInvalid(t *testing.T) {
 func TestCreator_MaxLenValid(t *testing.T) {
 	s := storetest.New(t).Mem()
 
-	iss, err := s.Create(tasks.CreateInput{
+	iss, err := unwrap(s.Create(tasks.CreateInput{
 		Title:   "max len creator",
 		Creator: strings.Repeat("a", 128),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Create with 128-char creator: %v", err)
 	}
@@ -272,16 +272,16 @@ func TestCreator_QueryNotEqual(t *testing.T) {
 func TestCreator_NotMutableViaUpdate(t *testing.T) {
 	s := storetest.New(t).Mem()
 
-	iss, err := s.Create(tasks.CreateInput{
+	iss, err := unwrap(s.Create(tasks.CreateInput{
 		Title:   "immutable creator",
 		Creator: "alice",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	newTitle := "updated title"
-	updated, err := s.Update(iss.ID, tasks.UpdateInput{Title: &newTitle})
+	updated, err := unwrap(s.Update(iss.ID, tasks.UpdateInput{Title: &newTitle}))
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}

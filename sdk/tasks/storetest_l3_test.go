@@ -150,7 +150,7 @@ func TestNextID_L3_ScansClosedPartition(t *testing.T) {
 
 	// The hot directory has no active issues; closed/ has tst-0099. Create must
 	// read closed/ without error and allocate a fresh ID, never the closed one.
-	iss, err := s.Create(tasks.CreateInput{Title: "new issue after closed"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "new issue after closed"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

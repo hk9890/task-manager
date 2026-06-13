@@ -170,11 +170,11 @@ func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(tasks.CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(tasks.CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
@@ -450,11 +450,11 @@ func TestSpec_CLI_BlockedJSON_IsArray(t *testing.T) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(tasks.CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(tasks.CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}
