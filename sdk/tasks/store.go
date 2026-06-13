@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
@@ -68,6 +69,11 @@ type Store struct {
 	cfg  Config
 	fs   vfs.FS // disk seam; always vfs.NewOS() in production
 
+	// runner is the process seam used to execute hooks (HOOK-SPEC). It is
+	// exec.NewOS() in production; tests inject an exec.Fake to exercise hook
+	// logic without spawning real processes. Never nil after construction.
+	runner exec.Runner
+
 	// mu serializes writes within a single process. It is acquired by withLock
 	// before the advisory flock, so concurrent goroutines in one embedder never
 	// interleave their mutations even when flock would allow it (flock is per-
@@ -87,10 +93,11 @@ type Store struct {
 func openWithFS(root string, fs vfs.FS) *Store {
 	absRoot, _ := filepath.Abs(root)
 	return &Store{
-		root: absRoot,
-		dir:  filepath.Join(absRoot, DataDirName),
-		fs:   fs,
-		now:  defaultNow,
+		root:   absRoot,
+		dir:    filepath.Join(absRoot, DataDirName),
+		fs:     fs,
+		runner: exec.NewOS(),
+		now:    defaultNow,
 	}
 }
 
@@ -110,7 +117,7 @@ func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, now: defaultNow}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), now: defaultNow}
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -137,7 +144,7 @@ func Init(root, prefix string) (*Store, error) {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, now: defaultNow}
+	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), now: defaultNow}
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -162,7 +169,7 @@ func Open(start string) (*Store, error) {
 	for {
 		dir := filepath.Join(abs, DataDirName)
 		if fi, err := fs.Stat(dir); err == nil && fi.IsDir() {
-			s := &Store{root: abs, dir: dir, fs: fs, now: defaultNow}
+			s := &Store{root: abs, dir: dir, fs: fs, runner: exec.NewOS(), now: defaultNow}
 			cfg, err := s.readConfig()
 			if err != nil {
 				return nil, err
