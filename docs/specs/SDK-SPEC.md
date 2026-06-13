@@ -181,6 +181,7 @@ type ImportInput struct {
     Updated     time.Time // zero → Created
     Closed      time.Time // required when Status == closed; zero → Updated
     CloseReason string
+    RunHooks    bool      // run lifecycle hooks on this import; default false (bulk import omits hooks)
     Comments    []ImportComment
 }
 
@@ -405,7 +406,10 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
 ```
 
 - Every write allocates/validates, then performs an atomic file write while holding
-  the project lock.
+  the project lock. Configured lifecycle hooks ([HOOK-SPEC.md](HOOK-SPEC.md)) run on the
+  transition: pre-hooks gate the write under the lock, post-hooks notify after it. A
+  pre-hook denial returns `*HookDeniedError` (§6) and writes nothing; advisory hints from
+  hooks are surfaced per HOOK-SPEC §6.2.
 - **`Create`** allocates a fresh collision-resistant ID (random base36 token; see
   TASK-STORAGE-SPEC §3), applies defaults (`TypeTask`, `PriorityDefault`,
   `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
@@ -422,7 +426,9 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   works in dependency order and translates foreign IDs to taskmgr IDs. It writes the
   comment sidecar with the supplied authors and timestamps. Because validation is
   up-front, a rejected record (e.g. a control character in a comment body) leaves
-  **nothing** behind.
+  **nothing** behind. By default `Import` runs with hooks **omitted** — bulk loading should
+  not fire a gate per issue; set `ImportInput.RunHooks` to gate/notify each imported
+  transition like an ordinary write.
 - **`Update`** applies the partial field changes and routes lifecycle transitions
   through the same path the CLI uses: setting `Status` to `closed` routes through the
   close flow (stamps the close time, moves the file to `closed/`); setting a
@@ -510,6 +516,15 @@ func (e *ParseError) Error() string
 ```
 
 The grammar it enforces is defined in [QUERY-SPEC.md](QUERY-SPEC.md) §1.
+
+A **pre-hook denial** returns a typed error naming the gate that refused — the event, hook
+id, exit code, and reason ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2). It fails the mutation with
+nothing written:
+
+```go
+type HookDeniedError struct { Event, Hook, Reason string; Exit int }
+func (e *HookDeniedError) Error() string
+```
 
 ---
 

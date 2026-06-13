@@ -358,6 +358,18 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.
 
+**Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
+their output alongside the normal result. On success the JSON carries optional
+`"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
+(post-hook failures, which never fail the write). A pre-hook **denial** exits non-zero and
+prints a structured error:
+
+```json
+{ "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
+  "issue_id": "dtt-0042", "exit": 1, "reason": "3 unit tests failing",
+  "hints": ["run `make fmt` before retrying"] }
+```
+
 ---
 
 ## 7. Command summary

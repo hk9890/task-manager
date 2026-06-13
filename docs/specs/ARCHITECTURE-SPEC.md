@@ -3,7 +3,8 @@
 A high-level description of how task-manager is structured: the layers, the Go
 modules, the storage engine at the core, and the invariants that hold the design
 together. Detail lives in the companion specs:
-[storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md).
+[storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md), and the
+[hooks](HOOK-SPEC.md) extension system.
 
 ---
 
@@ -145,9 +146,13 @@ enforced:
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
-4. **Write atomically**: temp file + `fsync` + `rename` over the target (the
+4. **Run pre-hooks** for the transition ([HOOK-SPEC.md](HOOK-SPEC.md) §4): a gate that
+   does not allow aborts here — the lock is released and nothing is written.
+5. **Write atomically**: temp file + `fsync` + `rename` over the target (the
    append-only comment sidecar is the one exception — `O_APPEND` + `fsync`).
-5. **Release the lock.**
+6. **Release the lock.**
+7. **Run post-hooks** outside the lock ([HOOK-SPEC.md](HOOK-SPEC.md) §4): non-vetoing
+   notifications that cannot change the committed outcome.
 
 Reads take a fresh snapshot of the directory and never hold the lock.
 
@@ -194,7 +199,10 @@ Deliberately out of scope, because they are unused weight:
 - memories / notes-as-knowledge, "prime"-style context dumps;
 - external tracker integrations (Jira, Linear, GitHub);
 - a database or SQL backend; a sync engine or federation;
-- coordination gates, swarms, configurable status/type catalogs;
+- swarms, configurable status/type catalogs, and **policy baked into the core** — rules
+  like "tests must pass before close" are not engine features; they live in the hook
+  extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at
+  transitions and keeps the core free of policy;
 - **multi-project workspaces** — a store tracks exactly one project, committed with
   its repo; there is no enclosing workspace or `--project` selection;
 - a **REST / HTTP API** or other remote front end — a future possibility, not built;
@@ -214,3 +222,9 @@ The engine depends on essentially nothing beyond YAML encoding; the CLI adds a
 command framework. The guiding principle is subtractive: prefer the smallest design
 that does the job, keep every artifact human-readable, and centralize writes so
 correctness is enforced in exactly one place.
+
+A feature in the **core must earn its place**: if a behaviour can be expressed as a hook
+([HOOK-SPEC.md](HOOK-SPEC.md)) rather than engine code, it is a hook. The core carries only
+issues, dependencies, and ready-work; per-repository policy and reactions live in the
+extension system. That split is what lets the engine stay small while still supporting
+complex, project-specific workflows.

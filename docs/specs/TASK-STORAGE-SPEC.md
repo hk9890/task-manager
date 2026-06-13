@@ -110,13 +110,22 @@ concrete example.
 
 ```yaml
 prefix: dtt
+
+hook_timeout: 2s          # optional; max runtime for any single hook (HOOK-SPEC §3.1)
+hooks:                    # optional; lifecycle-gate hooks run at issue transitions
+  - id: tests-before-close
+    event: pre-close
+    run: ["make", "test"]
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max 32. The ID prefix for every issue in the store. |
+| `hook_timeout` | duration | no | Global per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
+| `hooks` | list | no | Lifecycle-gate hooks run at issue transitions; full schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3. |
 
-Unknown keys must be ignored by readers, never rejected.
+Unknown keys must be ignored by readers, never rejected. The `hooks` block and
+`hook_timeout` are validated when the store is opened for a write ([HOOK-SPEC.md](HOOK-SPEC.md) §3.4).
 
 ### 4.3 Task file — `<id>.md`
 

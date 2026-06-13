@@ -1,9 +1,5 @@
 # Hook Specification — lifecycle gates
 
-> **Status: Proposed — not yet implemented.** This is the design contract to build
-> against, not current behaviour. Until it ships, the other specs in `specs/` are the
-> authoritative description of the system.
-
 **Hooks** are scripts the engine runs at issue state transitions. A **pre-hook** can
 *block* a transition — refuse to close a task until tests pass. A **post-hook** *reacts*
 to one after it commits — send a notification. Either kind may also hand back a short
@@ -12,7 +8,17 @@ to one after it commits — send a notification. Either kind may also hand back 
 Hooks keep policy out of the core. The engine knows only issues, dependencies, and
 ready-work (ARCHITECTURE-SPEC.md §1); rules like "tests must pass before close" or
 "a feature needs a Definition-of-Done section" are hooks, declared per-repository in
-`config.yaml`.
+`config.yaml`. Hooks are the project's **extension system**: the core stays minimal and
+earns every feature it keeps, and anything that *can* live in a hook is a hook rather than
+engine code (ARCHITECTURE-SPEC.md §9–§10).
+
+The primary caller is an **autonomous agent** that files and closes its own work — the
+same audience as the CLI (CLI-SPEC.md) and the query language (QUERY-SPEC.md). Hooks exist
+mainly so such an agent cannot silently skip policy: a gate denies with a structured reason
+and an optional hint, the agent reads it, fixes the work on its side, and retries. That
+framing is why the surfaces are machine-readable (JSON denial, hints, a versioned payload)
+and why hooks **never mutate** the issue themselves (§1, §10) — they tell the agent what to
+change; they do not change it.
 
 The contract is uniform:
 
@@ -21,7 +27,7 @@ The contract is uniform:
   happened;
 - every event delivers the **same input** — `{event, old, new}` on stdin;
 - a hook **decides or reacts; it never edits the issue**. The write path stays the sole
-  author of on-disk state (ARCHITECTURE-SPEC.md §7).
+  author of on-disk state (ARCHITECTURE-SPEC.md §6 write path, §7 one-writer invariant).
 
 ---
 
@@ -51,10 +57,10 @@ Each transition fires up to two events: a **pre-event** before the write (gating
 
 | Transition | Pre-event (gates) | Post-event (notifies) | `old` | `new` |
 |---|---|---|---|---|
-| create a new issue | `pre-create` | `post-create` | `null` | proposed issue |
-| modify a live issue (no closed-ness change) | `pre-update` | `post-update` | current | proposed |
-| transition **into** `closed` | `pre-close` | `post-close` | current | proposed (`closed`) |
-| transition **out of** `closed` | `pre-reopen` | `post-reopen` | current | proposed |
+| create a new issue | `pre-create` | `post-create` | `null` | candidate (new issue) |
+| modify a live issue (no closed-ness change) | `pre-update` | `post-update` | current | candidate |
+| transition **into** `closed` | `pre-close` | `post-close` | current | candidate (`closed`) |
+| transition **out of** `closed` | `pre-reopen` | `post-reopen` | current | candidate |
 
 ### 2.1 Transition classification (normative)
 
@@ -71,6 +77,8 @@ Consequences:
 - An update that *also* closes (`update --status closed --priority 0`) is a **close**;
   `new` carries *all* the changes, so a close-gate always sees the complete proposed state.
 - A **no-op** mutation (nothing would change on disk) writes nothing and fires **nothing**.
+  The engine detects this by comparing the materialized `new` to `old`, so the guarantee
+  holds for every front end — it is not a CLI-level short-circuit.
 - A denied `pre-create` creates no file — the issue simply never comes into existence.
 
 ### 2.2 Not hooked in v1
@@ -120,6 +128,13 @@ suite on close must raise it** (e.g. `hook_timeout: 5m`) — and should weigh th
 cost in §8. Exceeding the limit is a hook error (§7): a deny for pre-hooks, a warning
 for post-hooks.
 
+A test gate's value over the existing commit/CI gate (docs/TESTING.md) is **real-time,
+per-transition feedback**: the agent that closes a task learns in the same call that the
+work is not green, with a structured reason to act on, instead of discovering it later at
+commit or push. The cheaper, lower-overlap cases — fast structural validators (DoD section
+present, label shape) and post-hook notifications — should lead a project's hook
+configuration.
+
 ### 3.2 Hook fields
 
 | Field | Required | Meaning |
@@ -140,7 +155,9 @@ operators, and grammar as `taskmgr list -q` — evaluated against the **`new`** 
 
 - field predicates (`type`, `priority`, `label`, `status`, …) read `new`'s fields;
 - the derived `ready` / `blocked` predicates are computed against the store as of the
-  moment the hook fires.
+  moment the hook fires: for a **pre-hook** that is the pre-write store with the
+  materialized `new` overlaid in memory (the change is not yet on disk); for a
+  **post-hook** it is the committed store.
 
 `when` reads **only `new`**; there are no `old.`/`new.` qualifiers. It *scopes* a hook, it
 does not decide the transition (the event already did). `event: pre-close` +
@@ -152,7 +169,7 @@ parse is a config error (§3.4).
 The `hooks:` block and `hook_timeout` are validated when the store is opened for a
 **write**. If malformed — unknown `event`, empty/missing `run`, unparseable `when` or
 `hook_timeout` — **every mutation fails** with a clear configuration error until fixed
-(fail-closed config; §1.4). **Reads are never affected.** Unknown keys within a hook
+(fail-closed config; §1 principle 4). **Reads are never affected.** Unknown keys within a hook
 entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
 
 ---
@@ -164,6 +181,8 @@ lock; post-hooks run **after** it is released.
 
 1. **Acquire** the store lock.
 2. **Apply** the change in memory → `new`; `old` is the current on-disk issue (or `null`).
+   The engine materializes `new` itself and never re-reads it from disk, so pre-hooks and
+   `when` (§3.3) evaluate against this in-memory candidate; post-hooks read the committed store.
 3. **Validate** field invariants and referential integrity. *Hooks never run on an issue
    the engine itself would reject.*
 4. **Classify** the transition (§2.1) → the pre-event. Select pre-hooks whose `event`
@@ -191,6 +210,10 @@ Notes:
 - **"Fire-and-forget" = non-vetoing, not asynchronous.** Post-hooks run synchronously
   after the write so their hints and warnings can be surfaced; they simply cannot change
   the outcome. With the 2-second default the added wait is small.
+- **Observability.** Every hook invocation is logged with its event, `id`, issue id,
+  decision, and **wall-clock duration**; a hook that exceeds `hook_timeout` or errors is
+  logged at a higher level. Hook timing is the main signal for the in-lock cost of §8 — see
+  [MONITORING.md](../implementation/MONITORING.md).
 - **Environment.** Each hook process inherits the parent environment plus:
 
   | Variable | Value |
@@ -230,8 +253,12 @@ The engine writes one JSON object to the hook's **stdin** and closes it:
 
 ### 5.1 The hook issue object
 
-`old` and `new` are the stable issue DTO (CLI-SPEC.md §6 `issueDTO`) **plus** the
-`description` body. Empty optional fields are omitted, exactly as in the CLI's JSON output.
+`old` and `new` use the same **shape** as the stable issue DTO (CLI-SPEC.md §6 `issueDTO`)
+**plus** the `description` body, with empty optional fields omitted exactly as in the CLI's
+JSON output. Because hooks fire inside the `Store` (§4), the **engine** owns this payload
+serializer: CLI-SPEC §6 `issueDTO` defines the field shape — a contract the two must keep
+identical — not an importable symbol. The `taskmgr` rendering DTO lives in the CLI package
+and is deliberately not reachable from the engine (the CLI imports the SDK, never the reverse).
 
 ```json
 {
@@ -357,19 +384,21 @@ rather than a mysterious per-close one.
 ## 8. Concurrency and the lock
 
 Pre-hooks run **inside** the store write lock (§4), after validation and before the atomic
-write. It is the simplest fully-correct model: the decision is made against exactly the
-state that will be written (no check/use gap), and a denial is atomic.
+write. This is a **deliberate, settled** choice, not a v1 shortcut. The decision is made
+against exactly the state that will be written (no check/use gap), the engine hands the hook
+the materialized `old` and `new` as one atomic snapshot, and a denial is atomic. Running a
+pre-hook *outside* the lock would mean it could not be given a stable `old`/`new` pair — the
+store could move under it — so the gate would decide against state that is no longer the
+state being written. The in-lock model is the price of a correct gate, and it is the chosen
+model.
 
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
 block until it returns. With the 2-second default this is negligible; **if you raise
 `hook_timeout` to run a test suite on close, you serialize all writes for that duration.**
-Post-hooks avoid this by running outside the lock.
-
-> **Future option (not v1): optimistic, out-of-lock pre-hooks.** A slow gate could run
-> before taking the lock, then the engine would lock, re-validate, confirm the issue is
-> unchanged since the snapshot (else abort for retry), and write — removing the stall at
-> the cost of a conflict/retry concept. Deferred: the dominant workflow is a single writer
-> per repo, where there is nothing to stall.
+Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
+wall-clock duration is logged (§4, [MONITORING.md](../implementation/MONITORING.md)), so a
+project can see exactly how long its gates hold the lock and decide whether to raise
+`hook_timeout`, move a slow check to a post-hook, or push it to CI.
 
 ---
 
@@ -377,14 +406,24 @@ Post-hooks avoid this by running outside the lock.
 
 - **Engine-level.** Hooks fire from the `Store` mutation path, so the CLI and every SDK
   consumer are gated uniformly (ARCHITECTURE-SPEC.md §3); there is no CLI-only hook path.
-- **Suppression for bulk tooling.** The SDK exposes a way to run a mutation with hooks
-  disabled (for import, migration, or `bench/` tooling that writes many issues). The
-  `taskmgr` CLI always runs with hooks **enabled**.
+  The one exception is bulk import, below.
+- **Suppression is scoped to bulk import, not a general flag.** The everyday mutations
+  (`Create` / `Update` / `Close` / `Reopen`) always run hooks — there is no
+  `WithHooks(false)` on them, so the no-bypass guarantee (§7) is a property of those
+  methods. Bulk loading is instead a **distinct call** — `Store.Import` (SDK-SPEC.md §4),
+  the direct write of a complete end-state used for import, migration, and `bench/`
+  tooling — which takes an explicit option to run hooks or omit them, defaulting to
+  **omit** (re-importing N issues should not fire N create/close gates). The only ungated
+  path is therefore an import a caller opts into deliberately; the `taskmgr` CLI's ordinary
+  commands always run with hooks **enabled**.
 - **Payload version.** The stdin payload carries `schema` (§5). Adding a field is additive;
   a removal/repurpose is breaking and is versioned with the SDK module (cf. QUERY-SPEC.md §7).
-- **Spec sync.** When implemented, this extends TASK-STORAGE-SPEC.md §4.2 (the
-  `config.yaml` schema gains `hook_timeout` and `hooks`) and is referenced from
-  OVERVIEW.md; per CODING.md those updates land in the same change.
+- **Spec sync.** Hooks span several specs, which stay consistent (per CODING.md): the
+  `config.yaml` schema carries `hook_timeout` and `hooks` (TASK-STORAGE-SPEC.md §4.2); the
+  pre/post-hook steps sit in the write path (ARCHITECTURE-SPEC.md §6); the run-or-omit-hooks
+  flag on `Import` and the hook-denied error are in SDK-SPEC.md (§3/§4/§6); and the `hints` /
+  `warnings` fields and the `hook_denied` error shape are in CLI-SPEC.md §6. A change to the
+  hook contract updates all of them together.
 
 ---
 
@@ -395,7 +434,12 @@ Deliberately excluded, with rationale:
 - **No bypass / skip mechanism.** A gate that can be skipped is not a gate. To relax or
   remove one, edit `config.yaml`.
 - **Hooks never mutate issues.** No writing labels or any field from a hook output; hooks
-  gate (pre) or notify (post) only. The engine stays the sole author.
+  gate (pre) or notify (post) only. The engine stays the sole author. This is deliberate
+  even though auto-labeling is a common lightweight-tracker hook: the chosen ergonomic is
+  **"gate, don't fix"** — a hook denies with a reason/hint (e.g. "label `area:*` required")
+  and the agent, the primary caller, applies the change on its side and retries. Keeping
+  hooks side-effect-free preserves the one-writer invariant (ARCHITECTURE-SPEC.md §7) and
+  the validation/atomicity guarantee.
 - **No per-hook `timeout`, `workdir`, or error policy.** One global `hook_timeout`; cwd is
   always the repo root; fail-closed (pre) / warn (post) is uniform.
 - **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.

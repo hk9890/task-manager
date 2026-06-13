@@ -3,7 +3,8 @@
 Read [OVERVIEW.md](OVERVIEW.md) and the specs in `specs/` first. For the package
 map and the test layers, read
 [implementation/PACKAGE-OVERVIEW.md](implementation/PACKAGE-OVERVIEW.md) and
-[implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
+[implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md); for the
+logging/observability design, see [implementation/MONITORING.md](implementation/MONITORING.md).
 
 ## Build & test (mise; `make` still works)
 
