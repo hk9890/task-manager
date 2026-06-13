@@ -58,6 +58,17 @@ func defaultNow() time.Time {
 type Config struct {
 	// Prefix is prepended to allocated issue IDs, e.g. "agt" -> "agt-0001".
 	Prefix string `yaml:"prefix"`
+
+	// HookTimeout is the global per-hook wall-clock limit as a Go duration
+	// string ("2s", "5m"); empty means the 2s default, "0" disables it. It is
+	// parsed and validated lazily on the first write (HOOK-SPEC §3.1/§3.4), not
+	// on read, so a malformed value never breaks queries.
+	HookTimeout string `yaml:"hook_timeout,omitempty"`
+
+	// Hooks are the lifecycle-gate hooks run at issue transitions (HOOK-SPEC §3).
+	// Like HookTimeout they are validated lazily on the first write; unknown keys
+	// within an entry are ignored for forward-compatibility.
+	Hooks []Hook `yaml:"hooks,omitempty"`
 }
 
 // Store is the single gateway to a project's issue files. Every read and write
@@ -83,6 +94,25 @@ type Store struct {
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
+
+	// hookOnce guards the lazy compile of the hook configuration. Built on the
+	// first write (via hooks()); never on a read, so a malformed hooks block
+	// fails mutations closed (HOOK-SPEC §3.4) without affecting queries.
+	hookOnce sync.Once
+	hookSet  *hookSet
+	hookErr  error
+}
+
+// hooks returns the compiled, validated hook configuration, building it once on
+// first use. A configuration error (unknown event, empty run, unparseable when
+// or hook_timeout) is returned here and, because this is called only from the
+// write path, fails the mutation closed while leaving reads unaffected
+// (HOOK-SPEC §3.4).
+func (s *Store) hooks() (*hookSet, error) {
+	s.hookOnce.Do(func() {
+		s.hookSet, s.hookErr = buildHookSet(s.cfg)
+	})
+	return s.hookSet, s.hookErr
 }
 
 // openWithFS is an unexported test hook that constructs a Store rooted at
