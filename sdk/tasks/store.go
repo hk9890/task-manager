@@ -3,6 +3,7 @@ package tasks
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -95,6 +96,12 @@ type Store struct {
 	// now returns the current time; overridable in tests.
 	now func() time.Time
 
+	// logger receives structured observability records (MONITORING.md). It is a
+	// discard logger unless the caller supplies one via WithLogger; the SDK never
+	// reads the environment itself (the os import stays in the seams), so the CLI
+	// configures level/destination from TASKMGR_LOG and injects the logger here.
+	logger *slog.Logger
+
 	// hookOnce guards the lazy compile of the hook configuration. Built on the
 	// first write (via hooks()); never on a read, so a malformed hooks block
 	// fails mutations closed (HOOK-SPEC §3.4) without affecting queries.
@@ -127,6 +134,7 @@ func openWithFS(root string, fs vfs.FS) *Store {
 		dir:    filepath.Join(absRoot, DataDirName),
 		fs:     fs,
 		runner: exec.NewOS(),
+		logger: discardLogger,
 		now:    defaultNow,
 	}
 }
@@ -147,7 +155,7 @@ func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), now: defaultNow}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -155,8 +163,9 @@ func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
 }
 
 // Init creates a new data directory under root with the given ID prefix and
-// returns an open Store. It fails if a data directory already exists.
-func Init(root, prefix string) (*Store, error) {
+// returns an open Store. It fails if a data directory already exists. Options
+// (e.g. WithLogger) configure the store.
+func Init(root, prefix string, opts ...Option) (*Store, error) {
 	prefix = strings.TrimSpace(prefix)
 	if !prefixRe.MatchString(prefix) {
 		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
@@ -174,7 +183,8 @@ func Init(root, prefix string) (*Store, error) {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), now: defaultNow}
+	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s.applyOptions(opts)
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -182,8 +192,9 @@ func Init(root, prefix string) (*Store, error) {
 }
 
 // Open locates the data directory by walking up from start (or the current
-// working directory if start is empty) and loads its config.
-func Open(start string) (*Store, error) {
+// working directory if start is empty) and loads its config. Options (e.g.
+// WithLogger) configure the store.
+func Open(start string, opts ...Option) (*Store, error) {
 	fs := vfs.NewOS()
 	if start == "" {
 		wd, err := fs.Getwd()
@@ -199,7 +210,8 @@ func Open(start string) (*Store, error) {
 	for {
 		dir := filepath.Join(abs, DataDirName)
 		if fi, err := fs.Stat(dir); err == nil && fi.IsDir() {
-			s := &Store{root: abs, dir: dir, fs: fs, runner: exec.NewOS(), now: defaultNow}
+			s := &Store{root: abs, dir: dir, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+			s.applyOptions(opts)
 			cfg, err := s.readConfig()
 			if err != nil {
 				return nil, err

@@ -49,7 +49,7 @@ func init() {
 
 // openStore locates and opens the project store, honouring the --dir flag.
 func openStore() (*tasks.Store, error) {
-	return tasks.Open(flagDir)
+	return tasks.Open(flagDir, logOption())
 }
 
 var versionCmd = &cobra.Command{

@@ -17,15 +17,18 @@ the subtractive architecture (ARCHITECTURE-SPEC §10).
 
 ## What is logged
 
-| Event | Level | Key fields |
+Each row is one `slog` record (`msg` in the first column):
+
+| `msg` | Level | Key fields |
 |---|---|---|
-| Write committed (`Create`/`Update`/`Close`/`Reopen`/`Import`) | debug | op, issue id, transition |
-| Validation / referential rejection | info | op, issue id, field, reason |
-| Lock wait beyond a threshold | warn | waited_ms |
-| Hook invoked | debug | event, hook id, issue id, decision, **duration_ms** |
-| Hook denied a transition | info | event, hook id, issue id, exit, reason |
-| Hook error (missing / timeout / signal) | warn | event, hook id, issue id, category, duration_ms |
-| Store / IO error | error | op, path, error |
+| `write` — a committed mutation | debug | `op` (the transition), `issue` |
+| `hook` — a hook that **allowed** | debug | `event`, `hook`, `issue`, `decision=allow`, **`duration_ms`** |
+| `hook` — a hook that **denied** | info | `event`, `hook`, `issue`, `decision=deny`, `duration_ms` |
+| `hook` — a hook that **errored** (missing / timeout / signal) | warn | `event`, `hook`, `issue`, `decision=error`, `duration_ms` |
+| `io_error` — a failed store write | error | `op`, `issue`, `error` |
+
+Every hook invocation emits one `hook` record regardless of outcome — only the
+level and `decision` differ — so allow/deny/error are one query away from each other.
 
 ## Hook timing
 
