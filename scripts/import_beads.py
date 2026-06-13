@@ -35,8 +35,9 @@ Mapping
   as an ``imported-status:<s>`` label (taskmgr's set is open/in_progress/blocked/
   deferred/closed, so most beads statuses pass through unchanged).
 * Edges: issues are imported in dependency order so ``parent``/``blocked_by``
-  targets always exist; a ``related`` edge whose target is imported *later*
-  (or in a cycle) is skipped and counted.
+  targets exist. A ``related`` edge (or, in a dependency cycle, a ``parent`` /
+  ``blocked_by`` edge) whose target is imported later is dropped and counted —
+  the issue itself is still imported (a cycle can't be represented anyway).
 """
 from __future__ import annotations
 
@@ -212,6 +213,7 @@ class Stats:
         self.dropped_labels = 0
         self.skipped_related = 0
         self.dangling_edges = 0
+        self.cyclic_edges = 0
 
 
 def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
@@ -249,17 +251,28 @@ def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
         "updated_at": rec.get("updated_at") or rec.get("created_at"),
     }
 
+    # Edges must reference an already-imported issue. Topological order
+    # guarantees that for a DAG; only a dependency CYCLE produces a forward ref
+    # (target imported later). taskmgr can't represent a cyclic blocked_by/parent
+    # anyway, so we drop just that edge (keeping the issue) rather than failing the
+    # whole record.
     parent, blockers, related = edges(rec)
     if parent:
-        if parent in idmap:
+        if parent in idmap and parent in emitted:
             env["parent"] = idmap[parent]
+        elif parent in idmap:
+            stats.cyclic_edges += 1
+            eprint(f"  ! {rec['id']}: parent {parent} is part of a cycle — edge dropped")
         else:
             stats.dangling_edges += 1
             eprint(f"  ! {rec['id']}: parent {parent} not in export — skipped")
     bl = []
     for b in blockers:
-        if b in idmap:
+        if b in idmap and b in emitted:
             bl.append(idmap[b])
+        elif b in idmap:
+            stats.cyclic_edges += 1
+            eprint(f"  ! {rec['id']}: blocker {b} is part of a cycle — edge dropped")
         else:
             stats.dangling_edges += 1
             eprint(f"  ! {rec['id']}: blocker {b} not in export — skipped")
@@ -384,7 +397,8 @@ def main() -> int:
 
     eprint(f"\nImported {len(ok)}/{len(records)} issues into {tasks_dir}.")
     eprint(f"  labels dropped: {stats.dropped_labels}, related skipped: {stats.skipped_related}, "
-           f"dangling edges: {stats.dangling_edges}, failed records: {len(failed)}")
+           f"cyclic edges dropped: {stats.cyclic_edges}, dangling edges: {stats.dangling_edges}, "
+           f"failed records: {len(failed)}")
     eprint(f"Wrote source_id -> new-id map to {args.map_out}")
     return 0 if not failed else 1
 
