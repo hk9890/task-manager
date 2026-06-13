@@ -689,11 +689,20 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			return fmt.Errorf("%w: %s", ErrImmutable, id)
 		}
 
+		old := cloneIssue(iss) // snapshot before applying changes
 		applyNonStatusFields(iss, in)
 		if in.Status != nil {
 			s.applyStatus(iss, *in.Status, "")
 		}
 		iss.Updated = s.now()
+
+		// No-op: if nothing would change on disk (ignoring the stamped Updated),
+		// write nothing and return the issue unchanged. The engine detects this
+		// for every front end, not as a CLI-level short-circuit (HOOK-SPEC §2.1).
+		if issuesEqualIgnoringUpdated(old, iss) {
+			updated = old
+			return nil
+		}
 
 		if err := validateFields(iss); err != nil {
 			return err
