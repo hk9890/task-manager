@@ -67,21 +67,29 @@ var knownBareFields = map[string]bool{
 	"blocked": true,
 }
 
-// validStatusValues are the accepted enum tokens for status.
-var validStatusValues = map[string]bool{
-	"open":        true,
-	"in_progress": true,
-	"blocked":     true,
-	"closed":      true,
-}
+// validStatusTokens and validTypeTokens are the accepted enum tokens for the
+// status and type fields, in display order. They MUST mirror the tasks model
+// enums (tasks.Statuses / tasks.Types). This package is a leaf and cannot import
+// tasks (the import-cycle rule, see query.go), so the model is mirrored here
+// rather than referenced. A round-trip guard test in the tasks package
+// (TestQueryTokensMatchModel) fails CI if the two ever drift — which is exactly
+// the drift that caused the deferred-status bug (issue #21, issue #22).
+var (
+	validStatusTokens = []string{"open", "in_progress", "blocked", "deferred", "closed"}
+	validTypeTokens   = []string{"task", "bug", "feature", "epic", "chore"}
 
-// validTypeValues are the accepted enum tokens for type.
-var validTypeValues = map[string]bool{
-	"task":    true,
-	"bug":     true,
-	"feature": true,
-	"epic":    true,
-	"chore":   true,
+	validStatusValues = tokenSet(validStatusTokens)
+	validTypeValues   = tokenSet(validTypeTokens)
+)
+
+// tokenSet builds a membership set from an ordered token slice so the accepted
+// set and the human-readable "want: ..." error list derive from one source.
+func tokenSet(tokens []string) map[string]bool {
+	set := make(map[string]bool, len(tokens))
+	for _, t := range tokens {
+		set[t] = true
+	}
+	return set
 }
 
 // ---- parser -----------------------------------------------------------------
@@ -349,11 +357,11 @@ func (p *parser) parseEnumValue(field string, tok token) (Value, *ParseError) {
 	switch field {
 	case "status":
 		if !validStatusValues[s] {
-			return nil, parseErr(tok.Pos, "unknown status %q (want: open, in_progress, blocked, closed)", s)
+			return nil, parseErr(tok.Pos, "unknown status %q (want: %s)", s, strings.Join(validStatusTokens, ", "))
 		}
 	case "type":
 		if !validTypeValues[s] {
-			return nil, parseErr(tok.Pos, "unknown type %q (want: task, bug, feature, epic, chore)", s)
+			return nil, parseErr(tok.Pos, "unknown type %q (want: %s)", s, strings.Join(validTypeTokens, ", "))
 		}
 	}
 	return &StringValue{S: s}, nil
