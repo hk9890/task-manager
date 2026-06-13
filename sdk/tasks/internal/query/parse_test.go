@@ -186,6 +186,25 @@ func TestParse_Comparison_StatusEq(t *testing.T) {
 	}
 }
 
+// TestParse_Comparison_StatusDeferred is the direct regression for issue #21:
+// "deferred" is a valid model status and a documented query token, so the
+// parser must accept it. Before the fix the parser's token set omitted it and
+// this expression was a parse error.
+func TestParse_Comparison_StatusDeferred(t *testing.T) {
+	n := mustParse(t, `status == "deferred"`)
+	cmp, ok := n.(*query.CmpNode)
+	if !ok {
+		t.Fatalf("expected CmpNode, got %T", n)
+	}
+	if cmp.Field != "status" || cmp.Op != "==" {
+		t.Errorf("field=%q op=%q want status/==", cmp.Field, cmp.Op)
+	}
+	sv, ok := cmp.Value.(*query.StringValue)
+	if !ok || sv.S != "deferred" {
+		t.Errorf("value: got %T %v, want StringValue{deferred}", cmp.Value, cmp.Value)
+	}
+}
+
 func TestParse_Comparison_PriorityLE(t *testing.T) {
 	n := mustParse(t, `priority <= 2`)
 	cmp, ok := n.(*query.CmpNode)
