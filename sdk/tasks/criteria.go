@@ -127,39 +127,29 @@ func (c Criteria) Build() (string, error) {
 	}
 
 	// statuses: OR-group
-	if len(c.Statuses) == 1 {
-		parts = append(parts, fmt.Sprintf("status == %s", quoteVal(string(c.Statuses[0]))))
-	} else if len(c.Statuses) > 1 {
-		var sub []string
-		for _, s := range c.Statuses {
-			sub = append(sub, fmt.Sprintf("status == %s", quoteVal(string(s))))
-		}
-		parts = append(parts, "("+strings.Join(sub, " || ")+")")
+	ss := make([]string, len(c.Statuses))
+	for i, s := range c.Statuses {
+		ss[i] = string(s)
+	}
+	if g := eqOrGroup("status", ss); g != "" {
+		parts = append(parts, g)
 	}
 
 	// types: OR-group
-	if len(c.Types) == 1 {
-		parts = append(parts, fmt.Sprintf("type == %s", quoteVal(string(c.Types[0]))))
-	} else if len(c.Types) > 1 {
-		var sub []string
-		for _, tp := range c.Types {
-			sub = append(sub, fmt.Sprintf("type == %s", quoteVal(string(tp))))
-		}
-		parts = append(parts, "("+strings.Join(sub, " || ")+")")
+	ts := make([]string, len(c.Types))
+	for i, tp := range c.Types {
+		ts[i] = string(tp)
+	}
+	if g := eqOrGroup("type", ts); g != "" {
+		parts = append(parts, g)
 	}
 
 	// labels
 	if len(c.Labels) > 0 {
 		if c.LabelMatch == LabelMatchAny {
 			// OR-group: any label matches
-			if len(c.Labels) == 1 {
-				parts = append(parts, fmt.Sprintf("label == %s", quoteVal(c.Labels[0])))
-			} else {
-				var sub []string
-				for _, l := range c.Labels {
-					sub = append(sub, fmt.Sprintf("label == %s", quoteVal(l)))
-				}
-				parts = append(parts, "("+strings.Join(sub, " || ")+")")
+			if g := eqOrGroup("label", c.Labels); g != "" {
+				parts = append(parts, g)
 			}
 		} else {
 			// LabelMatchAll (default): AND-group — each label must be present
@@ -233,11 +223,33 @@ func quoteVal(s string) string {
 	return `"` + s + `"`
 }
 
+// storageTimeLayout is the on-disk storage timestamp layout used across the
+// store (TASK-STORAGE-SPEC §6, QUERY-SPEC §3): "YYYY-MM-DDThh:mm:ssZ" (UTC,
+// whole seconds). It is the single source of truth shared by formatTimestamp
+// and the comment sidecar's parse/format paths.
+const storageTimeLayout = "2006-01-02T15:04:05Z"
+
 // formatTimestamp formats t as the storage timestamp form used by
 // TASK-STORAGE-SPEC §6 and understood by the query engine (QUERY-SPEC §3):
 // "YYYY-MM-DDThh:mm:ssZ" (UTC, whole seconds).
 func formatTimestamp(t time.Time) string {
-	return t.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z")
+	return t.UTC().Truncate(time.Second).Format(storageTimeLayout)
+}
+
+// eqOrGroup builds an equality OR-group for one field over vals: "" for no
+// values, a bare `field == "v"` for one, and `(field == "a" || ...)` for many.
+func eqOrGroup(field string, vals []string) string {
+	if len(vals) == 0 {
+		return ""
+	}
+	sub := make([]string, len(vals))
+	for i, v := range vals {
+		sub[i] = fmt.Sprintf("%s == %s", field, quoteVal(v))
+	}
+	if len(sub) == 1 {
+		return sub[0]
+	}
+	return "(" + strings.Join(sub, " || ") + ")"
 }
 
 // ---------------------------------------------------------------------------

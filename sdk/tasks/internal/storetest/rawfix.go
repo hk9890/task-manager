@@ -19,6 +19,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // RawFixture holds a temp directory that has been initialised as a .tasks/ root
@@ -33,10 +35,9 @@ type RawFixture struct {
 // root must already exist (e.g. t.TempDir()).
 func NewRawFixture(t *testing.T, root string) *RawFixture {
 	t.Helper()
-	taskDir := filepath.Join(root, ".tasks")
+	taskDir := filepath.Join(root, tasks.DataDirName)
 	for _, sub := range []string{
 		taskDir,
-		filepath.Join(taskDir, "closed"),
 		filepath.Join(taskDir, "comments"),
 	} {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -44,7 +45,7 @@ func NewRawFixture(t *testing.T, root string) *RawFixture {
 		}
 	}
 	// Write a minimal .tasks/config.yaml so tasks.Open succeeds.
-	cfgPath := filepath.Join(taskDir, "config.yaml")
+	cfgPath := filepath.Join(taskDir, tasks.ConfigFileName)
 	cfgData := []byte("prefix: tst\n")
 	if err := os.WriteFile(cfgPath, cfgData, 0o644); err != nil {
 		t.Fatalf("RawFixture: write config: %v", err)

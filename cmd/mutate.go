@@ -251,6 +251,39 @@ var commentFlags struct {
 	file   string
 }
 
+// defaultUser returns s, or $USER when s is empty.
+func defaultUser(s string) string {
+	if s == "" {
+		return os.Getenv("USER")
+	}
+	return s
+}
+
+// resolveCommentBody resolves a comment body from --file or a positional
+// argument, enforcing mutual exclusion and a non-empty result.
+func resolveCommentBody(cmd *cobra.Command, file, arg string, argGiven bool, emptyMsg, missingMsg string) (string, error) {
+	if cmd.Flags().Changed("file") && argGiven {
+		return "", fmt.Errorf("body argument and --file are mutually exclusive")
+	}
+	var body string
+	switch {
+	case file != "":
+		b, err := readFileOrStdin(file)
+		if err != nil {
+			return "", err
+		}
+		body = string(b)
+	case argGiven:
+		body = arg
+	default:
+		return "", fmt.Errorf("%s", missingMsg)
+	}
+	if strings.TrimSpace(body) == "" {
+		return "", fmt.Errorf("%s", emptyMsg)
+	}
+	return body, nil
+}
+
 var commentAddCmd = &cobra.Command{
 	Use:   "add <id> [body]",
 	Short: "Append a comment to an issue",
@@ -260,40 +293,24 @@ var commentAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if cmd.Flags().Changed("file") && len(args) == 2 {
-			return fmt.Errorf("body argument and --file are mutually exclusive")
+		argGiven := len(args) == 2
+		var arg string
+		if argGiven {
+			arg = args[1]
 		}
-		var body string
-		switch {
-		case commentFlags.file != "":
-			b, err := readFileOrStdin(commentFlags.file)
-			if err != nil {
-				return err
-			}
-			body = string(b)
-		case len(args) == 2:
-			body = args[1]
-		default:
-			return fmt.Errorf("provide a comment body as an argument or via --file")
+		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+			"comment body is empty",
+			"provide a comment body as an argument or via --file")
+		if err != nil {
+			return err
 		}
-		if strings.TrimSpace(body) == "" {
-			return fmt.Errorf("comment body is empty")
-		}
-		author := commentFlags.author
-		if author == "" {
-			author = os.Getenv("USER")
-		}
+		author := defaultUser(commentFlags.author)
 		c, err := s.AddComment(args[0], author, body)
 		if err != nil {
 			return err
 		}
 		if flagJSON {
-			return printJSON(commentDTO{
-				ID:      c.ID,
-				Author:  c.Author,
-				Created: c.Created,
-				Body:    c.Body,
-			})
+			return printJSON(toCommentDTO(*c))
 		}
 		fmt.Printf("Commented on %s (comment %s)\n", args[0], c.ID)
 		return nil
@@ -309,41 +326,24 @@ var commentEditCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if cmd.Flags().Changed("file") && len(args) == 3 {
-			return fmt.Errorf("body argument and --file are mutually exclusive")
+		argGiven := len(args) == 3
+		var arg string
+		if argGiven {
+			arg = args[2]
 		}
-		var body string
-		switch {
-		case commentFlags.file != "":
-			b, err := readFileOrStdin(commentFlags.file)
-			if err != nil {
-				return err
-			}
-			body = string(b)
-		case len(args) == 3:
-			body = args[2]
-		default:
-			return fmt.Errorf("provide a body as an argument or via --file")
+		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+			"comment body is empty; use comment rm to delete",
+			"provide a body as an argument or via --file")
+		if err != nil {
+			return err
 		}
-		if strings.TrimSpace(body) == "" {
-			return fmt.Errorf("comment body is empty; use comment rm to delete")
-		}
-		author := commentFlags.author
-		if author == "" {
-			author = os.Getenv("USER")
-		}
+		author := defaultUser(commentFlags.author)
 		c, err := s.EditComment(args[0], args[1], author, body)
 		if err != nil {
 			return err
 		}
 		if flagJSON {
-			return printJSON(commentDTO{
-				ID:       c.ID,
-				Author:   c.Author,
-				Created:  c.Created,
-				Replaces: c.Replaces,
-				Body:     c.Body,
-			})
+			return printJSON(toCommentDTO(*c))
 		}
 		fmt.Printf("Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
 		return nil
@@ -359,10 +359,7 @@ var commentRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := commentFlags.author
-		if author == "" {
-			author = os.Getenv("USER")
-		}
+		author := defaultUser(commentFlags.author)
 		if err := s.DeleteComment(args[0], args[1], author); err != nil {
 			return err
 		}

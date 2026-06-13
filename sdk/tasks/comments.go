@@ -15,7 +15,6 @@ package tasks
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
 	"path/filepath"
 	"strings"
 	"time"
@@ -55,7 +54,7 @@ type commentOnDisk struct {
 // is forced into a YAML literal block scalar (body: |) so that no
 // double-quoted, \n-escaped one-liner can appear in the sidecar.
 func marshalCommentDoc(c Comment) []byte {
-	created := c.Created.UTC().Format("2006-01-02T15:04:05Z")
+	created := formatTimestamp(c.Created)
 
 	// Build a yaml.Node tree for every doc so all scalars (the ISO-8601 created
 	// timestamp included) emit unquoted, and the body can force LiteralStyle.
@@ -200,7 +199,7 @@ func splitDocStream(data []byte) []string {
 // "2006-01-02T15:04:05Z". This is the inverse of the format used by
 // marshalCommentDoc.
 func parseTimestamp(s string) (time.Time, error) {
-	return time.Parse("2006-01-02T15:04:05Z", s)
+	return time.Parse(storageTimeLayout, s)
 }
 
 // resolveComments collapses a raw comment stream into the effective list:
@@ -349,12 +348,7 @@ func sanitizeCommentBody(body string) string {
 // matching ^[0-9a-z]{8}$. It does NOT read the stream; per-issue collisions
 // are negligible given the ~36^8 keyspace.
 func newCommentID() string {
-	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-	b := make([]byte, 8)
-	for i := range b {
-		b[i] = alphabet[rand.Intn(len(alphabet))]
-	}
-	return string(b)
+	return randToken(8)
 }
 
 // validateCommentBody verifies that a comment body, after sanitization, will

@@ -23,12 +23,12 @@ var Statuses = []Status{StatusOpen, StatusInProgress, StatusBlocked, StatusDefer
 
 // Valid reports whether s is a known status.
 func (s Status) Valid() bool {
-	switch s {
-	case StatusOpen, StatusInProgress, StatusBlocked, StatusDeferred, StatusClosed:
-		return true
-	default:
-		return false
+	for _, v := range Statuses {
+		if v == s {
+			return true
+		}
 	}
+	return false
 }
 
 // IsClosed reports whether s represents a completed issue. A blocker counts as
@@ -52,12 +52,12 @@ var Types = []Type{TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore}
 
 // Valid reports whether t is a known type.
 func (t Type) Valid() bool {
-	switch t {
-	case TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore:
-		return true
-	default:
-		return false
+	for _, v := range Types {
+		if v == t {
+			return true
+		}
 	}
+	return false
 }
 
 // Priority bounds. Lower is more urgent, matching the beads convention

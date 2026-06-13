@@ -15,7 +15,6 @@ package tasks
 // stamp s.now() and route closed issues through closeMove, cannot do.
 
 import (
-	"strings"
 	"time"
 )
 
@@ -69,13 +68,8 @@ type ImportInput struct {
 func (s *Store) Import(in ImportInput) (*Issue, error) {
 	var out *Issue
 	err := s.withLock(func() error {
-		id := strings.TrimSpace(in.ID)
-		if id == "" {
-			var err error
-			if id, err = s.nextID(); err != nil {
-				return err
-			}
-		} else if err := s.validateNewID(id); err != nil {
+		id, err := s.resolveID(in.ID)
+		if err != nil {
 			return err
 		}
 
@@ -93,28 +87,18 @@ func (s *Store) Import(in ImportInput) (*Issue, error) {
 			status = StatusOpen
 		}
 
-		iss := &Issue{
-			ID:          id,
-			Title:       strings.TrimSpace(in.Title),
-			Status:      status,
-			Type:        in.Type,
-			Priority:    PriorityDefault,
-			Assignee:    in.Assignee,
-			Creator:     strings.TrimSpace(in.Creator),
-			Labels:      dedupe(in.Labels),
-			Parent:      in.Parent,
-			BlockedBy:   dedupe(in.BlockedBy),
-			Related:     dedupe(in.Related),
-			Created:     created,
-			Updated:     updated,
+		iss := buildIssue(id, issueFields{
+			Title:       in.Title,
 			Description: in.Description,
-		}
-		if iss.Type == "" {
-			iss.Type = TypeTask
-		}
-		if in.Priority != nil {
-			iss.Priority = *in.Priority
-		}
+			Type:        in.Type,
+			Priority:    in.Priority,
+			Assignee:    in.Assignee,
+			Creator:     in.Creator,
+			Labels:      in.Labels,
+			Parent:      in.Parent,
+			BlockedBy:   in.BlockedBy,
+			Related:     in.Related,
+		}, status, created, updated)
 		if status == StatusClosed {
 			closed := in.Closed
 			if closed.IsZero() {

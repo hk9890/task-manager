@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,19 +33,15 @@ func (fi *memFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi *memFileInfo) IsDir() bool        { return fi.isDir }
 func (fi *memFileInfo) Sys() any           { return nil }
 
-// memDirEntry implements os.DirEntry for ReadDir results.
-type memDirEntry struct {
-	name  string
-	isDir bool
-	size  int64
-}
+// memDirEntry implements os.DirEntry for ReadDir results. It holds (does not
+// embed) a memFileInfo so it does not accidentally promote memFileInfo's
+// os.FileInfo methods.
+type memDirEntry struct{ fi memFileInfo }
 
-func (e *memDirEntry) Name() string      { return e.name }
-func (e *memDirEntry) IsDir() bool       { return e.isDir }
-func (e *memDirEntry) Type() os.FileMode { return 0 }
-func (e *memDirEntry) Info() (os.FileInfo, error) {
-	return &memFileInfo{name: e.name, size: e.size, isDir: e.isDir}, nil
-}
+func (e *memDirEntry) Name() string               { return e.fi.Name() }
+func (e *memDirEntry) IsDir() bool                { return e.fi.IsDir() }
+func (e *memDirEntry) Type() os.FileMode          { return 0 }
+func (e *memDirEntry) Info() (os.FileInfo, error) { return &e.fi, nil }
 
 // Mem is an in-memory implementation of FS. It is safe for concurrent use.
 //
@@ -121,6 +118,18 @@ func (m *Mem) ensureDir(dir string) {
 	m.dirs["/"] = true
 }
 
+// requireParentDir returns an os.ErrNotExist-wrapped error when the parent
+// directory of name does not exist. what labels the directory in the message
+// (e.g. "parent directory" or "destination parent directory"). Must be called
+// with m.mu held.
+func (m *Mem) requireParentDir(name, what string) error {
+	parent := filepath.Dir(name)
+	if !m.dirs[parent] {
+		return fmt.Errorf("%w: %s does not exist: %s", os.ErrNotExist, what, parent)
+	}
+	return nil
+}
+
 // ReadDir reads the named directory and returns a sorted list of entries
 // (files and immediate subdirectories) whose parent is exactly dir.
 func (m *Mem) ReadDir(dir string) ([]os.DirEntry, error) {
@@ -143,11 +152,7 @@ func (m *Mem) ReadDir(dir string) ([]os.DirEntry, error) {
 			name := filepath.Base(path)
 			if !seen[name] {
 				seen[name] = true
-				entries = append(entries, &memDirEntry{
-					name:  name,
-					isDir: false,
-					size:  int64(len(data)),
-				})
+				entries = append(entries, &memDirEntry{fi: memFileInfo{name: name, size: int64(len(data)), isDir: false}})
 			}
 		}
 	}
@@ -160,10 +165,7 @@ func (m *Mem) ReadDir(dir string) ([]os.DirEntry, error) {
 			name := filepath.Base(d)
 			if !seen[name] {
 				seen[name] = true
-				entries = append(entries, &memDirEntry{
-					name:  name,
-					isDir: true,
-				})
+				entries = append(entries, &memDirEntry{fi: memFileInfo{name: name, isDir: true}})
 			}
 		}
 	}
@@ -187,9 +189,7 @@ func (m *Mem) ReadFile(name string) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", os.ErrNotExist, name)
 	}
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	return cp, nil
+	return bytes.Clone(data), nil
 }
 
 // Stat returns FileInfo for the named file or directory.
@@ -225,14 +225,11 @@ func (m *Mem) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
-	parent := filepath.Dir(name)
-	if !m.dirs[parent] {
-		return fmt.Errorf("%w: parent directory does not exist: %s", os.ErrNotExist, parent)
+	if err := m.requireParentDir(name, "parent directory"); err != nil {
+		return err
 	}
 
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	m.files[name] = cp
+	m.files[name] = bytes.Clone(data)
 	return nil
 }
 
@@ -250,9 +247,8 @@ func (m *Mem) Append(name string, data []byte, perm os.FileMode) error {
 		return err
 	}
 
-	parent := filepath.Dir(name)
-	if !m.dirs[parent] {
-		return fmt.Errorf("%w: parent directory does not exist: %s", os.ErrNotExist, parent)
+	if err := m.requireParentDir(name, "parent directory"); err != nil {
+		return err
 	}
 
 	existing := m.files[name]
@@ -294,14 +290,11 @@ func (m *Mem) Rename(oldpath, newpath string) error {
 	}
 
 	// Require the destination parent directory to exist.
-	dstParent := filepath.Dir(newpath)
-	if !m.dirs[dstParent] {
-		return fmt.Errorf("%w: destination parent directory does not exist: %s", os.ErrNotExist, dstParent)
+	if err := m.requireParentDir(newpath, "destination parent directory"); err != nil {
+		return err
 	}
 
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	m.files[newpath] = cp
+	m.files[newpath] = bytes.Clone(data)
 	delete(m.files, oldpath)
 	return nil
 }

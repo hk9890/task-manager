@@ -232,13 +232,26 @@ func (s *Store) closedDir() string {
 // isInClosed reports whether the issue with the given id lives in the closed/
 // partition (i.e. its .md is not in the hot directory).
 func (s *Store) isInClosed(id string) (bool, error) {
-	if _, err := s.fs.Stat(s.filePath(id)); err == nil {
-		return false, nil // found in hot dir
+	path, err := s.issueFilePath(id)
+	return path == s.closedFilePath(id), err
+}
+
+// getMutable loads an issue and rejects in-place edits to closed issues.
+// Returns ErrImmutable (wrapped with the id) when the issue lives in closed/
+// (TASK-STORAGE-SPEC §5). Caller holds the lock.
+func (s *Store) getMutable(id string) (*Issue, error) {
+	iss, err := s.Get(id)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := s.fs.Stat(s.closedFilePath(id)); err == nil {
-		return true, nil // found in closed/
+	inClosed, err := s.isInClosed(id)
+	if err != nil {
+		return nil, err
 	}
-	return false, errNotFound(id)
+	if inClosed {
+		return nil, fmt.Errorf("%w: %s", ErrImmutable, id)
+	}
+	return iss, nil
 }
 
 // Get loads a single issue by ID. It first looks in the hot directory and
@@ -271,11 +284,14 @@ func (s *Store) Get(id string) (*Issue, error) {
 	return iss, nil
 }
 
-// All loads every issue in the store. Order is by ID for determinism.
-func (s *Store) All() ([]*Issue, error) {
-	entries, err := s.fs.ReadDir(s.dir)
+// loadIssuesFromDir scans dir for issue files, skipping subdirectories,
+// dot-files, and non-.md entries, and returns the parsed issues. Parse errors
+// are wrapped as "parse <errPrefix><name>". The error from ReadDir is returned
+// UNWRAPPED so callers can test it with vfs.IsNotExist (allClosed relies on this).
+func (s *Store) loadIssuesFromDir(dir, errPrefix string) ([]*Issue, error) {
+	entries, err := s.fs.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, err // unwrapped on purpose: allClosed() does vfs.IsNotExist on this
 	}
 	var issues []*Issue
 	for _, e := range entries {
@@ -283,15 +299,24 @@ func (s *Store) All() ([]*Issue, error) {
 		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, FileExt) {
 			continue
 		}
-		data, err := s.fs.ReadFile(filepath.Join(s.dir, name))
+		data, err := s.fs.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
 		iss, err := Unmarshal(data)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", name, err)
+			return nil, fmt.Errorf("parse %s%s: %w", errPrefix, name, err)
 		}
 		issues = append(issues, iss)
+	}
+	return issues, nil
+}
+
+// All loads every issue in the store. Order is by ID for determinism.
+func (s *Store) All() ([]*Issue, error) {
+	issues, err := s.loadIssuesFromDir(s.dir, "")
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(issues, func(i, j int) bool { return issues[i].ID < issues[j].ID })
 	return issues, nil
@@ -313,28 +338,12 @@ func (s *Store) index() (map[string]*Issue, []*Issue, error) {
 // allClosed loads all issues from the closed/ partition. Returns an empty
 // slice if closed/ does not exist.
 func (s *Store) allClosed() ([]*Issue, error) {
-	entries, err := s.fs.ReadDir(s.closedDir())
+	issues, err := s.loadIssuesFromDir(s.closedDir(), "closed/")
 	if err != nil {
 		if vfs.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, err
-	}
-	var issues []*Issue
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, FileExt) {
-			continue
-		}
-		data, err := s.fs.ReadFile(filepath.Join(s.closedDir(), name))
-		if err != nil {
-			return nil, err
-		}
-		iss, err := Unmarshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse closed/%s: %w", name, err)
-		}
-		issues = append(issues, iss)
 	}
 	return issues, nil
 }
@@ -386,6 +395,67 @@ func (s *Store) validateNewID(id string) error {
 		return err
 	}
 	return nil
+}
+
+// resolveID returns the issue ID to use: a freshly allocated one when raw is
+// empty (after trimming), or raw itself once validated as a usable new ID.
+// Caller holds the lock.
+func (s *Store) resolveID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return s.nextID()
+	}
+	if err := s.validateNewID(id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// buildIssue assembles an *Issue from the shared fields common to Create and
+// Import, applying the identical defaulting both callers need: Title/Creator
+// trimmed, Type defaulted to TypeTask when empty, Priority defaulted to
+// PriorityDefault unless overridden, and Labels/BlockedBy/Related deduped. The
+// status and timestamps are passed in by the caller; the closed end-state
+// (Closed/CloseReason) is left to the caller (Import) since Create never sets it.
+func buildIssue(id string, in issueFields, status Status, created, updated time.Time) *Issue {
+	iss := &Issue{
+		ID:          id,
+		Title:       strings.TrimSpace(in.Title),
+		Status:      status,
+		Type:        in.Type,
+		Priority:    PriorityDefault,
+		Assignee:    in.Assignee,
+		Creator:     strings.TrimSpace(in.Creator),
+		Labels:      dedupe(in.Labels),
+		Parent:      in.Parent,
+		BlockedBy:   dedupe(in.BlockedBy),
+		Related:     dedupe(in.Related),
+		Created:     created,
+		Updated:     updated,
+		Description: in.Description,
+	}
+	if iss.Type == "" {
+		iss.Type = TypeTask
+	}
+	if in.Priority != nil {
+		iss.Priority = *in.Priority
+	}
+	return iss
+}
+
+// issueFields carries the issue payload shared by CreateInput and ImportInput
+// so buildIssue can assemble the common end-state from either caller.
+type issueFields struct {
+	Title       string
+	Description string
+	Type        Type
+	Priority    *int
+	Assignee    string
+	Creator     string
+	Labels      []string
+	Parent      string
+	BlockedBy   []string
+	Related     []string
 }
 
 // writeIssue atomically writes an issue to disk via the FS seam. The
@@ -461,38 +531,23 @@ type CreateInput struct {
 func (s *Store) Create(in CreateInput) (*Issue, error) {
 	var created *Issue
 	err := s.withLock(func() error {
-		id := strings.TrimSpace(in.ID)
-		if id == "" {
-			var err error
-			if id, err = s.nextID(); err != nil {
-				return err
-			}
-		} else if err := s.validateNewID(id); err != nil {
+		id, err := s.resolveID(in.ID)
+		if err != nil {
 			return err
 		}
 		now := s.now()
-		iss := &Issue{
-			ID:          id,
-			Title:       strings.TrimSpace(in.Title),
-			Status:      StatusOpen,
-			Type:        in.Type,
-			Priority:    PriorityDefault,
-			Assignee:    in.Assignee,
-			Creator:     strings.TrimSpace(in.Creator),
-			Labels:      dedupe(in.Labels),
-			Parent:      in.Parent,
-			BlockedBy:   dedupe(in.BlockedBy),
-			Related:     dedupe(in.Related),
-			Created:     now,
-			Updated:     now,
+		iss := buildIssue(id, issueFields{
+			Title:       in.Title,
 			Description: in.Description,
-		}
-		if iss.Type == "" {
-			iss.Type = TypeTask
-		}
-		if in.Priority != nil {
-			iss.Priority = *in.Priority
-		}
+			Type:        in.Type,
+			Priority:    in.Priority,
+			Assignee:    in.Assignee,
+			Creator:     in.Creator,
+			Labels:      in.Labels,
+			Parent:      in.Parent,
+			BlockedBy:   in.BlockedBy,
+			Related:     in.Related,
+		}, StatusOpen, now, now)
 		if err := validateFields(iss); err != nil {
 			return err
 		}
@@ -597,25 +652,7 @@ func (s *Store) Update(id string, in UpdateInput) (*Issue, error) {
 			return fmt.Errorf("%w: %s", ErrImmutable, id)
 		}
 
-		if in.Title != nil {
-			iss.Title = strings.TrimSpace(*in.Title)
-		}
-		if in.Description != nil {
-			iss.Description = *in.Description
-		}
-		if in.Type != nil {
-			iss.Type = *in.Type
-		}
-		if in.Priority != nil {
-			iss.Priority = *in.Priority
-		}
-		if in.Assignee != nil {
-			iss.Assignee = *in.Assignee
-		}
-		if in.Parent != nil {
-			iss.Parent = *in.Parent
-		}
-		applyLabels(iss, in)
+		applyNonStatusFields(iss, in)
 		if in.Status != nil {
 			s.applyStatus(iss, *in.Status, "")
 		}
@@ -855,7 +892,7 @@ func (s *Store) reopenLocked(iss *Issue) (*Issue, error) {
 // All() / Ready() / List() never read sidecars; Comments() loads it lazily.
 func (s *Store) Comments(id string) ([]Comment, error) {
 	// Verify the issue exists first.
-	if _, err := s.loadIssue(id); err != nil {
+	if _, err := s.Get(id); err != nil {
 		return nil, err
 	}
 	stream, err := readCommentStream(s.fs, s.commentsPath(id))
@@ -863,13 +900,6 @@ func (s *Store) Comments(id string) ([]Comment, error) {
 		return nil, err
 	}
 	return resolveComments(stream), nil
-}
-
-// loadIssue reads an issue from the hot partition or closed/, returning
-// ErrNotFound if it does not exist in either.
-func (s *Store) loadIssue(id string) (*Issue, error) {
-	// Delegate to Get which already handles the hot → closed fall-through.
-	return s.Get(id)
 }
 
 // migrateInlineComments checks whether the issue .md at issueFilePath still
@@ -936,6 +966,34 @@ func (s *Store) issueFilePath(id string) (string, error) {
 	return "", errNotFound(id)
 }
 
+// prepareCommentMutation verifies the issue exists, migrates any legacy inline
+// comments, and returns the issue plus its sidecar path (keyed on iss.ID, not
+// the input id). Caller must hold the store lock.
+func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
+	iss, err := s.Get(id)
+	if err != nil {
+		return nil, "", err
+	}
+	issPath, err := s.issueFilePath(id)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.migrateInlineComments(issPath); err != nil {
+		return nil, "", fmt.Errorf("migrate inline comments: %w", err)
+	}
+	return iss, s.commentsPath(iss.ID), nil
+}
+
+// requireReplaceTarget verifies commentID exists as an earlier comment in the
+// sidecar stream at sidecarPath. Caller must hold the store lock.
+func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
+	stream, err := readCommentStream(s.fs, sidecarPath)
+	if err != nil {
+		return err
+	}
+	return validateReplaces(commentID, stream)
+}
+
 // AddComment appends a new comment to the issue sidecar and returns the new
 // comment (including its freshly allocated random ID). The issue .md file is
 // NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
@@ -943,20 +1001,9 @@ func (s *Store) issueFilePath(id string) (string, error) {
 func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
-		// Verify the issue exists (falls through to closed/).
-		iss, err := s.Get(id)
+		_, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
-		}
-
-		// Migrate any legacy inline comments first. Use the actual file path
-		// (hot or closed/) so migration works regardless of partition.
-		issPath, err := s.issueFilePath(id)
-		if err != nil {
-			return err
-		}
-		if err := s.migrateInlineComments(issPath); err != nil {
-			return fmt.Errorf("migrate inline comments: %w", err)
 		}
 
 		body = sanitizeCommentBody(body)
@@ -970,7 +1017,7 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 			return err
 		}
 
-		if err := appendCommentDoc(s.fs, s.commentsPath(iss.ID), c); err != nil {
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
 			return err
 		}
 		out = &c
@@ -985,27 +1032,13 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
-		iss, err := s.Get(id)
+		_, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
 		}
 
-		// Migrate any legacy inline comments first (works for hot or closed/).
-		issPath, err := s.issueFilePath(id)
-		if err != nil {
-			return err
-		}
-		if err := s.migrateInlineComments(issPath); err != nil {
-			return fmt.Errorf("migrate inline comments: %w", err)
-		}
-
-		// Read the current stream to validate that the target comment exists.
-		sidecarPath := s.commentsPath(iss.ID)
-		stream, err := readCommentStream(s.fs, sidecarPath)
-		if err != nil {
-			return err
-		}
-		if err := validateReplaces(commentID, stream); err != nil {
+		// Validate that the target comment exists.
+		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
 			return err
 		}
 
@@ -1034,26 +1067,12 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 // commentID and Deleted: true. The issue .md file is NOT rewritten.
 func (s *Store) DeleteComment(id, commentID, author string) error {
 	return s.withLock(func() error {
-		iss, err := s.Get(id)
+		_, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
 		}
 
-		// Migrate any legacy inline comments first (works for hot or closed/).
-		issPath, err := s.issueFilePath(id)
-		if err != nil {
-			return err
-		}
-		if err := s.migrateInlineComments(issPath); err != nil {
-			return fmt.Errorf("migrate inline comments: %w", err)
-		}
-
-		sidecarPath := s.commentsPath(iss.ID)
-		stream, err := readCommentStream(s.fs, sidecarPath)
-		if err != nil {
-			return err
-		}
-		if err := validateReplaces(commentID, stream); err != nil {
+		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
 			return err
 		}
 
@@ -1072,17 +1091,9 @@ func (s *Store) DeleteComment(id, commentID, author string) error {
 // AddDep records that dependent is blocked by blocker.
 func (s *Store) AddDep(dependent, blocker string) error {
 	return s.withLock(func() error {
-		iss, err := s.Get(dependent)
+		iss, err := s.getMutable(dependent)
 		if err != nil {
 			return err
-		}
-		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
-		inClosed, err := s.isInClosed(dependent)
-		if err != nil {
-			return err
-		}
-		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
 		}
 		if dependent == blocker {
 			return invalid("blocked_by", "issue cannot block itself")
@@ -1104,17 +1115,9 @@ func (s *Store) AddDep(dependent, blocker string) error {
 // RemoveDep removes a blocker from dependent.
 func (s *Store) RemoveDep(dependent, blocker string) error {
 	return s.withLock(func() error {
-		iss, err := s.Get(dependent)
+		iss, err := s.getMutable(dependent)
 		if err != nil {
 			return err
-		}
-		// Reject in-place writes to closed issues (TASK-STORAGE-SPEC §5).
-		inClosed, err := s.isInClosed(dependent)
-		if err != nil {
-			return err
-		}
-		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, dependent)
 		}
 		kept := iss.BlockedBy[:0]
 		for _, b := range iss.BlockedBy {
@@ -1135,16 +1138,9 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 // union), so the link surfaces from both issues.
 func (s *Store) AddRelated(issueID, otherID string) error {
 	return s.withLock(func() error {
-		iss, err := s.Get(issueID)
+		iss, err := s.getMutable(issueID)
 		if err != nil {
 			return err
-		}
-		inClosed, err := s.isInClosed(issueID)
-		if err != nil {
-			return err
-		}
-		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, issueID)
 		}
 		if issueID == otherID {
 			return invalid("related", "issue cannot relate to itself")
@@ -1184,16 +1180,9 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 			return changed
 		}
 
-		iss, err := s.Get(issueID)
+		iss, err := s.getMutable(issueID)
 		if err != nil {
 			return err
-		}
-		inClosed, err := s.isInClosed(issueID)
-		if err != nil {
-			return err
-		}
-		if inClosed {
-			return fmt.Errorf("%w: %s", ErrImmutable, issueID)
 		}
 		if removeRef(iss, otherID) {
 			iss.Updated = s.now()

@@ -84,10 +84,7 @@ func main() {
 // ---- PHASE GROUP 1: current-design scaling ----
 
 func scaling(recs []rec, idset map[string]bool, work string) {
-	root := filepath.Join(work, "scaling")
-	os.RemoveAll(root)
-	st, err := tasks.Init(root, "dtt")
-	must(err)
+	st, root := freshStore(work, "scaling", "dtt")
 	dir := st.Dir()
 
 	var sizes []int
@@ -170,9 +167,7 @@ func scaling(recs []rec, idset map[string]bool, work string) {
 	}
 
 	fmt.Println("Create latency as the store grows (campaign O(N) slope):")
-	root2 := filepath.Join(work, "slope")
-	os.RemoveAll(root2)
-	st3, _ := tasks.Init(root2, "agt")
+	st3, _ := freshStore(work, "slope", "agt")
 	mark := map[int]bool{50: true, 100: true, 200: true, 400: true, 800: true}
 	cap := 800
 	if len(recs) < 400 {
@@ -196,26 +191,18 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 	fmt.Println("== REDESIGN: sidecar comments + closed/ partition ==")
 
 	// A: current
-	rootA := filepath.Join(work, "A")
-	os.RemoveAll(rootA)
-	stA, _ := tasks.Init(rootA, "dtt")
-	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset))
-		os.WriteFile(filepath.Join(stA.Dir(), r.ID+".md"), d, 0o644)
-	}
+	stA, rootA := freshStore(work, "A", "dtt")
+	writeCorpus(stA.Dir(), recs, idset)
 	bA, nA := dirBytes(stA.Dir())
 	fmt.Printf("A) current (inline comments, flat):     hot=%d files %s  All()=%v\n", nA, human(bA), scanAll(open(rootA), 20))
 
 	// B: sidecar comments
-	rootB := filepath.Join(work, "B")
-	os.RemoveAll(rootB)
-	stB, _ := tasks.Init(rootB, "dtt")
+	stB, rootB := freshStore(work, "B", "dtt")
 	side := filepath.Join(stB.Dir(), "comments")
 	os.MkdirAll(side, 0o755)
+	writeCorpus(stB.Dir(), recs, idset)
 	var sb, sc int
 	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset))
-		os.WriteFile(filepath.Join(stB.Dir(), r.ID+".md"), d, 0o644)
 		if len(r.Comments) > 0 {
 			var b strings.Builder
 			for _, c := range r.Comments {
@@ -231,19 +218,19 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 		nB, human(bB), scanAll(open(rootB), 20), sc, human(sb))
 
 	// C: sidecar + closed/
-	rootC := filepath.Join(work, "C")
-	os.RemoveAll(rootC)
-	stC, _ := tasks.Init(rootC, "dtt")
+	stC, rootC := freshStore(work, "C", "dtt")
 	closed := filepath.Join(stC.Dir(), "closed")
 	os.MkdirAll(closed, 0o755)
+	var openR, closedR []rec
 	for _, r := range recs {
-		d, _ := tasks.Marshal(issueOf(r, idset))
-		dest := stC.Dir()
 		if mapStatus(r.Status) == tasks.StatusClosed {
-			dest = closed
+			closedR = append(closedR, r)
+		} else {
+			openR = append(openR, r)
 		}
-		os.WriteFile(filepath.Join(dest, r.ID+".md"), d, 0o644)
 	}
+	writeCorpus(stC.Dir(), openR, idset)
+	writeCorpus(closed, closedR, idset)
 	bC, nC := dirBytes(stC.Dir())
 	cb, cn := dirBytes(closed)
 	fmt.Printf("C) sidecar + closed/ (hot=open only):   hot=%d files %s  All()=%v  (closed/: %d files %s, cold)\n",
@@ -298,6 +285,25 @@ func yamlProbe() {
 }
 
 // ---- helpers ----
+
+// freshStore wipes work/name, re-Inits a store there with prefix, and returns
+// both the store and the root path so callers can re-Open(root) byte-identically.
+func freshStore(work, name, prefix string) (*tasks.Store, string) {
+	root := filepath.Join(work, name)
+	os.RemoveAll(root)
+	st, err := tasks.Init(root, prefix)
+	must(err)
+	return st, root
+}
+
+// writeCorpus marshals each rec and writes <dir>/<ID>.md, mirroring the corpus
+// layout used by the redesign() variants.
+func writeCorpus(dir string, recs []rec, idset map[string]bool) {
+	for _, r := range recs {
+		d, _ := tasks.Marshal(issueOf(r, idset))
+		os.WriteFile(filepath.Join(dir, r.ID+".md"), d, 0o644)
+	}
+}
 
 type rec struct {
 	ID, Title, Desc, Status, IssueType, Owner, Created, Updated, Closed, CloseR string

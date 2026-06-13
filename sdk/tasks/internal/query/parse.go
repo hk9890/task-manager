@@ -206,19 +206,17 @@ func (p *parser) parsePrimary() (Node, *ParseError) {
 			tok := p.peek()
 			return nil, parseErr(tok.Pos, "expression nesting too deep (max %d levels)", maxExprDepth)
 		}
+		defer func() { p.depth-- }()
 		p.consume() // consume "("
 		inner, err := p.parseExpr()
 		if err != nil {
-			p.depth--
 			return nil, err
 		}
 		if p.peek().Kind != tokRParen {
 			tok := p.peek()
-			p.depth--
 			return nil, parseErr(tok.Pos, "expected ')' but got %q", tok.Val)
 		}
 		p.consume() // consume ")"
-		p.depth--
 		return inner, nil
 	}
 	return p.parsePredicate()
@@ -274,27 +272,9 @@ func (p *parser) parsePredicate() (Node, *ParseError) {
 func (p *parser) parseOp() (string, *ParseError) {
 	tok := p.peek()
 	switch tok.Kind {
-	case tokEqEq:
+	case tokEqEq, tokNotEq, tokLT, tokLE, tokGT, tokGE, tokTilde:
 		p.consume()
-		return "==", nil
-	case tokNotEq:
-		p.consume()
-		return "!=", nil
-	case tokLT:
-		p.consume()
-		return "<", nil
-	case tokLE:
-		p.consume()
-		return "<=", nil
-	case tokGT:
-		p.consume()
-		return ">", nil
-	case tokGE:
-		p.consume()
-		return ">=", nil
-	case tokTilde:
-		p.consume()
-		return "~", nil
+		return tok.Val, nil
 	default:
 		return "", parseErr(tok.Pos, "expected operator, got %q", tok.Val)
 	}
