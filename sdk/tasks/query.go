@@ -56,8 +56,12 @@ type issueRow struct {
 // by the caller (List) using openBlockers so the evaluator doesn't need to
 // re-run that logic per-expression-node.
 func newIssueRow(iss *Issue, idx map[string]*Issue, closedStat func(string) bool) *issueRow {
-	ready := iss.Status == StatusOpen && len(openBlockers(idx, closedStat, iss)) == 0
-	blocked := !iss.Status.IsClosed() && len(openBlockers(idx, closedStat, iss)) > 0
+	var open []string
+	if !iss.Status.IsClosed() {
+		open = openBlockers(idx, closedStat, iss)
+	}
+	ready := iss.Status == StatusOpen && len(open) == 0
+	blocked := !iss.Status.IsClosed() && len(open) > 0
 	return &issueRow{iss: iss, isReady: ready, isBlocked: blocked}
 }
 
@@ -78,9 +82,7 @@ func (r *issueRow) Field(name string) (query.Value, bool) {
 	case "parent":
 		return &query.StringValue{S: iss.Parent}, true
 	case "label":
-		labels := make([]string, len(iss.Labels))
-		copy(labels, iss.Labels)
-		return &query.StringSetValue{Members: labels}, true
+		return &query.StringSetValue{Members: iss.Labels}, true
 	case "text":
 		// Virtual field: case-insensitive concatenation of id, title, description.
 		text := strings.ToLower(iss.ID + " " + iss.Title + " " + iss.Description)

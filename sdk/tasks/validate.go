@@ -75,10 +75,10 @@ func validateFields(iss *Issue) error {
 	}
 
 	if !iss.Status.Valid() {
-		return invalid("status", "unknown status %q (want one of %s)", iss.Status, joinStatuses())
+		return invalid("status", "unknown status %q (want one of %s)", iss.Status, joinEnum(Statuses))
 	}
 	if !iss.Type.Valid() {
-		return invalid("type", "unknown type %q (want one of %s)", iss.Type, joinTypes())
+		return invalid("type", "unknown type %q (want one of %s)", iss.Type, joinEnum(Types))
 	}
 	if iss.Priority < PriorityMin || iss.Priority > PriorityMax {
 		return invalid("priority", "must be between %d and %d, got %d", PriorityMin, PriorityMax, iss.Priority)
@@ -160,18 +160,10 @@ func firstDuplicate(ids []string) string {
 	return ""
 }
 
-func joinStatuses() string {
-	parts := make([]string, len(Statuses))
-	for i, s := range Statuses {
-		parts[i] = string(s)
-	}
-	return strings.Join(parts, ", ")
-}
-
-func joinTypes() string {
-	parts := make([]string, len(Types))
-	for i, t := range Types {
-		parts[i] = string(t)
+func joinEnum[T ~string](vals []T) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = string(v)
 	}
 	return strings.Join(parts, ", ")
 }

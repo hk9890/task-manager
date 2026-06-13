@@ -127,7 +127,7 @@ func readClosedIssues(s *tasks.Store, closedDir string) ([]*tasks.Issue, error) 
 	var issues []*tasks.Issue
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".md") {
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, tasks.FileExt) {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".md")

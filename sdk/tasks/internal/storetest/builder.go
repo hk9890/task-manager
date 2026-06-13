@@ -192,14 +192,6 @@ func (b *Builder) materialize(s *tasks.Store) {
 
 	// Pass 2: apply parent, blockers, and status for each issue.
 	for _, spec := range b.issues {
-		var uin tasks.UpdateInput
-
-		needsUpdate := false
-		if spec.parent != "" {
-			p := spec.parent
-			uin.Parent = &p
-			needsUpdate = true
-		}
 		if len(spec.blockers) > 0 {
 			for _, blk := range spec.blockers {
 				if err := s.AddDep(spec.id, blk); err != nil {
@@ -207,8 +199,9 @@ func (b *Builder) materialize(s *tasks.Store) {
 				}
 			}
 		}
-		if needsUpdate {
-			if _, err := s.Update(spec.id, uin); err != nil {
+		if spec.parent != "" {
+			p := spec.parent
+			if _, err := s.Update(spec.id, tasks.UpdateInput{Parent: &p}); err != nil {
 				b.t.Fatalf("storetest: Update(%q, refs): %v", spec.id, err)
 			}
 		}

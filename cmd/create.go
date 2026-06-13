@@ -47,10 +47,7 @@ var createCmd = &cobra.Command{
 			desc = string(b)
 		}
 
-		creator := createFlags.creator
-		if creator == "" {
-			creator = os.Getenv("USER")
-		}
+		creator := defaultUser(createFlags.creator)
 
 		in := tasks.CreateInput{
 			Title:       createFlags.title,

@@ -451,28 +451,27 @@ func (s *Store) List(f Filter) ([]*Issue, error) {
 	if err != nil {
 		return nil, err
 	}
+	return window(matches, f.Offset, f.Limit), nil
+}
 
-	// Clamp negative offset/limit to 0.
-	offset := f.Offset
+// window applies the offset/limit paging rules shared by List and ListPage:
+// negative offset/limit clamp to 0, an offset past the end yields nil, and a
+// positive limit caps the returned slice.
+func window(matches []*Issue, offset, limit int) []*Issue {
 	if offset < 0 {
 		offset = 0
 	}
-	limit := f.Limit
 	if limit < 0 {
 		limit = 0
 	}
-
-	// Apply offset.
 	if offset >= len(matches) {
-		return nil, nil
+		return nil
 	}
 	matches = matches[offset:]
-
-	// Apply limit.
 	if limit > 0 && len(matches) > limit {
 		matches = matches[:limit]
 	}
-	return matches, nil
+	return matches
 }
 
 // ListPage runs the same selection/sort/paging as List and additionally returns
@@ -490,28 +489,7 @@ func (s *Store) ListPage(f Filter) (Page, error) {
 		return Page{}, err
 	}
 	total := len(matches)
-
-	// Clamp negative offset/limit to 0.
-	offset := f.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	limit := f.Limit
-	if limit < 0 {
-		limit = 0
-	}
-
-	// Apply offset.
-	if offset >= len(matches) {
-		return Page{Total: total}, nil
-	}
-	matches = matches[offset:]
-
-	// Apply limit.
-	if limit > 0 && len(matches) > limit {
-		matches = matches[:limit]
-	}
-	return Page{Issues: matches, Total: total}, nil
+	return Page{Issues: window(matches, f.Offset, f.Limit), Total: total}, nil
 }
 
 func sortIssues(issues []*Issue, field SortField) {
