@@ -60,7 +60,7 @@ operator a field does not support is a parse error (§4).
 
 | Field | Type | Operators | Value syntax |
 |---|---|---|---|
-| `status` | enum | `==` `!=` | `open` / `in_progress` / `blocked` / `closed` |
+| `status` | enum | `==` `!=` | `open` / `in_progress` / `blocked` / `deferred` / `closed` |
 | `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` |
 | `priority` | int | `==` `!=` `<` `<=` `>` `>=` | integer (`0`–`4` stored) |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |

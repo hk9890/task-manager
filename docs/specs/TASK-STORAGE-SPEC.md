@@ -173,7 +173,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 |---|---|
 | `id` | `^[a-z][a-z0-9]*-[0-9a-z]+$`, max 64; equals the filename stem. |
 | `title` | 1–200 chars after trim; single line (no `LF`); no control characters. |
-| `status` | exactly one of `open`, `in_progress`, `blocked`, `closed`. |
+| `status` | exactly one of `open`, `in_progress`, `blocked`, `deferred`, `closed`. |
 | `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`. |
 | `priority` | integer `0`–`4` (0 = critical … 4 = trivial); default `2`. |
 | `assignee` | 0–128 chars; single line; no control characters. |
@@ -361,12 +361,16 @@ Stored on the dependent issue, one direction only:
 
 - `parent` — grouping/epic membership.
 - `blocked_by` — hard dependencies that gate readiness.
-- `related` — soft, non-blocking references.
+- `related` — soft, non-blocking references. **Symmetric**: stored on one issue,
+  but the inverse is derived on read, so the link surfaces from both. Editable any
+  time via `rel add`/`rel rm` (`rel rm` clears both stored sides).
 
 Derived by scanning, never stored:
 
 - **children** — issues whose `parent` is this issue.
 - **blocks** — issues that list this issue in their `blocked_by`.
+- **related (inverse)** — issues that list this issue in their `related`; merged
+  with the forward edges into one symmetric related set.
 
 There is no same-type constraint: any issue may parent or block any other.
 

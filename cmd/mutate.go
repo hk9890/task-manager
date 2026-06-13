@@ -193,6 +193,53 @@ var depRmCmd = &cobra.Command{
 	},
 }
 
+var relCmd = &cobra.Command{
+	Use:   "rel",
+	Short: "Manage non-blocking related links between issues",
+}
+
+var relAddCmd = &cobra.Command{
+	Use:   "add <a> <b>",
+	Short: "Relate <a> to <b> (symmetric: the link shows on both)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		if err := s.AddRelated(args[0], args[1]); err != nil {
+			return err
+		}
+		if !flagJSON {
+			fmt.Printf("%s related to %s\n", args[0], args[1])
+		} else {
+			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "add"})
+		}
+		return nil
+	},
+}
+
+var relRmCmd = &cobra.Command{
+	Use:   "rm <a> <b>",
+	Short: "Remove the related link between <a> and <b> (both sides)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := openStore()
+		if err != nil {
+			return err
+		}
+		if err := s.RemoveRelated(args[0], args[1]); err != nil {
+			return err
+		}
+		if !flagJSON {
+			fmt.Printf("%s no longer related to %s\n", args[0], args[1])
+		} else {
+			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "rm"})
+		}
+		return nil
+	},
+}
+
 var commentCmd = &cobra.Command{
 	Use:     "comment",
 	Aliases: []string{"comments"},
@@ -341,7 +388,7 @@ func init() {
 	uf.StringVar(&updateFlags.title, "title", "", "new title")
 	uf.StringVar(&updateFlags.description, "description", "", "new description")
 	uf.StringVar(&updateFlags.descriptionFile, "description-file", "", `read description from a file ("-" for stdin)`)
-	uf.StringVar(&updateFlags.status, "status", "", "new status (open|in_progress|blocked|closed)")
+	uf.StringVar(&updateFlags.status, "status", "", "new status (open|in_progress|blocked|deferred|closed)")
 	uf.StringVar(&updateFlags.typ, "type", "", "new type")
 	uf.IntVar(&updateFlags.priority, "priority", 0, "new priority 0..4")
 	uf.StringVar(&updateFlags.assignee, "assignee", "", "new assignee")
@@ -356,6 +403,7 @@ func init() {
 	rootCmd.AddCommand(reopenCmd)
 
 	depCmd.AddCommand(depAddCmd, depRmCmd)
+	relCmd.AddCommand(relAddCmd, relRmCmd)
 
 	commentAddCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
 	commentAddCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
@@ -367,5 +415,5 @@ func init() {
 
 	commentCmd.AddCommand(commentAddCmd, commentEditCmd, commentRmCmd)
 
-	rootCmd.AddCommand(updateCmd, closeCmd, depCmd, commentCmd)
+	rootCmd.AddCommand(updateCmd, closeCmd, depCmd, relCmd, commentCmd)
 }

@@ -169,6 +169,11 @@ func (s *Store) Detail(id string) (*Detail, error) {
 			d.BlockedByRefs = append(d.BlockedByRefs, *r)
 		}
 	}
+	// related is symmetric: RelatedRefs is the union of the forward edges stored
+	// on this issue and the inverse edges (issues that list this one), deduped by
+	// peer ID. relatedSeen tracks peers already added so the two passes don't
+	// double-count a mutually-stored link.
+	relatedSeen := make(map[string]bool, len(iss.Related))
 	for _, relID := range iss.Related {
 		r, err := resolveRef(relID)
 		if err != nil {
@@ -176,6 +181,7 @@ func (s *Store) Detail(id string) (*Detail, error) {
 		}
 		if r != nil {
 			d.RelatedRefs = append(d.RelatedRefs, *r)
+			relatedSeen[relID] = true
 		}
 	}
 	for _, other := range all {
@@ -188,6 +194,16 @@ func (s *Store) Detail(id string) (*Detail, error) {
 		for _, b := range other.BlockedBy {
 			if b == id {
 				d.Blocks = append(d.Blocks, ref(other))
+			}
+		}
+		// Inverse related edge: other lists this issue → it is a related peer.
+		if !relatedSeen[other.ID] {
+			for _, rel := range other.Related {
+				if rel == id {
+					d.RelatedRefs = append(d.RelatedRefs, ref(other))
+					relatedSeen[other.ID] = true
+					break
+				}
 			}
 		}
 	}

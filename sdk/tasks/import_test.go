@@ -172,8 +172,8 @@ func TestImportControlCharCommentRejectedAtomically(t *testing.T) {
 
 func TestImportRejectsUnknownStatus(t *testing.T) {
 	s := newTestStore(t)
-	// "deferred" is not a taskmgr status; the model stays strict.
-	_, err := s.Import(ImportInput{Title: "x", Status: Status("deferred"), Created: tCreated})
+	// An unrecognized status is rejected; the model stays strict.
+	_, err := s.Import(ImportInput{Title: "x", Status: Status("wontfix"), Created: tCreated})
 	var ve *ValidationError
 	if !errors.As(err, &ve) || ve.Field != "status" {
 		t.Errorf("want status ValidationError, got %v", err)

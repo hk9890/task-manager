@@ -50,6 +50,7 @@ func commandsByName(c catalog) map[string]catCommand {
 var allUserFacingCommands = []string{
 	"create", "import", "init", "show", "update", "close", "reopen",
 	"dep", "dep add", "dep rm",
+	"rel", "rel add", "rel rm",
 	"comment", "comment add", "comment edit", "comment rm",
 	"list", "search", "ready", "blocked", "labels", "statuses", "types",
 	"version", "commands",

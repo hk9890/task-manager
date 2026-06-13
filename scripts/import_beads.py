@@ -31,8 +31,9 @@ Mapping
   verbatim — no provenance footer needed.
 * Labels are slugified to fit the label grammar (spaces → ``-``); a label that
   cannot be salvaged is dropped with a warning.
-* Statuses outside taskmgr's set (e.g. ``deferred``) map to ``open`` and the
-  original is preserved as an ``imported-status:<s>`` label.
+* Statuses outside taskmgr's set map to ``open`` and the original is preserved
+  as an ``imported-status:<s>`` label (taskmgr's set is open/in_progress/blocked/
+  deferred/closed, so most beads statuses pass through unchanged).
 * Edges: issues are imported in dependency order so ``parent``/``blocked_by``
   targets always exist; a ``related`` edge whose target is imported *later*
   (or in a cycle) is skipped and counted.
@@ -53,7 +54,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 VALID_TYPES = {"task", "bug", "feature", "epic", "chore"}
 TYPE_ALIASES = {"decision": "task", "enhancement": "feature", "feat": "feature", "adr": "task"}
-VALID_STATUSES = {"open", "in_progress", "blocked", "closed"}
+VALID_STATUSES = {"open", "in_progress", "blocked", "deferred", "closed"}
 LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9:._/-]*$")
 
 # Control-character sanitization: taskmgr rejects control chars (they force a

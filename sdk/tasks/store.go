@@ -1128,6 +1128,104 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 	})
 }
 
+// AddRelated records a non-blocking "related" reference from issueID to otherID.
+// Idempotent; rejects self-reference and dangling refs (no cycle check — related
+// is non-blocking and legitimately symmetric). The edge is stored one-directional
+// on issueID; the inverse is derived on read (Detail.RelatedRefs is the symmetric
+// union), so the link surfaces from both issues.
+func (s *Store) AddRelated(issueID, otherID string) error {
+	return s.withLock(func() error {
+		iss, err := s.Get(issueID)
+		if err != nil {
+			return err
+		}
+		inClosed, err := s.isInClosed(issueID)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, issueID)
+		}
+		if issueID == otherID {
+			return invalid("related", "issue cannot relate to itself")
+		}
+		for _, r := range iss.Related {
+			if r == otherID {
+				return nil // already present; idempotent
+			}
+		}
+		iss.Related = append(iss.Related, otherID)
+		iss.Updated = s.now()
+		if err := s.checkRefs(iss); err != nil {
+			return err
+		}
+		return s.writeIssue(iss)
+	})
+}
+
+// RemoveRelated severs the related link between issueID and otherID. Because the
+// relationship is symmetric, it removes the edge from BOTH sides' stored lists so
+// the link is truly gone regardless of which side recorded it. The primary side
+// (issueID) must be writable (closed → ErrImmutable, mirroring RemoveDep); the
+// inverse side is best-effort (skipped if otherID is absent or closed/immutable).
+func (s *Store) RemoveRelated(issueID, otherID string) error {
+	return s.withLock(func() error {
+		removeRef := func(it *Issue, target string) bool {
+			kept := it.Related[:0]
+			changed := false
+			for _, r := range it.Related {
+				if r == target {
+					changed = true
+					continue
+				}
+				kept = append(kept, r)
+			}
+			it.Related = kept
+			return changed
+		}
+
+		iss, err := s.Get(issueID)
+		if err != nil {
+			return err
+		}
+		inClosed, err := s.isInClosed(issueID)
+		if err != nil {
+			return err
+		}
+		if inClosed {
+			return fmt.Errorf("%w: %s", ErrImmutable, issueID)
+		}
+		if removeRef(iss, otherID) {
+			iss.Updated = s.now()
+			if err := s.writeIssue(iss); err != nil {
+				return err
+			}
+		}
+
+		// Inverse side: best-effort. Absent or closed → leave it (a closed issue
+		// is immutable, and the active view never derives inverses from closed/).
+		other, err := s.Get(otherID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		otherClosed, err := s.isInClosed(otherID)
+		if err != nil {
+			return err
+		}
+		if otherClosed {
+			return nil
+		}
+		if removeRef(other, issueID) {
+			other.Updated = s.now()
+			return s.writeIssue(other)
+		}
+		return nil
+	})
+}
+
 // checkRefs verifies that every referenced ID exists and that adding the
 // issue's blockers does not create a dependency cycle. Caller holds the lock.
 //
