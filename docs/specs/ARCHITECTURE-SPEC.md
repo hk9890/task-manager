@@ -159,8 +159,9 @@ Reads take a fresh snapshot of the directory and never hold the lock.
   serializes against all others — goroutines via an in-process mutex, processes via
   an exclusive store-wide `flock`. This is the precondition for validation and atomicity.
 - **Derived inverse edges.** Only `parent`, `blocked_by`, and `related` are stored,
-  on the dependent issue. Children and "blocks" are always computed by scanning, so
-  the on-disk graph cannot contradict itself.
+  on the dependent issue. Children, "blocks", and the inverse of `related` (which is
+  symmetric) are always computed by scanning, so the on-disk graph cannot contradict
+  itself.
 - **No counter file.** IDs are random base36 tokens checked against existing IDs,
   avoiding both a shared mutable counter (a git merge hotspot) and the
   parallel-branch ID collisions that sequential numbering caused.

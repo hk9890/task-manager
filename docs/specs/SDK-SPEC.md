@@ -101,7 +101,7 @@ type Detail struct {
     Issue
     ParentRef     *Ref   // resolved parent   (vs the embedded Issue.Parent ID)
     BlockedByRefs []Ref  // resolved blockers (vs the embedded Issue.BlockedBy IDs)
-    RelatedRefs   []Ref  // resolved related  (vs the embedded Issue.Related IDs)
+    RelatedRefs   []Ref  // symmetric related: forward (Issue.Related) ∪ inverse, deduped
     Blocks        []Ref  // derived: issues blocked by this one
     Children      []Ref  // derived: issues whose parent is this one
     Comments      []Comment
@@ -112,7 +112,7 @@ type Detail struct {
 
 ```go
 type Status string
-const ( StatusOpen; StatusInProgress; StatusBlocked; StatusClosed )
+const ( StatusOpen; StatusInProgress; StatusBlocked; StatusDeferred; StatusClosed )
 var Statuses []Status
 func (s Status) Valid() bool
 func (s Status) IsClosed() bool
@@ -400,6 +400,8 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 func (s *Store) DeleteComment(id, commentID, author string) error             // appends a tombstone
 func (s *Store) AddDep(dependent, blocker string) error    // idempotent; rejects self/cycle
 func (s *Store) RemoveDep(dependent, blocker string) error
+func (s *Store) AddRelated(a, b string) error              // idempotent; rejects self/dangling (no cycle check)
+func (s *Store) RemoveRelated(a, b string) error           // severs both sides
 ```
 
 - Every write allocates/validates, then performs an atomic file write while holding
@@ -443,6 +445,14 @@ func (s *Store) RemoveDep(dependent, blocker string) error
   `StatusOpen` (the pre-close status is not persisted). `Reopen` always lands on
   `open`; to reopen directly into another active status use `Update` with that
   `Status`. On an already-active issue `Reopen` is a no-op, returning it unchanged.
+- **`AddRelated` / `RemoveRelated`** manage the non-blocking `related` link, the
+  peer to `AddDep`/`RemoveDep` for `blocked_by`. The relationship is **symmetric**:
+  `AddRelated(a, b)` stores the edge on `a` (idempotent; rejects a self-link and a
+  dangling ref; **no** cycle check, since related is non-blocking) and the inverse
+  is derived on read — `Detail.RelatedRefs` is the deduped union of forward and
+  inverse edges, so the link shows from both issues. `RemoveRelated(a, b)` severs
+  the edge from **both** stored sides; `a` must be writable (`ErrImmutable` if
+  closed), and the inverse side is best-effort (skipped if `b` is closed/absent).
 
 ---
 

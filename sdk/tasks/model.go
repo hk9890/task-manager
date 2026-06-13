@@ -4,22 +4,27 @@ import "time"
 
 // Status is the lifecycle state of an issue. The set is fixed and small by
 // design: there are no custom or configurable statuses.
+//
+// deferred is an active (non-closed) state for work consciously postponed — it
+// is excluded from `ready` (only open issues are ready) and stays in the active
+// partition, distinct from blocked (waiting on something) and closed (done).
 type Status string
 
 const (
 	StatusOpen       Status = "open"
 	StatusInProgress Status = "in_progress"
 	StatusBlocked    Status = "blocked"
+	StatusDeferred   Status = "deferred"
 	StatusClosed     Status = "closed"
 )
 
 // Statuses lists every valid status in display order.
-var Statuses = []Status{StatusOpen, StatusInProgress, StatusBlocked, StatusClosed}
+var Statuses = []Status{StatusOpen, StatusInProgress, StatusBlocked, StatusDeferred, StatusClosed}
 
 // Valid reports whether s is a known status.
 func (s Status) Valid() bool {
 	switch s {
-	case StatusOpen, StatusInProgress, StatusBlocked, StatusClosed:
+	case StatusOpen, StatusInProgress, StatusBlocked, StatusDeferred, StatusClosed:
 		return true
 	default:
 		return false

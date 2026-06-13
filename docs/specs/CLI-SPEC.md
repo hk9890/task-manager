@@ -224,7 +224,7 @@ as-is.
 | `--title <t>` | New title. |
 | `--description <md>` | New description. |
 | `--description-file <path>` | New description from a file (`-` = stdin). |
-| `--status <s>` | New status (`open`/`in_progress`/`blocked`/`closed`). |
+| `--status <s>` | New status (`open`/`in_progress`/`blocked`/`deferred`/`closed`). |
 | `--type <t>` | New type. |
 | `--priority <n>` | New priority. |
 | `--assignee <a>` | New assignee. |
@@ -261,6 +261,19 @@ self-dependency and any edge that would create a cycle.
 ### `taskmgr dep rm <dependent> <blocker>`
 
 Remove a blocking dependency.
+
+### `taskmgr rel add <a> <b>`
+
+Record a non-blocking **related** link between `<a>` and `<b>`. Idempotent;
+rejects a self-link and a dangling reference. The relationship is **symmetric**:
+the edge is stored on `<a>` and the inverse is derived on read, so the link shows
+from both issues. (No cycle check — related is non-blocking.)
+
+### `taskmgr rel rm <a> <b>`
+
+Remove the related link between `<a>` and `<b>`. Removes the edge from **both**
+sides so the link is fully severed (the primary `<a>` must be writable; the
+inverse side is best-effort and skipped if `<b>` is closed).
 
 ### `taskmgr comment add <id> [body] [options]`
 
@@ -365,6 +378,7 @@ taskmgr update   <id> [--title --description[-file] --status --type --priority
 taskmgr close    <id> [--reason]
 taskmgr reopen   <id>
 taskmgr dep      add|rm <dependent> <blocker>
+taskmgr rel      add|rm <a> <b>              # symmetric related link
 taskmgr comment  add  <id> [body] [--author --file]
 taskmgr comment  edit <id> <comment-id> [body] [--author --file]
 taskmgr comment  rm   <id> <comment-id> [--author]
