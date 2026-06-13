@@ -18,7 +18,7 @@ the subtractive architecture (ARCHITECTURE-SPEC §10).
 ## What is logged
 
 | Event | Level | Key fields |
- |---|---|---|
+|---|---|---|
 | Write committed (`Create`/`Update`/`Close`/`Reopen`/`Import`) | debug | op, issue id, transition |
 | Validation / referential rejection | info | op, issue id, field, reason |
 | Lock wait beyond a threshold | warn | waited_ms |
