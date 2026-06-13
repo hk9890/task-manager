@@ -12,8 +12,9 @@ import (
 )
 
 var importFlags struct {
-	file  string
-	batch bool
+	file     string
+	batch    bool
+	runHooks bool
 }
 
 // importEnvelope is the stable JSON shape a source adapter (beads, Jira, …)
@@ -147,9 +148,10 @@ emitted per record.`,
 		if err != nil {
 			return err
 		}
+		in.RunHooks = importFlags.runHooks
 		iss, err := s.Import(in)
 		if err != nil {
-			return err
+			return mutationError(err)
 		}
 		if flagJSON {
 			return printJSON(importResult{SourceID: e.SourceID, ID: iss.ID})
@@ -174,6 +176,7 @@ func runImportBatch(s *tasks.Store, data []byte) error {
 		}
 		in, err := e.toInput()
 		if err == nil {
+			in.RunHooks = importFlags.runHooks
 			var iss *tasks.Issue
 			iss, err = s.Import(in)
 			if err == nil {
@@ -197,5 +200,6 @@ func init() {
 	f := importCmd.Flags()
 	f.StringVar(&importFlags.file, "file", "-", `read the import envelope from a file ("-" for stdin)`)
 	f.BoolVar(&importFlags.batch, "batch", false, "import a stream of envelopes (NDJSON), best-effort")
+	f.BoolVar(&importFlags.runHooks, "run-hooks", false, "run lifecycle hooks for each imported issue (default: omit)")
 	rootCmd.AddCommand(importCmd)
 }

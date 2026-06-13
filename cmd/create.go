@@ -67,13 +67,13 @@ var createCmd = &cobra.Command{
 
 		res, err := s.Create(in)
 		if err != nil {
-			return err
+			return mutationError(err)
 		}
-		iss := res.Issue
 		if flagJSON {
-			return printJSON(map[string]string{"id": iss.ID})
+			return printJSON(createResultDTO{ID: res.Issue.ID, Hints: res.Hints, Warnings: res.Warnings})
 		}
-		fmt.Printf("Created %s\n", iss.ID)
+		fmt.Printf("Created %s\n", res.Issue.ID)
+		printNotes(res.Hints, res.Warnings)
 		return nil
 	},
 }
