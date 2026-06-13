@@ -400,7 +400,7 @@ type FindOptions struct {
 
 ```go
 func (s *Store) Create(in CreateInput) (*MutationResult, error)
-func (s *Store) Import(in ImportInput) (*Issue, error)     // direct write of a complete end-state
+func (s *Store) Import(in ImportInput) (*MutationResult, error)   // direct write of a complete end-state
 func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error)
 func (s *Store) Close(id, reason string) (*MutationResult, error)   // idempotent; moves to closed/
 func (s *Store) Reopen(id string) (*MutationResult, error)          // moves back to active
@@ -417,10 +417,10 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   the project lock. Configured lifecycle hooks ([HOOK-SPEC.md](HOOK-SPEC.md)) run on the
   transition: pre-hooks gate the write under the lock, post-hooks notify after it. A
   pre-hook denial returns `*HookDeniedError` (§6) and writes nothing.
-- **`Create`/`Update`/`Close`/`Reopen` return a `*MutationResult`** — the resulting
-  `Issue` plus the advisory hook output (HOOK-SPEC §6.2): `Hints`, aggregated from every
-  pre- and post-hook that allowed, and `Warnings`, the post-hook failures (which never
-  fail the write). Both are nil when no hooks ran or none had anything to say. A no-op
+- **All five writes (`Create`/`Update`/`Close`/`Reopen`/`Import`) return a `*MutationResult`** —
+  the resulting `Issue` plus the advisory hook output (HOOK-SPEC §6.2): `Hints`, aggregated
+  from every pre- and post-hook that allowed, and `Warnings`, the post-hook failures (which
+  never fail the write). Both are nil when no hooks ran or none had anything to say. A no-op
   mutation (nothing changes on disk) returns the unchanged issue with no hints/warnings
   and fires no hooks (HOOK-SPEC §2.1).
 

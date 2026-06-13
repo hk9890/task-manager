@@ -25,12 +25,14 @@ func TestClassifyResult(t *testing.T) {
 		{"deny boundary 125", exec.Result{Category: exec.Completed, ExitCode: 125}, decDeny, "denied (exit 125)", 125},
 		{"not executable 126", exec.Result{Category: exec.Completed, ExitCode: 126}, decError, "not executable (exit 126)", 126},
 		{"not found 127", exec.Result{Category: exec.Completed, ExitCode: 127}, decError, "not executable (exit 127)", 127},
+		{"exit 128+N is a signal death", exec.Result{Category: exec.Completed, ExitCode: 130}, decError, "killed by signal 2", 130},
+		{"exit 255 not mislabeled", exec.Result{Category: exec.Completed, ExitCode: 255}, decError, "killed by signal 127", 255},
 		{"timeout", exec.Result{Category: exec.Timeout}, decError, "timed out", -1},
 		{"spawn error", exec.Result{Category: exec.SpawnError, Err: errors.New("boom")}, decError, "could not execute: boom", -1},
 		{"signaled", exec.Result{Category: exec.Signaled, Signal: 9}, decError, "killed by signal 9", 128 + 9},
 	}
 	for _, c := range cases {
-		dec, msg, exit := classifyResult(c.res, "h")
+		dec, msg, exit := classifyResult(c.res)
 		if dec != c.wantDec || msg != c.wantMsg || exit != c.wantExit {
 			t.Errorf("%s: got (%v,%q,%d), want (%v,%q,%d)", c.name, dec, msg, exit, c.wantDec, c.wantMsg, c.wantExit)
 		}
@@ -97,7 +99,7 @@ func TestRunPre_AllowAggregatesHints(t *testing.T) {
 		{ID: "b", Event: "pre-close", Run: []string{"b"}},
 	})
 
-	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"))
+	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"), nil)
 	if err != nil || denial != nil {
 		t.Fatalf("expected allow, got denial=%v err=%v", denial, err)
 	}
@@ -121,7 +123,7 @@ func TestRunPre_DenyShortCircuits(t *testing.T) {
 		{ID: "c", Event: "pre-close", Run: []string{"c"}},
 	})
 
-	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"))
+	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func TestRunPre_WhenFiltersAgainstNew(t *testing.T) {
 
 	// new is a bug -> when does not match -> hook not selected -> no denial.
 	bug := &Issue{ID: "x-9", Status: StatusOpen, Type: TypeBug, Priority: 2}
-	_, denial, err := s.runPre(hs, "pre-close", bug, bug)
+	_, denial, err := s.runPre(hs, "pre-close", bug, bug, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +165,7 @@ func TestRunPre_WhenFiltersAgainstNew(t *testing.T) {
 	}
 
 	// new is a feature -> matches -> denial fires.
-	_, denial, err = s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"))
+	_, denial, err = s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +187,7 @@ func TestRunPre_TimeoutAndNotExecutableAreDenials(t *testing.T) {
 	for name, c := range cases {
 		fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return c.res }}
 		s, hs := hookTestStore(t, fake, []Hook{{ID: "g", Event: "pre-close", Run: []string{"g"}}})
-		_, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"))
+		_, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"), nil)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -232,7 +234,7 @@ func TestRunOne_DeliversPayloadAndEnv(t *testing.T) {
 	s, hs := hookTestStore(t, fake, []Hook{{ID: "g", Event: "pre-close", Run: []string{"prog", "arg"}}})
 
 	newIss := feature("x-7")
-	if _, _, err := s.runPre(hs, "pre-close", feature("x-7"), newIss); err != nil {
+	if _, _, err := s.runPre(hs, "pre-close", feature("x-7"), newIss, nil); err != nil {
 		t.Fatal(err)
 	}
 	calls := fake.Calls()
@@ -268,7 +270,7 @@ func TestRunOne_DeliversPayloadAndEnv(t *testing.T) {
 func TestRunPre_NoHooksForEventIsNoop(t *testing.T) {
 	fake := &exec.Fake{}
 	s, hs := hookTestStore(t, fake, []Hook{{ID: "g", Event: "post-close", Run: []string{"g"}}})
-	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"))
+	hints, denial, err := s.runPre(hs, "pre-close", feature("x-1"), feature("x-1"), nil)
 	if err != nil || denial != nil || hints != nil {
 		t.Errorf("no pre-close hooks: got hints=%v denial=%v err=%v, want all nil", hints, denial, err)
 	}

@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
@@ -129,7 +130,7 @@ func TestImport_OmitsHooksByDefaultRunsWhenAsked(t *testing.T) {
 
 	// Default: hooks omitted -> the pre-create deny does not apply.
 	s := newStore()
-	iss, err := s.Import(ImportInput{Title: "bulk", Creator: "importer"})
+	iss, err := unwrap(s.Import(ImportInput{Title: "bulk", Creator: "importer"}))
 	if err != nil {
 		t.Fatalf("default import must omit hooks, got %v", err)
 	}
@@ -146,6 +147,59 @@ func TestImport_OmitsHooksByDefaultRunsWhenAsked(t *testing.T) {
 	}
 	if all, _ := s.All(); len(all) != 0 {
 		t.Errorf("denied import wrote %d issues, want 0", len(all))
+	}
+}
+
+func TestImport_RunHooks_SurfacesPostWarnings(t *testing.T) {
+	fake := &exec.Fake{Func: byHookID(map[string]exec.Result{"notify": exec.Deny(1, "notify failed")})}
+	s, _ := hookTestStore(t, fake, []Hook{{ID: "notify", Event: "post-create", Run: []string{"n"}}})
+
+	res, err := s.Import(ImportInput{Title: "x", Creator: "importer", RunHooks: true})
+	if err != nil {
+		t.Fatalf("a post-create warning must not fail the import: %v", err)
+	}
+	if res.Issue == nil || res.Issue.Title != "x" {
+		t.Fatalf("issue not returned: %+v", res.Issue)
+	}
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "notify") {
+		t.Errorf("warnings = %v, want the post-create failure surfaced (not silently dropped)", res.Warnings)
+	}
+}
+
+func TestUpdate_CloseViaUpdate_ClosedEqualsUpdated(t *testing.T) {
+	s := newTestStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "x"})
+	st := StatusClosed
+	res, err := s.Update(iss.ID, UpdateInput{Status: &st})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Issue.Closed.IsZero() {
+		t.Fatal("close-via-update must stamp Closed")
+	}
+	if !res.Issue.Closed.Equal(res.Issue.Updated) {
+		t.Errorf("Closed (%v) and Updated (%v) must share one instant", res.Issue.Closed, res.Issue.Updated)
+	}
+}
+
+func TestUpdate_WhenBlocked_FiresViaSharedIndex(t *testing.T) {
+	// A pre-update gate scoped `when: blocked` must see the issue's real blocked
+	// state, computed from the hot index (shared with reference-checking) overlaid
+	// with the candidate — a regression guard for the index-reuse path.
+	fake := &exec.Fake{Func: byHookID(map[string]exec.Result{"gate": exec.Deny(1, "blocked work")})}
+	s, _ := hookTestStore(t, fake, []Hook{
+		{ID: "gate", Event: "pre-update", When: "blocked", Run: []string{"g"}},
+	})
+
+	blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
+	dep := mustCreate(t, s, CreateInput{Title: "dep", BlockedBy: []string{blocker.ID}})
+
+	// dep is blocked → the `when: blocked` gate must fire and deny.
+	newTitle := "dep edited"
+	_, err := s.Update(dep.ID, UpdateInput{Title: &newTitle})
+	var de *HookDeniedError
+	if !errors.As(err, &de) {
+		t.Fatalf("a blocked issue must match `when: blocked` and be denied, got %v", err)
 	}
 }
 

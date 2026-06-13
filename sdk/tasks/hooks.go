@@ -64,10 +64,6 @@ type compiledHook struct {
 	run   []string        // non-empty argv
 }
 
-// isPre reports whether the hook gates a transition (pre-*) as opposed to
-// reacting after it (post-*).
-func (h compiledHook) isPre() bool { return strings.HasPrefix(h.event, "pre-") }
-
 // hookSet is the compiled, validated hook configuration for a store.
 type hookSet struct {
 	timeout time.Duration // per-hook wall-clock limit; 0 disables
@@ -85,10 +81,6 @@ func (hs *hookSet) forEvent(event string) []compiledHook {
 	}
 	return out
 }
-
-// empty reports whether no hooks are configured at all — a fast path so stores
-// without hooks skip all selection work.
-func (hs *hookSet) empty() bool { return hs == nil || len(hs.hooks) == 0 }
 
 // buildHookSet validates and compiles the raw Config hook fields into a hookSet
 // (HOOK-SPEC §3.4). It is pure: a configuration error is returned, never

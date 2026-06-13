@@ -72,13 +72,14 @@ type ImportInput struct {
 // (closed/ when Status is closed). The whole record is validated — issue
 // fields, references, and every comment — before anything touches disk, so a
 // malformed record is rejected atomically. See ImportInput.
-func (s *Store) Import(in ImportInput) (*Issue, error) {
+func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 	// Validate the hooks config (fail-closed, §3.4) even when not running hooks.
 	hs, err := s.hooks()
 	if err != nil {
 		return nil, err
 	}
 	var out *Issue
+	var preHints []string
 	err = s.withLock(func() error {
 		id, err := s.resolveID(in.ID)
 		if err != nil {
@@ -151,11 +152,14 @@ func (s *Store) Import(in ImportInput) (*Issue, error) {
 		// An import is a create transition (no prior issue), even when it lands
 		// closed (HOOK-SPEC §2.1). Gate it through pre-create when requested.
 		if in.RunHooks {
-			if _, denial, herr := s.runPre(hs, transCreate.preEvent(), nil, iss); herr != nil {
+			hints, denial, herr := s.runPre(hs, transCreate.preEvent(), nil, iss, nil)
+			if herr != nil {
 				return herr
-			} else if denial != nil {
+			}
+			if denial != nil {
 				return denial
 			}
+			preHints = hints
 		}
 
 		// Write the issue into the correct partition: closeMove lands a closed
@@ -184,11 +188,8 @@ func (s *Store) Import(in ImportInput) (*Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Post-create hooks run outside the lock; for the bulk import path their
-	// hints/warnings are not returned (Import yields just the issue) but are
-	// logged like any hook invocation (HOOK-SPEC §4 Observability).
-	if in.RunHooks {
-		s.runPost(hs, transCreate.postEvent(), nil, out)
-	}
-	return out, nil
+	// Post-create hooks run outside the lock only when hooks were requested
+	// (fired == in.RunHooks); their hints/warnings are returned in the
+	// MutationResult exactly as for the everyday mutations (HOOK-SPEC §6.2).
+	return s.postFinish(hs, in.RunHooks, transCreate, nil, out, preHints), nil
 }

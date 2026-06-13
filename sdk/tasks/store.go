@@ -605,13 +605,11 @@ func (s *Store) Create(in CreateInput) (*MutationResult, error) {
 			BlockedBy:   in.BlockedBy,
 			Related:     in.Related,
 		}, StatusOpen, now, now)
-		if err := validateFields(iss); err != nil {
+		idx, err := s.validateAndIndex(iss)
+		if err != nil {
 			return err
 		}
-		if err := s.checkRefs(iss); err != nil {
-			return err
-		}
-		preHints, err = s.gateWrite(hs, transCreate, nil, iss, func() error { return s.writeIssue(iss) })
+		preHints, err = s.gateWrite(hs, transCreate, nil, iss, idx, func() error { return s.writeIssue(iss) })
 		if err != nil {
 			return err
 		}
@@ -672,18 +670,15 @@ func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error) {
 			// Route through the close flow: apply non-status field changes, then close.
 			old = cloneIssue(iss)
 			applyNonStatusFields(iss, in)
-			iss.Updated = s.now()
-			if err := validateFields(iss); err != nil {
+			idx, err := s.validateAndIndex(iss)
+			if err != nil {
 				return err
 			}
-			if err := s.checkRefs(iss); err != nil {
-				return err
-			}
-			// Apply close fields, gate, and move.
+			// Apply close fields and gate. Closed and Updated share one instant.
 			s.applyStatus(iss, StatusClosed, "")
-			iss.Updated = s.now()
-			trans = transClose
-			preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.closeMove(iss) })
+			iss.Updated = iss.Closed
+			trans = classify(old, iss)
+			preHints, err = s.gateWrite(hs, trans, old, iss, idx, func() error { return s.closeMove(iss) })
 			if err != nil {
 				return err
 			}
@@ -704,14 +699,12 @@ func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error) {
 			iss.Status = *in.Status
 			applyNonStatusFields(iss, in)
 			iss.Updated = s.now()
-			if err := validateFields(iss); err != nil {
+			idx, err := s.validateAndIndex(iss)
+			if err != nil {
 				return err
 			}
-			if err := s.checkRefs(iss); err != nil {
-				return err
-			}
-			trans = transReopen
-			preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.reopenWrite(iss) })
+			trans = classify(old, iss)
+			preHints, err = s.gateWrite(hs, trans, old, iss, idx, func() error { return s.reopenWrite(iss) })
 			if err != nil {
 				return err
 			}
@@ -739,14 +732,12 @@ func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error) {
 			return nil
 		}
 
-		if err := validateFields(iss); err != nil {
+		idx, err := s.validateAndIndex(iss)
+		if err != nil {
 			return err
 		}
-		if err := s.checkRefs(iss); err != nil {
-			return err
-		}
-		trans = transUpdate
-		preHints, err = s.gateWrite(hs, trans, old, iss, func() error { return s.writeIssue(iss) })
+		trans = classify(old, iss)
+		preHints, err = s.gateWrite(hs, trans, old, iss, idx, func() error { return s.writeIssue(iss) })
 		if err != nil {
 			return err
 		}
@@ -866,7 +857,7 @@ func (s *Store) Close(id, reason string) (*MutationResult, error) {
 		old = cloneIssue(iss)
 		s.applyStatus(iss, StatusClosed, reason)
 		iss.Updated = s.now()
-		preHints, err = s.gateWrite(hs, transClose, old, iss, func() error { return s.closeMove(iss) })
+		preHints, err = s.gateWrite(hs, transClose, old, iss, nil, func() error { return s.closeMove(iss) })
 		if err != nil {
 			return err
 		}
@@ -957,7 +948,7 @@ func (s *Store) Reopen(id string) (*MutationResult, error) {
 		iss.Closed = time.Time{}
 		iss.CloseReason = ""
 		iss.Updated = s.now()
-		preHints, err = s.gateWrite(hs, transReopen, old, iss, func() error { return s.reopenWrite(iss) })
+		preHints, err = s.gateWrite(hs, transReopen, old, iss, nil, func() error { return s.reopenWrite(iss) })
 		if err != nil {
 			return err
 		}
@@ -1329,6 +1320,14 @@ func (s *Store) checkRefs(iss *Issue) error {
 	if err != nil {
 		return err
 	}
+	return s.checkRefsWith(iss, idx)
+}
+
+// checkRefsWith verifies references against a caller-supplied hot index, which
+// it overlays with iss. A gated mutation builds the index once and shares it
+// between reference-checking and the hook `when` row, avoiding a second
+// whole-store scan under the lock (HOOK-SPEC §8).
+func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	idx[iss.ID] = iss // include the (possibly new) issue itself
 
 	// refExists reports whether an ID is resolvable: either in the hot index

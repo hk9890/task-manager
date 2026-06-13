@@ -13,12 +13,30 @@ type MutationResult struct {
 	Warnings []string
 }
 
+// validateAndIndex validates iss, builds the hot index once, and runs reference
+// checks against it, returning the index so a gated mutation can reuse it for
+// the hook `when` row instead of scanning the store a second time under the lock.
+func (s *Store) validateAndIndex(iss *Issue) (map[string]*Issue, error) {
+	if err := validateFields(iss); err != nil {
+		return nil, err
+	}
+	idx, _, err := s.index()
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkRefsWith(iss, idx); err != nil {
+		return nil, err
+	}
+	return idx, nil
+}
+
 // gateWrite runs the pre-hooks for trans and then write, all inside the store
-// lock (the caller holds it). It returns the hints collected from hooks that
-// allowed. A denial (*HookDeniedError) or an engine error aborts: it is returned
-// as err and nothing is written (HOOK-SPEC §4 steps 4–5).
-func (s *Store) gateWrite(hs *hookSet, trans transition, old, newIss *Issue, write func() error) ([]string, error) {
-	hints, denial, err := s.runPre(hs, trans.preEvent(), old, newIss)
+// lock (the caller holds it). idx is the pre-built hot index shared with
+// reference-checking (nil → the hook row builds its own). It returns the hints
+// collected from hooks that allowed. A denial (*HookDeniedError) or an engine
+// error aborts: it is returned as err and nothing is written (HOOK-SPEC §4).
+func (s *Store) gateWrite(hs *hookSet, trans transition, old, newIss *Issue, idx map[string]*Issue, write func() error) ([]string, error) {
+	hints, denial, err := s.runPre(hs, trans.preEvent(), old, newIss, idx)
 	if err != nil {
 		return hints, err
 	}

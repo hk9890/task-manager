@@ -245,8 +245,8 @@ func redesign(recs []rec, idset map[string]bool, work string) {
 		}
 	}
 	fmt.Printf("   All() over C returned %d issues; closed leaked in: %v (subdir is skipped, no SDK change)\n", len(all), leaked)
-	if iss, err := open(rootC).Create(tasks.CreateInput{Title: "probe"}); err == nil {
-		fmt.Printf("   nextID saw %d hot files and allocated %s -> collision-resistant token, no closed/ reuse risk (at-2fb)\n", nC, iss.ID)
+	if res, err := open(rootC).Create(tasks.CreateInput{Title: "probe"}); err == nil {
+		fmt.Printf("   nextID saw %d hot files and allocated %s -> collision-resistant token, no closed/ reuse risk (at-2fb)\n", nC, res.Issue.ID)
 	}
 
 	// sidecar append vs whole-file rewrite

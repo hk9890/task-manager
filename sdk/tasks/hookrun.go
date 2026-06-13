@@ -44,7 +44,7 @@ const (
 // classifyResult maps an exec.Result to a decision, a message, and the exit
 // code to report (HOOK-SPEC §6.1/§7). The message is a hint on allow and the
 // reason on deny/error.
-func classifyResult(res exec.Result, hookID string) (dec hookDecision, message string, exit int) {
+func classifyResult(res exec.Result) (dec hookDecision, message string, exit int) {
 	switch res.Category {
 	case exec.Completed:
 		msg := hookMessage(res)
@@ -56,8 +56,10 @@ func classifyResult(res exec.Result, hookID string) (dec hookDecision, message s
 				msg = fmt.Sprintf("denied (exit %d)", res.ExitCode)
 			}
 			return decDeny, msg, res.ExitCode
-		default: // 126 / 127: not executable / not found
+		case res.ExitCode == 126 || res.ExitCode == 127:
 			return decError, fmt.Sprintf("not executable (exit %d)", res.ExitCode), res.ExitCode
+		default: // 128+N: a signal death encoded as an exit code (§6.1)
+			return decError, fmt.Sprintf("killed by signal %d", res.ExitCode-128), res.ExitCode
 		}
 	case exec.Timeout:
 		return decError, "timed out", -1
@@ -106,11 +108,16 @@ func (s *Store) runOne(h compiledHook, event, issueID string, payload []byte, ti
 // hookRow builds a query.Row for newIss with ready/blocked computed against the
 // store with newIss overlaid in memory (HOOK-SPEC §3.3). For a pre-hook the
 // overlay makes the not-yet-written candidate visible; for a post-hook the
-// committed store already reflects it, so the overlay is idempotent.
-func (s *Store) hookRow(newIss *Issue) (*issueRow, error) {
-	idx, _, err := s.index()
-	if err != nil {
-		return nil, err
+// committed store already reflects it, so the overlay is idempotent. idx is a
+// pre-built hot index to reuse (shared with reference-checking); nil means build
+// a fresh one — post-hooks pass nil so they read the committed store.
+func (s *Store) hookRow(newIss *Issue, idx map[string]*Issue) (*issueRow, error) {
+	if idx == nil {
+		var err error
+		idx, _, err = s.index()
+		if err != nil {
+			return nil, err
+		}
 	}
 	idx[newIss.ID] = newIss // overlay the candidate
 	return newIssueRow(newIss, idx, s.closedStatFn()), nil
@@ -118,8 +125,9 @@ func (s *Store) hookRow(newIss *Issue) (*issueRow, error) {
 
 // selectHooks filters candidates to those whose `when` matches newIss, in
 // config order. Hooks without a `when` always match; the store index is read
-// only when at least one candidate has a `when` clause.
-func (s *Store) selectHooks(candidates []compiledHook, newIss *Issue) ([]compiledHook, error) {
+// only when at least one candidate has a `when` clause (and idx, when supplied,
+// is reused instead of re-scanning).
+func (s *Store) selectHooks(candidates []compiledHook, newIss *Issue, idx map[string]*Issue) ([]compiledHook, error) {
 	needRow := false
 	for _, h := range candidates {
 		if h.when != nil {
@@ -130,7 +138,7 @@ func (s *Store) selectHooks(candidates []compiledHook, newIss *Issue) ([]compile
 	if !needRow {
 		return candidates, nil
 	}
-	row, err := s.hookRow(newIss)
+	row, err := s.hookRow(newIss, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -148,12 +156,12 @@ func (s *Store) selectHooks(candidates []compiledHook, newIss *Issue) ([]compile
 // hook denies or errors, a *HookDeniedError carrying those hints — the caller
 // must then abort the write. A non-nil error is an engine failure (e.g. reading
 // the store to evaluate `when`), distinct from a denial.
-func (s *Store) runPre(hs *hookSet, event string, old, newIss *Issue) (hints []string, denial *HookDeniedError, err error) {
+func (s *Store) runPre(hs *hookSet, event string, old, newIss *Issue, idx map[string]*Issue) (hints []string, denial *HookDeniedError, err error) {
 	candidates := hs.forEvent(event)
 	if len(candidates) == 0 {
 		return nil, nil, nil
 	}
-	selected, err := s.selectHooks(candidates, newIss)
+	selected, err := s.selectHooks(candidates, newIss, idx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -167,7 +175,7 @@ func (s *Store) runPre(hs *hookSet, event string, old, newIss *Issue) (hints []s
 
 	for _, h := range selected {
 		res := s.runOne(h, event, newIss.ID, payload, hs.timeout)
-		dec, msg, exit := classifyResult(res, h.id)
+		dec, msg, exit := classifyResult(res)
 		s.logHook(event, h.id, newIss.ID, dec, res)
 		if dec == decAllow {
 			if msg != "" {
@@ -194,7 +202,9 @@ func (s *Store) runPost(hs *hookSet, event string, old, newIss *Issue) (hints, w
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	selected, err := s.selectHooks(candidates, newIss)
+	// Post-hooks read the committed store (the write already happened), so they
+	// build a fresh index rather than reusing the pre-write one.
+	selected, err := s.selectHooks(candidates, newIss, nil)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("post-hooks skipped: %v", err)}
 	}
@@ -208,7 +218,7 @@ func (s *Store) runPost(hs *hookSet, event string, old, newIss *Issue) (hints, w
 
 	for _, h := range selected {
 		res := s.runOne(h, event, newIss.ID, payload, hs.timeout)
-		dec, msg, _ := classifyResult(res, h.id)
+		dec, msg, _ := classifyResult(res)
 		s.logHook(event, h.id, newIss.ID, dec, res)
 		if dec == decAllow {
 			if msg != "" {

@@ -149,14 +149,15 @@ emitted per record.`,
 			return err
 		}
 		in.RunHooks = importFlags.runHooks
-		iss, err := s.Import(in)
+		res, err := s.Import(in)
 		if err != nil {
 			return mutationError(err)
 		}
 		if flagJSON {
-			return printJSON(importResult{SourceID: e.SourceID, ID: iss.ID})
+			return printJSON(importResult{SourceID: e.SourceID, ID: res.Issue.ID})
 		}
-		fmt.Printf("Imported %s\n", iss.ID)
+		fmt.Printf("Imported %s\n", res.Issue.ID)
+		printNotes(res.Hints, res.Warnings)
 		return nil
 	},
 }
@@ -177,10 +178,10 @@ func runImportBatch(s *tasks.Store, data []byte) error {
 		in, err := e.toInput()
 		if err == nil {
 			in.RunHooks = importFlags.runHooks
-			var iss *tasks.Issue
-			iss, err = s.Import(in)
+			var res *tasks.MutationResult
+			res, err = s.Import(in)
 			if err == nil {
-				results = append(results, importResult{SourceID: e.SourceID, ID: iss.ID})
+				results = append(results, importResult{SourceID: e.SourceID, ID: res.Issue.ID})
 				continue
 			}
 		}

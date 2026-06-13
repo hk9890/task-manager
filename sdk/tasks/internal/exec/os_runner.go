@@ -71,24 +71,28 @@ func (osRunner) Run(spec Spec) Result {
 		return res
 	}
 
-	var ee *osexec.ExitError
-	if errors.As(err, &ee) {
-		if ee.Exited() {
-			res.Category = Completed
-			res.ExitCode = ee.ExitCode()
-			return res
-		}
-		// Ran but killed by a signal we did not send.
-		res.Category = Signaled
+	// Classify from the authoritative process state rather than the error type.
+	// ProcessState is nil only when the process never ran (execve failure); once
+	// it ran, st.Exited() distinguishes a normal exit (any code) from a signal
+	// kill. Driving off ProcessState — not *ExitError — correctly handles the
+	// WaitDelay case (the process exited but a child held the pipes open, so Run
+	// returns ErrWaitDelay, not an *ExitError): the real exit code still wins.
+	st := cmd.ProcessState
+	if st == nil {
+		res.Category = SpawnError
 		res.Err = err
-		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			res.Signal = int(ws.Signal())
-		}
 		return res
 	}
-
-	// Could not start (binary missing / not executable / other execve failure).
-	res.Category = SpawnError
+	if st.Exited() {
+		res.Category = Completed
+		res.ExitCode = st.ExitCode()
+		return res
+	}
+	// Ran but did not exit normally → killed by a signal we did not send.
+	res.Category = Signaled
 	res.Err = err
+	if ws, ok := st.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		res.Signal = int(ws.Signal())
+	}
 	return res
 }

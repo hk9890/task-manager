@@ -17,8 +17,8 @@ func TestBuildHookSet_Defaults(t *testing.T) {
 	if hs.timeout != defaultHookTimeout {
 		t.Fatalf("default timeout = %v, want %v", hs.timeout, defaultHookTimeout)
 	}
-	if !hs.empty() {
-		t.Fatal("no hooks configured, want empty()")
+	if len(hs.hooks) != 0 {
+		t.Fatalf("no hooks configured, got %d", len(hs.hooks))
 	}
 }
 
@@ -69,21 +69,15 @@ func TestBuildHookSet_ValidHooks(t *testing.T) {
 	if len(hs.hooks) != 2 {
 		t.Fatalf("compiled %d hooks, want 2", len(hs.hooks))
 	}
-	if hs.hooks[0].id != "tests" || hs.hooks[0].when == nil {
-		t.Errorf("hook[0] = %+v, want id=tests with a compiled when", hs.hooks[0])
-	}
-	if !hs.hooks[0].isPre() {
-		t.Error("pre-close must be a pre-hook")
+	if hs.hooks[0].id != "tests" || hs.hooks[0].event != "pre-close" || hs.hooks[0].when == nil {
+		t.Errorf("hook[0] = %+v, want id=tests event=pre-close with a compiled when", hs.hooks[0])
 	}
 	// id defaulting: "<event>#<index>"
-	if hs.hooks[1].id != "post-close#1" {
-		t.Errorf("hook[1].id = %q, want post-close#1", hs.hooks[1].id)
+	if hs.hooks[1].id != "post-close#1" || hs.hooks[1].event != "post-close" {
+		t.Errorf("hook[1] = %+v, want id=post-close#1 event=post-close", hs.hooks[1])
 	}
 	if hs.hooks[1].when != nil {
 		t.Error("hook[1] has no when clause; predicate must be nil (always)")
-	}
-	if hs.hooks[1].isPre() {
-		t.Error("post-close must not be a pre-hook")
 	}
 }
 
