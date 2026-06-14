@@ -68,11 +68,32 @@ from --json output and reuse it.
   taskmgr dep add <dependent> <blocker>   # dependent becomes blocked by blocker
   taskmgr rel add <a> <b>                 # symmetric related link
 
-There is one Markdown description body per issue — put acceptance criteria,
-instructions, and context there. update --description replaces the body (edit, do
-not append). Prefer close --reason over update --status closed so the history
-explains itself. A mutation's --json echoes the issue fields but not the
-description or comments — run taskmgr show to confirm a body or comment edit.
+## The description body
+
+Each issue has one Markdown description body — put acceptance criteria,
+instructions, and context there (there is no separate field for them).
+
+--description "..." takes one inline string, fine for a single line. For a
+multi-line body, --description-file reads a path, or "-" reads stdin — feed it a
+heredoc so you do not fight shell quoting. The same pair works on create and
+update; comments take --file the same way.
+
+  taskmgr update <id> --description-file - <<'EOF'
+  ## Acceptance criteria
+  - [ ] UTF-8 with BOM
+  - [ ] ISO-8601 dates
+  EOF
+
+  taskmgr create --title "Schema" --description-file notes.md   # ...or a file
+  echo "scaffold pushed" | taskmgr comment add <id> --file -
+
+Do not rely on --description "a\nb" — the \n is stored literally. Use
+--description-file - (or, inline, $'a\nb' ANSI-C quoting).
+
+update --description replaces the body — it does not append. To amend, run show,
+then resubmit the full modified text. Prefer close --reason over
+update --status closed so history explains itself. A mutation's --json echoes the
+issue's scalar fields but not the description or comments — run show to confirm.
 
 ## Finding work with filters
 
@@ -85,12 +106,20 @@ joined by && || ! and parentheses:
   taskmgr list --all -q 'closed > "2026-01-01"'
   taskmgr search "export"        # shorthand for: list -q 'text ~ "export"'
 
-Fields:    status, type, priority, label, text (id/title/description), created,
-           updated, closed, and the booleans ready / blocked
-Operators: == != < <= > >= and ~ (contains)
-Values:    quote strings ("open"); numbers and dates are bare or quoted
+Fields:    status, type, priority, assignee, creator, parent, label,
+           text (id/title/description), created, updated, closed,
+           and the booleans ready / blocked
+Operators: == != < <= > >= and ~ (case-insensitive substring)
+Values:    quote strings ("open"); numbers and dates are bare or quoted;
+           quote multi-word values — text ~ "drill nav", not text ~ drill nav
+
+~ matches a substring, not a whole word: text ~ "rate" also matches "separate".
+ready and blocked come from the dependency graph, not the status field — blocked
+is not the same as status == "blocked" (an issue can be open yet blocked, or
+carry the blocked status with no open blocker).
 
 Closed issues are excluded unless the expression selects them or you pass --all.
+taskmgr labels / statuses / types list the values actually in use.
 
 ## Output and exit conventions
 
