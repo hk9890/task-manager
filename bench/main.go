@@ -9,7 +9,7 @@
 //
 //	go run .                      # synthetic corpus (default -n 419, ~90% closed)
 //	go run . -n 2000              # bigger synthetic corpus
-//	go run . -jsonl PATH          # import a real beads issues.jsonl instead
+//	go run . -jsonl PATH          # import a real issues.jsonl export instead
 //	go run . -mode scaling        # only the current-design scaling phases
 //	go run . -mode redesign       # only the sidecar + closed/ payoff phases
 //
@@ -36,7 +36,7 @@ import (
 
 func main() {
 	var (
-		jsonlPath = flag.String("jsonl", "", "path to a beads issues.jsonl to import (default: synthetic)")
+		jsonlPath = flag.String("jsonl", "", "path to a real issues.jsonl export to import (default: synthetic)")
 		n         = flag.Int("n", 419, "number of synthetic issues when -jsonl is empty")
 		mode      = flag.String("mode", "all", "all | scaling | redesign | yaml")
 		workdir   = flag.String("workdir", "", "scratch dir for stores (default: a temp dir)")

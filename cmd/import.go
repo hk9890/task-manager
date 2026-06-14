@@ -17,7 +17,7 @@ var importFlags struct {
 	runHooks bool
 }
 
-// importEnvelope is the stable JSON shape a source adapter (beads, Jira, …)
+// importEnvelope is the stable JSON shape a source adapter (e.g. Jira, GitHub)
 // emits per issue. All source-specific logic lives in the adapter; taskmgr only
 // validates this envelope and writes it. Timestamps are RFC3339.
 type importEnvelope struct {
@@ -117,7 +117,7 @@ var importCmd = &cobra.Command{
 	Long: `Import writes a complete, externally-sourced issue verbatim — its final status
 (including closed), original timestamps, labels, edges, and full comment log — in
 a single validated write. It is the low-level primitive a migration adapter
-(beads, Jira, …) drives: the adapter does all source-specific mapping and emits
+(e.g. Jira, GitHub) drives: the adapter does all source-specific mapping and emits
 the import envelope; taskmgr validates it against the data model and writes it.
 
 The envelope is JSON on stdin (or --file). Edge fields (parent, blocked_by,

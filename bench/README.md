@@ -16,7 +16,7 @@ cd bench
 
 go run .                  # synthetic corpus (default -n 419, ~90% closed) — portable, no data needed
 go run . -n 2000          # larger synthetic corpus
-go run . -jsonl PATH      # import a real beads issues.jsonl instead of synthetic
+go run . -jsonl PATH      # import a real issues.jsonl export instead of synthetic
 go run . -mode scaling    # only current-design scaling phases
 go run . -mode redesign   # only the sidecar + closed/ payoff phases
 go run . -mode yaml       # only the YAML-escaping probe

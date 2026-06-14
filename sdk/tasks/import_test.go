@@ -21,7 +21,7 @@ func TestImportOpenPreservesTimestamps(t *testing.T) {
 	iss, err := unwrap(s.Import(ImportInput{
 		Title: "an imported task", Type: TypeBug, Priority: ptr(1),
 		Status: StatusOpen, Created: tCreated, Updated: tUpdated,
-		Labels: []string{"beads:bd-1"},
+		Labels: []string{"ext:ext-1"},
 	}))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
