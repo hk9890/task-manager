@@ -19,6 +19,16 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|---|
 | `--json` | off | Emit machine-readable JSON instead of the human table/detail view. |
 | `-C, --dir <path>` | cwd | Start directory for locating the store; `.tasks` is found by walking up. |
+| `--store-path <path>` | — | Override resolution: operate on the store at this explicit path (no walk-up, no registry). |
+| `--store-name <name>` | — | Override resolution: operate on the central store with this registry name. Mutually exclusive with `--store-path`. |
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `TASKMGR_DIR` | Store-path override, equivalent to `--store-path`; the flag wins if both are set. |
+| `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
+| `TASKMGR_LOG` | Log level/destination for observability output (mapped to a logger and injected into the SDK). |
 
 ### Output modes
 
@@ -51,12 +61,27 @@ Mistyped commands are corrected, not dead-ended: an unknown top-level command or
 unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
 group with no subcommand prints its help and exits `0`).
 
-### Discovery
+### Store resolution
 
-The store is located by walking up from `--dir` (or cwd) until a `.tasks`
-directory is found. Most commands fail with a "no store" error if none exists;
-`init` is the exception. The error is actionable rather than a dead end —
-`taskmgr: no .tasks directory found — run 'taskmgr init' to create one`.
+The store a command operates on is resolved by the engine (the same logic every
+front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPEC.md)
+§4:
+
+1. an explicit **override** — `--store-path` / `TASKMGR_DIR`, or `--store-name`;
+2. otherwise **local walk-up** from `--dir` (or cwd) for a `.tasks` directory (the
+   long-standing behaviour — a local store always wins);
+3. otherwise the **central registry** — if a central store is mapped to the current
+   project path, use it.
+
+The **resolution origin** is `--dir`/`-C` if given, else the cwd. It feeds *every*
+step alike: the local walk-up start, the path matched against the registry, and the
+project path recorded by `init --central` (CONFIG-SPEC §4, `W`).
+
+Most commands fail with a "no store" error if none of these resolves; `init` and
+`where` are the exceptions. The error is actionable rather than a dead end — `taskmgr:
+no .tasks directory found — run 'taskmgr init' to create one`. `taskmgr where` (§2.1)
+never errors on no-store — it reports the outcome (including "nothing resolved") and
+exits `0`, since reporting resolution is its whole job.
 
 Agents can self-orient without external docs: `taskmgr guide` (§5) prints a
 workflow how-to, `taskmgr commands` (§5) prints the machine catalog, and every
@@ -69,18 +94,57 @@ command supports `--help`. The root help and `init` success output both point at
 
 ### `taskmgr init`
 
-Create a new store in the current project.
+Create a new store for the current project — locally by default, or centrally with
+`--central`.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--prefix <p>` | derived from directory name | ID prefix for the store (`^[a-z][a-z0-9]*$`). |
+| `--central` | off | Create the store under the central root and register it (instead of a local `.tasks/`). See [CONFIG-SPEC.md](CONFIG-SPEC.md) §5. |
+| `--store-name <n>` | project basename | With `--central`, the store's subfolder name under the central root. |
 
-- Creates the `.tasks/` store directory and its `config.yaml`.
-- If `--prefix` is omitted it is derived from the working directory name
-  (lowercased, non-alphanumerics stripped, leading digits removed, truncated; falls
-  back to `task`).
-- Fails if a store already exists.
-- **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON).
+- **Local (default):** creates the `.tasks/` store directory and its `config.yaml`
+  in the current project. Fails if a local store already exists.
+- **Central (`--central`):** creates `<central_root>/stores/<name>/` as an ordinary
+  store and adds a registry entry mapping the current project path to it. `--store-name`
+  must match the store-name grammar (CONFIG-SPEC §3). Fails if that subfolder or a
+  registry entry for this path already exists.
+- If `--prefix` is omitted it is derived from the project directory name (lowercased,
+  non-alphanumerics stripped, leading digits removed, truncated; falls back to `task`).
+  This holds for both local and central stores — prefixes are per project, with no
+  global default (CONFIG-SPEC §5).
+- **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with
+  `--central`, also the registry `name`).
+
+---
+
+## 2.1 Store inspection
+
+Two read-only commands surface the central setup. Registry *editing* verbs (`store
+move` / `link` / `unlink`) are a deliberate, use-gated follow-up — until then the
+registry is one short YAML file the user can hand-edit (CONFIG-SPEC §5).
+
+### `taskmgr where`
+
+Show which store the current working directory resolves to and **why** — the diagnostic
+for the resolution rule above. It mirrors the engine's `ResolveKind` (SDK-SPEC §1)
+verbatim, so the override distinction is not lost:
+
+- `kind`: `local` | `central` | `override_path` | `override_name`, or `none` when
+  nothing resolves.
+- `store_path`: the resolved store directory (omitted when `kind` is `none`).
+- `project_path`: the project the store tracks (the store's parent for a local store;
+  omitted when `kind` is `none`).
+
+Never errors on no-store; exits `0` with `kind: none`. **Output (JSON):** `whereDTO` (§6).
+
+### `taskmgr store list`
+
+Enumerate the registry entries — each entry's project `path`, `store` name, and the
+store directory. A plain listing (no health classification in this slice; a dangling
+entry, CONFIG-SPEC §3, is shown like any other).
+
+- **Output (JSON):** array of `storeListDTO` (§6).
 
 ---
 
@@ -385,6 +449,19 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.
 
+**`whereDTO`** — emitted by `where`. `kind` is one of `local` | `central` |
+`override_path` | `override_name` | `none` (mirrors the engine's `ResolveKind`,
+SDK-SPEC §1). `store_path` and `project_path` are omitted when `kind` is `none`:
+
+```json
+{ "kind": "central", "store_path": "/home/hans/.taskmgr/stores/my-project",
+  "project_path": "/home/hans/dev/my-project" }
+```
+
+**`storeListDTO`** — emitted by `store list`, one per registry entry:
+`{path, store, store_path}` (the project path, the registry name, and the resolved
+store directory). No health/status field in this slice.
+
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
 `"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
@@ -402,7 +479,9 @@ prints a structured error:
 ## 7. Command summary
 
 ```
-taskmgr init     [--prefix X]
+taskmgr init     [--prefix X] [--central [--store-name N]]
+taskmgr where                                # which store resolves here, and why
+taskmgr store    list                        # enumerate central registry entries
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
@@ -426,5 +505,6 @@ taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)
 taskmgr guide                                # workflow how-to (start here)
 
-Global: --json, -C/--dir <path>
+Global: --json, -C/--dir <path>, --store-path <path> | --store-name <name>
+Env:    TASKMGR_DIR, TASKMGR_HOME, TASKMGR_LOG
 ```

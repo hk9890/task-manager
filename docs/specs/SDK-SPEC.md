@@ -17,24 +17,81 @@ without pulling in any CLI dependencies.
 ## 1. Opening a store
 
 ```go
-func Init(root, prefix string, opts ...Option) (*Store, error)
-func Open(start string, opts ...Option) (*Store, error)
+func Resolve(opts ResolveOptions) (*Store, ResolveInfo, error)   // the front-end entry point
+func Open(start string, opts ...Option) (*Store, error)          // low-level: local walk-up only
+func Init(root, prefix string, opts ...Option) (*Store, error)   // create a local store
+func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, error) // create + register
+func Stores(opts ResolveOptions) ([]StoreEntry, error)           // enumerate the central registry
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
 ```
 
-- **`Init`** creates a new project store under `root` with the given ID `prefix`
-  and returns it open. Fails if a store already exists (`ErrStoreExists`) or the
-  prefix is invalid.
-- **`Open`** locates a store by walking up from `start` (or the current working
-  directory if `start == ""`) and loads its config. Returns `ErrNoStore` if none
-  is found.
+- **`Resolve`** is the single function a front end calls to get "the store for here".
+  It runs the full resolution algorithm of [CONFIG-SPEC.md](CONFIG-SPEC.md) §4 —
+  explicit override → local walk-up → central-registry fallback — reading the global
+  config, the registry, and the environment through the engine's seams (using built-in
+  config defaults when none is on disk; `Resolve` is a read and never writes), and
+  returns the opened store plus a `ResolveInfo` saying how it was chosen. Returns `ErrNoStore`
+  when nothing matches. This is what makes every front end (CLI, `taskmgr-ui`, …)
+  resolve identically; the CLI is just a thin caller.
+- **`Open`** is the low-level local discovery used as step 2 of `Resolve`: it walks
+  up from `start` (or the current working directory if `start == ""`) for a `.tasks/`
+  and loads its config. It consults **no** central registry or global config. Returns
+  `ErrNoStore` if none is found. Consumers that want central fallback call `Resolve`.
+- **`Init`** creates a new **local** project store under `root` with the given ID
+  `prefix` and returns it open. Fails if a store already exists (`ErrStoreExists`) or
+  the prefix is invalid.
+- **`InitCentral`** creates a **central** store at `<central_root>/stores/<name>` (an
+  ordinary store) **and** writes its registry entry `{path: projectPath, store: name}`
+  in one operation (CONFIG-SPEC §5). `name` must match the store-name grammar
+  (CONFIG-SPEC §3). An empty `prefix` is derived from the project directory name (else
+  `task`), exactly as for `Init` — prefixes are per-project, with no global default.
+  Fails if the subfolder or a registry entry for that path already exists.
+- **`Stores`** reads the central registry and returns its entries (it does **not**
+  resolve against a working directory — `where` uses `Resolve`; `store list` uses this).
+  It reads through the same seams as `Resolve` and never writes; a missing registry
+  yields an empty slice, a corrupt one an error.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
-  logger the store writes observability records to (hook timing, writes, IO
-  errors; see MONITORING.md); without it the store is silent. The SDK never reads
-  the environment itself — a front end maps `TASKMGR_LOG` to a level and injects
-  the logger.
+  logger the store writes observability records to (hook timing, writes, IO errors;
+  see MONITORING.md); without it the store is silent. The SDK does not read
+  *logging* configuration — a front end maps `TASKMGR_LOG` to a level and injects the
+  logger. (Store **resolution** is the one place the SDK reads the environment, and it
+  does so only through the `internal/env` seam — ARCHITECTURE-SPEC §5 — so it stays
+  hermetically testable.)
+
+```go
+type ResolveOptions struct {
+    WorkDir   string // resolution origin; "" → process working directory
+    StorePath string // explicit store-path override (--store-path / TASKMGR_DIR); opens directly
+    StoreName string // explicit central store-name override (--store-name); via the registry
+    // StorePath and StoreName are mutually exclusive.
+}
+
+type ResolveInfo struct {
+    Kind        ResolveKind // how the store was chosen
+    StorePath   string      // the resolved store directory
+    ProjectPath string      // the project the store tracks (the store's parent for a local store)
+}
+
+type ResolveKind int
+const (
+    ResolvedLocal        ResolveKind = iota // local .tasks found by walk-up
+    ResolvedCentral                         // central registry match
+    ResolvedOverridePath                    // explicit store-path / TASKMGR_DIR
+    ResolvedOverrideName                    // explicit store-name
+)
+
+type StoreEntry struct {
+    Path      string // the project path the entry maps (canonicalized)
+    Store     string // the registry name == subfolder under <central_root>/stores
+    StorePath string // the resolved store directory, <central_root>/stores/<Store>
+}
+```
+
+In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;
+hermetic tests inject in-memory/fake seams through the same internal hooks the store
+already uses for `vfs.Mem`, so resolution is exercised with no real `HOME` or disk.
 
 `Store` is the single gateway to a project's files; every read and write goes
 through it. It is safe for concurrent use within a process and across processes; the
@@ -501,12 +558,20 @@ Sentinel errors, testable with `errors.Is`:
 
 ```go
 var (
-    ErrNotFound      // issue not found
-    ErrNoStore       // no .tasks directory found
-    ErrStoreExists   // .tasks directory already exists
-    ErrImmutable     // attempted in-place write to a closed issue (closed/ partition)
+    ErrNotFound           // issue not found
+    ErrNoStore            // no store found (no local .tasks and no registry match)
+    ErrStoreExists        // a store already exists at the create target
+    ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
+    ErrStoreNotRegistered // --store-name names a store with no registry entry (CONFIG-SPEC §4)
+    ErrAmbiguousOverride  // both a store-path and a store-name override were supplied
 )
 ```
+
+`Resolve` returns `ErrNoStore` when neither a local store nor a registry match is
+found, `ErrStoreNotRegistered` when an explicit `StoreName` has no entry, and
+`ErrAmbiguousOverride` when both `StorePath` and `StoreName` are set. A corrupt
+`config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
+is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`, and
 `RemoveDep` when the target issue lives in `closed/` (closed issues are immutable

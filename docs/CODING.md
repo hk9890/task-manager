@@ -19,9 +19,10 @@ mise run quality           # vet + lint + test  (pre-commit gate)
 ## Single-writer rule
 
 Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `cmd/`
-and every consumer go through the `Store` API. **Only the two seams `internal/vfs`
-(disk) and `internal/exec` (hook processes) may import `os`/`syscall`;** the pure
-core imports neither.
+and every consumer go through the `Store` API. **Only the three seams `internal/vfs`
+(disk), `internal/exec` (hook processes), and `internal/env` (user environment, for
+store resolution — CONFIG-SPEC) may import `os`/`syscall`;** the pure core imports
+none of them.
 
 ## Where changes go
 
@@ -32,6 +33,8 @@ core imports neither.
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
 | Spawning a hook process | `sdk/tasks/internal/exec` (the process seam) — never inline `os/exec` elsewhere |
+| Reading the environment (home, `TASKMGR_*`) for resolution | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
+| Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
 | Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
 | Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
 
@@ -48,8 +51,9 @@ core imports neither.
 A change to a CLI command/flag or a public `sdk/tasks` function/type/semantics
 **must update the matching spec in the same change** ([CLI](specs/CLI-SPEC.md),
 [SDK](specs/SDK-SPEC.md), [STORAGE](specs/TASK-STORAGE-SPEC.md),
-[QUERY](specs/QUERY-SPEC.md)). A structural change (packages, the `vfs` seam)
-updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
+[QUERY](specs/QUERY-SPEC.md)). A change to config, the central registry, or store
+resolution updates [CONFIG](specs/CONFIG-SPEC.md). A structural change (packages, a
+seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
 
 ## Modules
 

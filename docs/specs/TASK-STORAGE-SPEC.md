@@ -28,9 +28,15 @@ format and schema of every file type, and the invariants every file must satisfy
 
 ## 2. Directory layout
 
-The store is a single `.tasks/` directory committed alongside the project it
-tracks — **one tracker per repository**. It holds that one project's issues
-directly; there is no enclosing workspace and no project subdirectories.
+The store is a single directory holding **exactly one project's** issues directly;
+there is no enclosing workspace and no project subdirectories *within* a store. By
+default it is a `.tasks/` directory committed alongside the project it tracks — the
+common case, **one tracker per repository**. A store may instead live **detached**
+from its project, under a per-user central root, and be located by a registry that
+maps the project path to it; that arrangement (the global config, the central root,
+and the resolution rule) is specified in [CONFIG-SPEC.md](CONFIG-SPEC.md). The
+on-disk format below is identical either way — a central store is byte-for-byte an
+ordinary store — which is what makes relocating one a plain folder move.
 
 ```
 .tasks/                          # store root (one project, committed with the repo)
@@ -49,7 +55,8 @@ directly; there is no enclosing workspace and no project subdirectories.
 Rules:
 
 - The store holds **exactly one project**. The ID prefix comes from `config.yaml`,
-  not from the directory name (the directory is always `.tasks`).
+  not from the directory name (which is `.tasks` for a local store, or the store's
+  subfolder name under a central root — see [CONFIG-SPEC.md](CONFIG-SPEC.md)).
 - The **hot set** is the store's top level: the `*.md` task files of non-closed
   issues. `closed/` and `comments/` are subdirectories and are excluded from the
   hot scan by construction (the scan ignores subdirectories).
