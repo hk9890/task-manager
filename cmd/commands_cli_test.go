@@ -53,7 +53,7 @@ var allUserFacingCommands = []string{
 	"rel", "rel add", "rel rm",
 	"comment", "comment add", "comment edit", "comment rm",
 	"list", "search", "ready", "blocked", "labels", "statuses", "types",
-	"version", "commands",
+	"version", "commands", "guide",
 }
 
 func TestL4_Commands_YAMLCatalog(t *testing.T) {

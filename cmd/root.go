@@ -28,7 +28,9 @@ var rootCmd = &cobra.Command{
 	Long: `taskmgr is a lean, file-based task tracker. Each issue is a Markdown file
 with YAML frontmatter under a project's .tasks directory. taskmgr is the only
 thing that should write those files — it validates everything and serializes
-concurrent writers.`,
+concurrent writers.
+
+Agents: run 'taskmgr guide' for a how-to, 'taskmgr commands' for the full catalog.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
@@ -43,9 +45,23 @@ func (e silentError) Unwrap() error { return e.err }
 
 // Execute runs the root command.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	installUsageErrors(rootCmd)
+	// ExecuteC returns the command that ran, so a required-flag failure (which cobra
+	// reports outside the args/flag hooks) can still be rendered as misuse-help.
+	cmd, err := rootCmd.ExecuteC()
+	if err != nil {
+		var ue *usageError
 		var se silentError
-		if !errors.As(err, &se) {
+		switch {
+		case errors.As(err, &ue):
+			// Misinvocation: render the compact help block (purpose, usage, example,
+			// flags/subcommands, --help pointer) instead of the bare one-liner.
+			renderUsageError(ue)
+		case errors.As(err, &se):
+			// Output already emitted to stdout (e.g. a hook_denied JSON object).
+		case isRequiredFlagError(err):
+			renderUsageError(&usageError{cmd: cmd, msg: err.Error()})
+		default:
 			fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
 		}
 		os.Exit(1)
