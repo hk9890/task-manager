@@ -317,7 +317,8 @@ is a convenience for structured callers, **not** a second selection engine.
 
 ```go
 type Criteria struct {
-    Text        string   // text ~ "..."
+    Text        string   // matched against id+title+description (per TextMatch)
+    TextMatch   TextMatch
     Statuses    []Status // OR within the group
     Types       []Type   // OR within the group
     Labels      []string // combined per LabelMatch
@@ -337,6 +338,12 @@ type LabelMatch int
 const (
     LabelMatchAll LabelMatch = iota // every listed label present (default)
     LabelMatchAny                   // at least one listed label present
+)
+
+type TextMatch int
+const (
+    TextPhrase   TextMatch = iota // Text is one contiguous substring (default)
+    TextAllWords                  // each whitespace-separated word AND-ed (order-independent)
 )
 
 type WorkState int
@@ -361,6 +368,10 @@ All user-supplied string, enum, and date values are emitted **quoted** (with
 `"`→`\"` and `\`→`\\` escaping per QUERY-SPEC.md §3); the numeric `priority` is
 emitted bare. This puts the bareword/quoting rule in exactly one audited place.
 `LabelMatch` defaults to `LabelMatchAll` (the issue must carry every listed label).
+`TextMatch` defaults to `TextPhrase`: `Text` compiles to a single `text ~ "..."`.
+Under `TextAllWords` the `Text` value is split on whitespace and each word emits its
+own `text ~ "word"` clause AND-ed together (order-independent); empty or
+whitespace-only `Text` adds no clause.
 Date bounds are **half-open on the instant**: `*From` emits `field >= From`
 (inclusive), `*To` emits `field < To` (exclusive); to cover a whole day `D` pass `To`
 as the start of the next day. `PriorityMin` / `PriorityMax` are emitted bare as
@@ -372,6 +383,26 @@ the grammar cannot express it, and clamping it to `0` would silently change its
 meaning (`priority <= -1` selects nothing, but `priority <= 0` selects the criticals).
 Rejecting rather than clamping keeps `Build` total over the storable range and free of
 `*ParseError`s.
+
+### Free-text search
+
+```go
+func SearchExpr(query string) string
+```
+
+`SearchExpr` is the single shared entry point for user-facing text search. It turns
+a free-text query into the canonical filter expression using the AND-of-words
+semantic (`Criteria{Text: query, TextMatch: TextAllWords}.Build`): the query is split
+on whitespace and every word must appear in the issue's id/title/description
+(order-independent). Matching is per-word **substring** (inherited from `~`), so
+`cat dog` also matches "category dogma" — not whole-word/token matching. An empty or
+whitespace-only query yields `""` (the always-true predicate). The result is always a
+valid expression usable as `Filter.Expr` or with `Store.Query`, so the CLI `search`
+command and any UI share one definition of search. `SearchExpr` is **total** — it
+never returns an error (a search box must not reject input), which is why it returns a
+bare `string` rather than mirroring `Build`'s `(string, error)`. To combine search
+with structured facets, build a `Criteria` with `TextAllWords` and call `Build` rather
+than concatenating expression strings.
 
 ---
 

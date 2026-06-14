@@ -201,11 +201,21 @@ Scope: closed issues are excluded unless `--all` is passed or the expression
 satisfies the cold-scope predicate (a `status == "closed"` atom or a `closed`
 comparison; `status != "closed"` does not). See QUERY-SPEC.md §5.
 
-### `taskmgr search <text> [options]`
+### `taskmgr search <text> [more words...] [options]`
 
-Shorthand for matching `<text>` against the ID, title, or description —
-equivalent to `list -q 'text ~ "<text>"'`. Accepts `--all`, `--sort`, `--reverse`,
-and `--limit`.
+Matches `<text>` against the ID, title, or description. Multiple words use
+**AND-of-words** (order-independent): every word must appear, e.g. `search drill nav`
+is equivalent to `list -q 'text ~ "drill" && text ~ "nav"'` and matches regardless of
+order or adjacency. Matching is per-word substring, so `search cat` also matches
+"category". A single word is equivalent to `list -q 'text ~ "<word>"'`. The shared
+semantic is `tasks.SearchExpr` (SDK-SPEC §3), so the CLI and any UI search
+identically. A `-q` expression, if given, is AND-ed with the text match. Accepts
+`--all`, `--sort`, `--reverse`, and `--limit`.
+
+For an exact **contiguous phrase** instead of AND-of-words, use the query form
+directly: `list -q 'text ~ "drill nav"'` (matches only where the words are adjacent
+and in order). This is the documented phrase escape hatch — `search` itself stays
+AND-of-words with no extra flag, in keeping with "filter via `-q`."
 
 ### `taskmgr ready [--limit <n>]`
 

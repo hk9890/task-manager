@@ -435,33 +435,82 @@ func TestL4_SearchMalformedInternalExpr_ExitOne(t *testing.T) {
 	}
 }
 
-// ── search multi-word joining ──────────────────────────────────────────────────
+// ── search multi-word (AND-of-words) ────────────────────────────────────────────
 
-// TestL4_Search_MultiWordJoined verifies that `search foo bar` joins the
-// positional arguments into the phrase "foo bar" rather than silently dropping
-// "bar". It must match an issue whose title contains both words together.
-func TestL4_Search_MultiWordJoined(t *testing.T) {
+// TestL4_Search_MultiWordAllWords verifies that `search foo bar` requires every
+// word to appear (order-independent AND), not a contiguous phrase. This is the
+// shared tasks.SearchExpr semantic that the CLI and any UI both use.
+func TestL4_Search_MultiWordAllWords(t *testing.T) {
 	root, ids := queryFixture(t)
 
-	// "drill nav" appears only in drill-iss (title: "drill nav issue").
-	// Using two separate args should find it.
+	// Both words present (drill-iss title: "drill nav issue") → matches.
 	out, _, code := taskmgr(t, root, "--json", "search", "drill", "nav")
 	if code != 0 {
 		t.Fatalf("search 'drill nav' failed (exit %d): %s", code, out)
 	}
-	got := issueIDsFromJSON(t, out)
-	if !hasID(got, ids["drill-iss"]) {
+	if got := issueIDsFromJSON(t, out); !hasID(got, ids["drill-iss"]) {
 		t.Errorf("search 'drill nav': drill-iss missing; got: %v", got)
 	}
 
-	// Sanity: searching "drill xyzzy" (no issue has both) should return empty.
+	// Order-independent: reversed words still match. This is the discriminator
+	// from the old phrase behavior — `text ~ "nav drill"` would NOT match
+	// "drill nav issue", but AND-of-words does.
+	outR, _, codeR := taskmgr(t, root, "--json", "search", "nav", "drill")
+	if codeR != 0 {
+		t.Fatalf("search 'nav drill' failed (exit %d): %s", codeR, outR)
+	}
+	if got := issueIDsFromJSON(t, outR); !hasID(got, ids["drill-iss"]) {
+		t.Errorf("search 'nav drill' (reversed): drill-iss missing; got: %v", got)
+	}
+
+	// AND semantics: a missing word excludes the issue. No issue has "xyzzy".
 	out2, _, code2 := taskmgr(t, root, "--json", "search", "drill", "xyzzy")
 	if code2 != 0 {
 		t.Fatalf("search 'drill xyzzy' failed (exit %d): %s", code2, out2)
 	}
-	got2 := issueIDsFromJSON(t, out2)
-	if hasID(got2, ids["drill-iss"]) {
+	if got2 := issueIDsFromJSON(t, out2); hasID(got2, ids["drill-iss"]) {
 		t.Errorf("search 'drill xyzzy': drill-iss should not match; got: %v", got2)
+	}
+}
+
+// TestL4_Search_CombinedWithQuery_Parenthesized locks the one hand-assembled
+// string in the CLI: when search is combined with -q, the user expression must be
+// parenthesized so its internal `||` is protected under the `&&` with the text
+// match — `(status == "open" || priority == 0) && text ~ "drill"`, NOT the
+// unparenthesized `status == "open" || (priority == 0 && text ~ "drill")`, which
+// would wrongly return every open issue regardless of text.
+func TestL4_Search_CombinedWithQuery_Parenthesized(t *testing.T) {
+	root, ids := queryFixture(t)
+
+	out, _, code := taskmgr(t, root, "--json", "search", "drill", "-q", `status == "open" || priority == 0`)
+	if code != 0 {
+		t.Fatalf("search drill -q '...' failed (exit %d): %s", code, out)
+	}
+	got := issueIDsFromJSON(t, out)
+	// drill-iss is open and contains "drill" → must be present under correct parens.
+	if !hasID(got, ids["drill-iss"]) {
+		t.Errorf("combined search: drill-iss missing; got: %v", got)
+	}
+	// open-p1 is open but has no "drill"; it leaks in only if the -q is NOT
+	// parenthesized (the `status == "open"` disjunct would then match everything).
+	if hasID(got, ids["open-p1"]) {
+		t.Errorf("combined search: open-p1 (open, no \"drill\") leaked in — -q not parenthesized; got: %v", got)
+	}
+}
+
+// TestL4_Search_WhitespaceOnly_NoTextConstraint documents the always-true contract:
+// a whitespace-only query yields no text constraint (not an error), so search
+// behaves like an unfiltered list rather than rejecting input.
+func TestL4_Search_WhitespaceOnly_NoTextConstraint(t *testing.T) {
+	root, ids := queryFixture(t)
+
+	out, _, code := taskmgr(t, root, "--json", "search", "   ")
+	if code != 0 {
+		t.Fatalf("search '   ' failed (exit %d): %s", code, out)
+	}
+	// No text filter applied → the open set is returned, including non-matching ones.
+	if got := issueIDsFromJSON(t, out); !hasID(got, ids["open-p1"]) {
+		t.Errorf("whitespace-only search should impose no text constraint; got: %v", got)
 	}
 }
 
