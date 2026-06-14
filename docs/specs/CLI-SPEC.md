@@ -73,6 +73,10 @@ front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPE
 3. otherwise the **central registry** — if a central store is mapped to the current
    project path, use it.
 
+The **resolution origin** is `--dir`/`-C` if given, else the cwd. It feeds *every*
+step alike: the local walk-up start, the path matched against the registry, and the
+project path recorded by `init --central` (CONFIG-SPEC §4, `W`).
+
 Most commands fail with a "no store" error if none of these resolves; `init` and
 `where` are the exceptions. The error is actionable rather than a dead end — `taskmgr:
 no .tasks directory found — run 'taskmgr init' to create one`. `taskmgr where` (§2.1)
@@ -101,9 +105,10 @@ Create a new store for the current project — locally by default, or centrally 
 
 - **Local (default):** creates the `.tasks/` store directory and its `config.yaml`
   in the current project. Fails if a local store already exists.
-- **Central (`--central`):** creates `<central_root>/<name>/` as an ordinary store and
-  adds a registry entry mapping the current project path to it. Fails if that
-  subfolder or a registry entry for this path already exists.
+- **Central (`--central`):** creates `<central_root>/stores/<name>/` as an ordinary
+  store and adds a registry entry mapping the current project path to it. `--store-name`
+  must match the store-name grammar (CONFIG-SPEC §3). Fails if that subfolder or a
+  registry entry for this path already exists.
 - If `--prefix` is omitted it is derived from the project directory name (lowercased,
   non-alphanumerics stripped, leading digits removed, truncated; falls back to `task`).
   This holds for both local and central stores — prefixes are per project, with no
@@ -449,7 +454,7 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 SDK-SPEC §1). `store_path` and `project_path` are omitted when `kind` is `none`:
 
 ```json
-{ "kind": "central", "store_path": "/home/hans/.taskmgr/my-project",
+{ "kind": "central", "store_path": "/home/hans/.taskmgr/stores/my-project",
   "project_path": "/home/hans/dev/my-project" }
 ```
 

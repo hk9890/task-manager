@@ -21,6 +21,7 @@ func Resolve(opts ResolveOptions) (*Store, ResolveInfo, error)   // the front-en
 func Open(start string, opts ...Option) (*Store, error)          // low-level: local walk-up only
 func Init(root, prefix string, opts ...Option) (*Store, error)   // create a local store
 func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, error) // create + register
+func Stores(opts ResolveOptions) ([]StoreEntry, error)           // enumerate the central registry
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
@@ -41,12 +42,16 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
 - **`Init`** creates a new **local** project store under `root` with the given ID
   `prefix` and returns it open. Fails if a store already exists (`ErrStoreExists`) or
   the prefix is invalid.
-- **`InitCentral`** creates a **central** store at `<central_root>/<name>` (an
+- **`InitCentral`** creates a **central** store at `<central_root>/stores/<name>` (an
   ordinary store) **and** writes its registry entry `{path: projectPath, store: name}`
-  in one operation (CONFIG-SPEC §5). An empty `prefix` is derived from the project
-  directory name (else `task`), exactly as for `Init` — prefixes are per-project, with
-  no global default. Fails if the subfolder or a registry entry for that path already
-  exists.
+  in one operation (CONFIG-SPEC §5). `name` must match the store-name grammar
+  (CONFIG-SPEC §3). An empty `prefix` is derived from the project directory name (else
+  `task`), exactly as for `Init` — prefixes are per-project, with no global default.
+  Fails if the subfolder or a registry entry for that path already exists.
+- **`Stores`** reads the central registry and returns its entries (it does **not**
+  resolve against a working directory — `where` uses `Resolve`; `store list` uses this).
+  It reads through the same seams as `Resolve` and never writes; a missing registry
+  yields an empty slice, a corrupt one an error.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
   logger the store writes observability records to (hook timing, writes, IO errors;
   see MONITORING.md); without it the store is silent. The SDK does not read
@@ -76,6 +81,12 @@ const (
     ResolvedOverridePath                    // explicit store-path / TASKMGR_DIR
     ResolvedOverrideName                    // explicit store-name
 )
+
+type StoreEntry struct {
+    Path      string // the project path the entry maps (canonicalized)
+    Store     string // the registry name == subfolder under <central_root>/stores
+    StorePath string // the resolved store directory, <central_root>/stores/<Store>
+}
 ```
 
 In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;

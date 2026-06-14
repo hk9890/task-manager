@@ -24,7 +24,7 @@ Key rules:
 
 Per-user state lives under the **home**: `~/.taskmgr/` by default, or `$TASKMGR_HOME`
 (an absolute path) if set. It holds `config.yaml` (§2) and — when `central_root` is the
-home — `mapping.yaml` and the central store subfolders (§3).
+home — `mapping.yaml` and the `stores/` directory of central stores (§3).
 
 The engine ships **built-in defaults** for everything in §2, so a missing home or
 `config.yaml` is not an error — the defaults apply. The read path never writes: the
@@ -56,21 +56,25 @@ Unknown keys are ignored; a corrupt (unparseable) file is a hard error.
 ## 3. Central root & registry — `mapping.yaml`
 
 The **central root** (default = the home) is a plain directory — **not a store**. It
-holds the registry, an advisory lock (below), and one subfolder per central store; each
-subfolder is a complete, ordinary store per TASK-STORAGE-SPEC (own `config.yaml`,
-prefix, hot files, `comments/`, `closed/`). Because a central store is an ordinary
-store, relocating one is a plain folder move plus a registry edit (§5).
+holds the registry, an advisory lock (below), and a `stores/` directory with one
+subfolder per central store; each subfolder is a complete, ordinary store per
+TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`, `closed/`). The
+dedicated `stores/` directory keeps store names in their own namespace, so a store can
+never collide with the central root's own files (`config.yaml`, `mapping.yaml`,
+`.lock`). Because a central store is an ordinary store, relocating one is a plain folder
+move plus a registry edit (§5).
 
 ```
 ~/.taskmgr/
 ├── config.yaml          # §2
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
-└── my-project/          # a central store — a complete, ordinary store
-    ├── config.yaml
-    ├── myp-3k9f2x.md
-    ├── comments/
-    └── closed/
+└── stores/              # all central stores live here
+    └── my-project/      # a central store — a complete, ordinary store
+        ├── config.yaml
+        ├── myp-3k9f2x.md
+        ├── comments/
+        └── closed/
 ```
 
 The registry is one YAML document at `<central_root>/mapping.yaml`:
@@ -79,12 +83,14 @@ The registry is one YAML document at `<central_root>/mapping.yaml`:
 version: 1
 stores:
   - path: ~/dev/my-project   # project this store tracks (friendly form allowed)
-    store: my-project        # the store's subfolder name under central_root
+    store: my-project        # the store's subfolder name under stores/
 ```
 
 - Every entry **maps to a path**; `path` and `store` are both required (there is no
-  project-less entry). `store` is a single path segment; the store lives at
-  `<central_root>/<store>`.
+  project-less entry). The store lives at `<central_root>/stores/<store>`.
+- **`store` name grammar.** A single path segment matching `^[A-Za-z0-9][A-Za-z0-9._-]*$`,
+  1–64 characters. The leading-alphanumeric rule excludes path separators, `.`, `..`,
+  and hidden names; the length cap keeps it a sane directory name on every filesystem.
 - `path` may use `~`/relative form; it is canonicalized only at compare time (§4).
 - Both keys are **unique** across entries: a duplicate canonical `path` is an error (a
   path can map to only one store), and a duplicate `store` name is an error (so
@@ -105,11 +111,13 @@ so it carries this separate lock for registry mutations.
 
 ## 4. Store resolution
 
-Map a working directory `W` (plus optional override) to one store, in order:
+Map a working directory `W` (plus optional override) to one store, in order. `W` is the
+caller-provided resolution origin — for the CLI, `--dir`/`-C` if given, else the cwd
+(SDK: `ResolveOptions.WorkDir`) — and the **same** `W` drives every step below:
 
 1. **Explicit override** — `--store-path` / `TASKMGR_DIR` opens that path directly;
-   `--store-name` opens `<central_root>/<name>` via the registry (error if it has no
-   entry). Path and name are mutually exclusive; a flag beats the environment variable.
+   `--store-name` opens `<central_root>/stores/<name>` via the registry (error if it has
+   no entry). Path and name are mutually exclusive; a flag beats the environment variable.
 2. **Local walk-up** (unchanged) — from `W` upward, the first `.tasks/` found wins and
    resolution stops. This is why a local store always beats a central one.
 3. **Central fallback** — no local store: canonicalize `W` and pick the registry entry
@@ -128,8 +136,8 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
 ## 5. Creation & relocation
 
 - **Create local** (unchanged) — a `.tasks/` store in the project tree; no registry.
-- **Create central** — create `<central_root>/<store>` as an ordinary store **and** add
-  its registry entry in one step (the `init --central` command, CLI-SPEC §2).
+- **Create central** — create `<central_root>/stores/<store>` as an ordinary store
+  **and** add its registry entry in one step (the `init --central` command, CLI-SPEC §2).
 - **Relocate / re-link** — there are deliberately **no** dedicated verbs yet (a registry
   with no users does not earn management tooling). Because a central store is an ordinary
   store and the registry is one short YAML file, relocating one is a manual two-step:
