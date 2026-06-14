@@ -26,9 +26,11 @@ Per-user state lives under the **home**: `~/.taskmgr/` by default, or `$TASKMGR_
 (an absolute path) if set. It holds `config.yaml` (§2) and — when `central_root` is the
 home — `mapping.yaml` and the central store subfolders (§3).
 
-On the first run of **any** command the engine creates the home and a default
-`config.yaml` if missing (eager, idempotent). A read-only command may therefore create
-it on first run — expected and harmless.
+The engine ships **built-in defaults** for everything in §2, so a missing home or
+`config.yaml` is not an error — the defaults apply. The read path never writes: the
+home and `config.yaml` are created/written only by a command that must persist central
+state (e.g. `init --central`). This keeps reads side-effect-free (ARCHITECTURE-SPEC §6,
+TASK-STORAGE-SPEC §7) and avoids two first-runs racing to create the home.
 
 ---
 
@@ -54,15 +56,16 @@ Unknown keys are ignored; a corrupt (unparseable) file is a hard error.
 ## 3. Central root & registry — `mapping.yaml`
 
 The **central root** (default = the home) is a plain directory — **not a store**. It
-holds the registry and one subfolder per central store; each subfolder is a complete,
-ordinary store per TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`,
-`closed/`). Because a central store is an ordinary store, relocating one is a folder
-move (§5).
+holds the registry, an advisory lock (below), and one subfolder per central store; each
+subfolder is a complete, ordinary store per TASK-STORAGE-SPEC (own `config.yaml`,
+prefix, hot files, `comments/`, `closed/`). Because a central store is an ordinary
+store, relocating one is a plain folder move plus a registry edit (§5).
 
 ```
 ~/.taskmgr/
 ├── config.yaml          # §2
 ├── mapping.yaml         # the registry (below)
+├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
 └── my-project/          # a central store — a complete, ordinary store
     ├── config.yaml
     ├── myp-3k9f2x.md
@@ -83,13 +86,20 @@ stores:
   project-less entry). `store` is a single path segment; the store lives at
   `<central_root>/<store>`.
 - `path` may use `~`/relative form; it is canonicalized only at compare time (§4).
+- Both keys are **unique** across entries: a duplicate canonical `path` is an error (a
+  path can map to only one store), and a duplicate `store` name is an error (so
+  `--store-name` selects exactly one entry).
 - A **missing** `mapping.yaml` means "no central stores" (not an error); a **corrupt**
-  one is a hard error; a **duplicate** canonical `path` across entries is an error.
+  one is a hard error.
 
-**Integrity** (surfaced by `taskmgr store list`, CLI-SPEC §2): a **dangling** entry
-(missing subfolder, or a project `path` that no longer exists) is ignored by resolution;
-an **orphan** subfolder (no entry) is unreachable by path but still openable via
-`--store-name`.
+**Dangling entries.** An entry whose `store` subfolder, or whose project `path`, no
+longer exists is **ignored** by resolution (§4) rather than failing the command. A
+subfolder with no registry entry is simply unreachable until an entry is added (§5).
+
+**Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
+`<central_root>/.lock` — an empty file whose only role is its lock state, mirroring a
+store's `.tasks/.lock` (TASK-STORAGE-SPEC §4.5). The central root is not itself a store,
+so it carries this separate lock for registry mutations.
 
 ---
 
@@ -119,16 +129,18 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
 
 - **Create local** (unchanged) — a `.tasks/` store in the project tree; no registry.
 - **Create central** — create `<central_root>/<store>` as an ordinary store **and** add
-  its registry entry in one step.
-- **Move** — relocate a store and update the registry together (local↔central or
-  central→central): the folder carries all its data; only the registry entry is
-  rewritten.
+  its registry entry in one step (the `init --central` command, CLI-SPEC §2).
+- **Relocate / re-link** — there are deliberately **no** dedicated verbs yet (a registry
+  with no users does not earn management tooling). Because a central store is an ordinary
+  store and the registry is one short YAML file, relocating one is a manual two-step:
+  move the folder, then edit its `mapping.yaml` entry. Dedicated `store move` / `link` /
+  `unlink` verbs are a use-gated follow-up.
 
 **Prefix.** A store's ID prefix is `--prefix` if given, else derived from the project
 directory name (lowercased, non-alphanumerics stripped, leading digits removed,
 truncated), else `task`. Prefixes are **per project** — there is deliberately no global
 default prefix, so two projects never share a prefix by accident.
 
-Registry writes obey the store durability discipline (TASK-STORAGE-SPEC §7): serialized
-under an advisory `flock` on the central root and written atomically, so concurrent
-`store` operations never corrupt `mapping.yaml`.
+Registry writes (today, `init --central`) obey the store durability discipline
+(TASK-STORAGE-SPEC §7): serialized under the `<central_root>/.lock` advisory `flock` (§3)
+and written atomically, so concurrent writers never corrupt `mapping.yaml`.

@@ -29,8 +29,9 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
 - **`Resolve`** is the single function a front end calls to get "the store for here".
   It runs the full resolution algorithm of [CONFIG-SPEC.md](CONFIG-SPEC.md) §4 —
   explicit override → local walk-up → central-registry fallback — reading the global
-  config, the registry, and the environment through the engine's seams, and returns
-  the opened store plus a `ResolveInfo` saying how it was chosen. Returns `ErrNoStore`
+  config, the registry, and the environment through the engine's seams (using built-in
+  config defaults when none is on disk; `Resolve` is a read and never writes), and
+  returns the opened store plus a `ResolveInfo` saying how it was chosen. Returns `ErrNoStore`
   when nothing matches. This is what makes every front end (CLI, `taskmgr-ui`, …)
   resolve identically; the CLI is just a thin caller.
 - **`Open`** is the low-level local discovery used as step 2 of `Resolve`: it walks

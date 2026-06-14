@@ -73,10 +73,11 @@ front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPE
 3. otherwise the **central registry** — if a central store is mapped to the current
    project path, use it.
 
-Most commands fail with a "no store" error if none of these resolves; `init` is the
-exception. The error is actionable rather than a dead end — `taskmgr: no .tasks
-directory found — run 'taskmgr init' to create one`. Use `taskmgr where` (§2) to see
-which store resolved and why.
+Most commands fail with a "no store" error if none of these resolves; `init` and
+`where` are the exceptions. The error is actionable rather than a dead end — `taskmgr:
+no .tasks directory found — run 'taskmgr init' to create one`. `taskmgr where` (§2.1)
+never errors on no-store — it reports the outcome (including "nothing resolved") and
+exits `0`, since reporting resolution is its whole job.
 
 Agents can self-orient without external docs: `taskmgr guide` (§5) prints a
 workflow how-to, `taskmgr commands` (§5) prints the machine catalog, and every
@@ -112,52 +113,33 @@ Create a new store for the current project — locally by default, or centrally 
 
 ---
 
-## 2.1 Store management
+## 2.1 Store inspection
 
-The `taskmgr store` command group manages stores and the central registry
-([CONFIG-SPEC.md](CONFIG-SPEC.md) §3, §5). A store is always referenced **explicitly**
-as either a path or a registry name — never guessed.
+Two read-only commands surface the central setup. Registry *editing* verbs (`store
+move` / `link` / `unlink`) are a deliberate, use-gated follow-up — until then the
+registry is one short YAML file the user can hand-edit (CONFIG-SPEC §5).
 
 ### `taskmgr where`
 
-Show which store the current working directory resolves to and **why**: the kind
-(`local` / `central` / `override`), the store path, and the project path. The
-diagnostic for the resolution rule above.
+Show which store the current working directory resolves to and **why** — the diagnostic
+for the resolution rule above. It mirrors the engine's `ResolveKind` (SDK-SPEC §1)
+verbatim, so the override distinction is not lost:
 
-- **Output (JSON):** `{"kind", "store_path", "project_path"}`.
+- `kind`: `local` | `central` | `override_path` | `override_name`, or `none` when
+  nothing resolves.
+- `store_path`: the resolved store directory (omitted when `kind` is `none`).
+- `project_path`: the project the store tracks (the store's parent for a local store;
+  omitted when `kind` is `none`).
+
+Never errors on no-store; exits `0` with `kind: none`. **Output (JSON):** `whereDTO` (§6).
 
 ### `taskmgr store list`
 
-List the central stores in the registry: each entry's project `path`, `store` name,
-and store path, plus a health flag for **dangling** entries (missing subfolder or
-missing project path) and **orphan** subfolders (a store under the central root with
-no entry). See CONFIG-SPEC §3.
+Enumerate the registry entries — each entry's project `path`, `store` name, and the
+store directory. A plain listing (no health classification in this slice; a dangling
+entry, CONFIG-SPEC §3, is shown like any other).
 
-- **Output (JSON):** array of `{"path", "store", "store_path", "status"}`.
-
-### `taskmgr store move`
-
-Relocate a store and update the registry in one step — local↔central or central→central
-(CONFIG-SPEC §5). Source and target are each given **explicitly**:
-
-| Option | Meaning |
-|---|---|
-| `--src-path <p>` | Source store given as a filesystem path. |
-| `--src-storename <n>` | Source store given as a registry name. |
-| `--target-path <p>` | Destination given as a filesystem path (creates a local store there). |
-| `--target-storename <n>` | Destination given as a registry name (a central store; defaults to the source project's basename). |
-
-Exactly one `--src-*` and one `--target-*` are required. The store folder is moved
-(carrying all its data) and the registry entry is added/updated/removed to match.
-
-### `taskmgr store link` / `taskmgr store unlink`
-
-Edit the registry without moving any files — for repair or manual setup.
-
-- `store link --path <project> --store <name>` adds (or updates) an entry mapping a
-  project path to an existing central store subfolder.
-- `store unlink --store <name>` (or `--path <project>`) removes an entry. It removes
-  only the mapping; it never deletes the store's data (hence `unlink`, not `remove`).
+- **Output (JSON):** array of `storeListDTO` (§6).
 
 ---
 
@@ -462,6 +444,19 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.
 
+**`whereDTO`** — emitted by `where`. `kind` is one of `local` | `central` |
+`override_path` | `override_name` | `none` (mirrors the engine's `ResolveKind`,
+SDK-SPEC §1). `store_path` and `project_path` are omitted when `kind` is `none`:
+
+```json
+{ "kind": "central", "store_path": "/home/hans/.taskmgr/my-project",
+  "project_path": "/home/hans/dev/my-project" }
+```
+
+**`storeListDTO`** — emitted by `store list`, one per registry entry:
+`{path, store, store_path}` (the project path, the registry name, and the resolved
+store directory). No health/status field in this slice.
+
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
 `"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
@@ -481,10 +476,7 @@ prints a structured error:
 ```
 taskmgr init     [--prefix X] [--central [--store-name N]]
 taskmgr where                                # which store resolves here, and why
-taskmgr store    list
-taskmgr store    move  --src-path|--src-storename … --target-path|--target-storename …
-taskmgr store    link   --path <project> --store <name>
-taskmgr store    unlink --store <name> | --path <project>
+taskmgr store    list                        # enumerate central registry entries
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
