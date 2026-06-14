@@ -2,9 +2,9 @@
 """Migrate a beads tracker into a task-manager (.tasks) store.
 
 This is a thin *adapter*: it translates a beads JSONL export into task-manager
-import envelopes and feeds them to `taskmgr import --batch`, which validates each
-record against the data model and writes it (the single writer). All beads-
-specific knowledge lives here; taskmgr knows nothing about beads.
+import envelopes and feeds each to `taskmgr import`, which validates the record
+against the data model, mints its id, and writes it (the single writer). All
+beads-specific knowledge lives here; taskmgr knows nothing about beads.
 
 Unlike a create→update→close replay, `taskmgr import` writes each issue as a
 complete end-state, so original timestamps, closed state, and comments are
@@ -24,9 +24,13 @@ Usage
 
 Mapping
 -------
-* IDs are re-minted as ``<prefix>-<n>`` (beads ids like ``at-zib.1.1`` are not
-  valid task-manager ids). The original id is preserved as a ``beads:<id>``
-  label, and a ``source_id → new-id`` map is written to ``--map-out``.
+* IDs are minted by taskmgr, not the adapter: each issue is imported with no
+  ``id`` so the store allocates a fresh, collision-resistant token (beads ids
+  like ``at-zib.1.1`` aren't valid task-manager ids, so they can't be reused
+  verbatim). The original id is preserved as a ``beads:<id>`` label, and a
+  ``source_id → new-id`` map is written to ``--map-out``. Issues import in
+  dependency order, one at a time, so an edge can reference the freshly minted
+  id of an already-imported parent/blocker.
 * Timestamps (created/updated/closed) and comments (author + time) are imported
   verbatim — no provenance footer needed.
 * Labels are slugified to fit the label grammar (spaces → ``-``); a label that
@@ -216,8 +220,15 @@ class Stats:
         self.cyclic_edges = 0
 
 
-def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
-    new_id = idmap[rec["id"]]
+def build_envelope(rec, idmap, idset, stats: Stats) -> dict:
+    """Translate one beads record into a taskmgr import envelope.
+
+    No ``id`` is set — taskmgr mints one. ``idmap`` maps a beads source id to the
+    taskmgr id it was *already* minted with (issues imported so far, in dependency
+    order); ``idset`` is every beads id in the export, used to tell a forward /
+    cyclic edge (target imported later) apart from a dangling one (target not in
+    the export). Both are dropped (keeping the issue) and counted.
+    """
     status, extra_labels = map_status(rec.get("status"))
 
     labels: list[str] = []
@@ -237,8 +248,9 @@ def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
             labels.append(el)
 
     env = {
+        # No "id": taskmgr mints a fresh, collision-resistant token. The original
+        # beads id rides along in the beads:<id> label set above and as source_id.
         "source_id": rec["id"],
-        "id": new_id,
         "title": clean_text(rec["title"])[:200] or "(untitled)",
         "type": map_type(rec.get("issue_type")),
         "priority": clamp_priority(rec.get("priority")),
@@ -251,16 +263,17 @@ def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
         "updated_at": rec.get("updated_at") or rec.get("created_at"),
     }
 
-    # Edges must reference an already-imported issue. Topological order
-    # guarantees that for a DAG; only a dependency CYCLE produces a forward ref
-    # (target imported later). taskmgr can't represent a cyclic blocked_by/parent
-    # anyway, so we drop just that edge (keeping the issue) rather than failing the
-    # whole record.
+    # Edges reference the taskmgr id of an already-imported issue. idmap holds
+    # source -> minted id for issues imported so far; dependency order guarantees
+    # a parent/blocker precedes its dependents, so it is already in idmap. A
+    # target still absent is a forward/cyclic edge when it lives elsewhere in the
+    # export (idset) — taskmgr can't represent a cyclic parent/blocked_by anyway —
+    # or dangling when it doesn't; both are dropped (keeping the issue) and counted.
     parent, blockers, related = edges(rec)
     if parent:
-        if parent in idmap and parent in emitted:
+        if parent in idmap:
             env["parent"] = idmap[parent]
-        elif parent in idmap:
+        elif parent in idset:
             stats.cyclic_edges += 1
             eprint(f"  ! {rec['id']}: parent {parent} is part of a cycle — edge dropped")
         else:
@@ -268,9 +281,9 @@ def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
             eprint(f"  ! {rec['id']}: parent {parent} not in export — skipped")
     bl = []
     for b in blockers:
-        if b in idmap and b in emitted:
+        if b in idmap:
             bl.append(idmap[b])
-        elif b in idmap:
+        elif b in idset:
             stats.cyclic_edges += 1
             eprint(f"  ! {rec['id']}: blocker {b} is part of a cycle — edge dropped")
         else:
@@ -280,9 +293,9 @@ def build_envelope(rec, idmap, emitted, stats: Stats) -> dict:
         env["blocked_by"] = bl
     rel = []
     for r in related:
-        if r in idmap and r in emitted:
+        if r in idmap:
             rel.append(idmap[r])
-        elif r in idmap:
+        elif r in idset:
             stats.skipped_related += 1  # target imported later / cycle
         else:
             stats.dangling_edges += 1
@@ -335,24 +348,25 @@ def main() -> int:
     prefix = derive_prefix(args, args.dir)
     idset = {r["id"] for r in records}
     ordered = topo_order(records, idset)
-    idmap = {rec["id"]: f"{prefix}-{i + 1:05d}" for i, rec in enumerate(ordered)}
-
     stats = Stats()
-    emitted: set[str] = set()
-    envelopes = []
-    for rec in ordered:
-        envelopes.append(build_envelope(rec, idmap, emitted, stats))
-        emitted.add(rec["id"])
 
     if args.dry_run:
+        # Preview only. taskmgr mints each id at import time; model that with an
+        # identity map so edges render as their source ids and the forward/cyclic/
+        # dangling counts match a real run (which assumes every record imports).
+        idmap: dict[str, str] = {}
+        envelopes = []
+        for rec in ordered:
+            envelopes.append(build_envelope(rec, idmap, idset, stats))
+            idmap[rec["id"]] = rec["id"]
         eprint(f"(dry-run) {len(envelopes)} envelopes; "
                f"{stats.dropped_labels} labels dropped, {stats.skipped_related} related skipped, "
                f"{stats.dangling_edges} dangling edges")
         print(json.dumps(envelopes[0], indent=2) if envelopes else "[]")
         return 0
 
-    # A fresh store is required (import allocates the named IDs; re-import would
-    # collide). If one exists, ask before wiping it.
+    # A fresh store is required: taskmgr mints new ids, so importing into a
+    # populated store would duplicate every issue. If one exists, ask before wiping.
     tasks_dir = os.path.join(args.dir, ".tasks")
     if os.path.isdir(tasks_dir):
         abspath = os.path.abspath(tasks_dir)
@@ -369,31 +383,34 @@ def main() -> int:
         eprint(f"taskmgr init failed: {init.stderr.strip()}")
         return 1
 
-    # Stream the envelopes as NDJSON to `taskmgr import --batch`.
-    fd, nd_path = tempfile.mkstemp(suffix=".ndjson")
-    with os.fdopen(fd, "w") as f:
-        for env in envelopes:
-            f.write(json.dumps(env) + "\n")
-    try:
-        proc = subprocess.run(
-            [args.taskmgr, "-C", args.dir, "--json", "import", "--batch", "--file", nd_path],
-            capture_output=True, text=True)
-    finally:
-        os.unlink(nd_path)
-
-    results = []
-    if proc.stdout.strip():
-        try:
-            results = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            eprint("could not parse taskmgr import output:\n" + proc.stdout[:500])
-    ok = [r for r in results if r.get("id") and not r.get("error")]
-    failed = [r for r in results if r.get("error")]
-    for r in failed:
-        eprint(f"  ! import failed for {r.get('source_id')}: {r.get('error')}")
+    # Import one issue at a time, in dependency order, letting taskmgr mint each
+    # id. The minted id comes back in the {source_id, id} result and goes into
+    # idmap so a later issue's parent/blocked_by/related can reference it. A single
+    # --batch call can't do this: the whole stream is written before taskmgr runs,
+    # so earlier-minted ids aren't known when the later edges are built.
+    idmap: dict[str, str] = {}
+    ok: list[str] = []
+    failed: list[str] = []
+    for rec in ordered:
+        env = build_envelope(rec, idmap, idset, stats)
+        proc = subprocess.run([args.taskmgr, "-C", args.dir, "--json", "import"],
+                              input=json.dumps(env), capture_output=True, text=True)
+        minted = None
+        if proc.returncode == 0:
+            try:
+                minted = json.loads(proc.stdout)["id"]
+            except (json.JSONDecodeError, KeyError):
+                minted = None
+        if not minted:
+            err = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            failed.append(rec["id"])
+            eprint(f"  ! import failed for {rec['id']}: {err}")
+            continue
+        idmap[rec["id"]] = minted
+        ok.append(rec["id"])
 
     with open(args.map_out, "w") as f:
-        json.dump({r["source_id"]: r["id"] for r in ok}, f, indent=2, sort_keys=True)
+        json.dump(idmap, f, indent=2, sort_keys=True)
 
     eprint(f"\nImported {len(ok)}/{len(records)} issues into {tasks_dir}.")
     eprint(f"  labels dropped: {stats.dropped_labels}, related skipped: {stats.skipped_related}, "
