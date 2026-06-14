@@ -80,9 +80,15 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 }
 
-// openStore locates and opens the project store, honouring the --dir flag.
+// openStore locates and opens the project store, honouring the --dir flag. When
+// no store exists it turns the SDK's generic ErrNoStore into actionable CLI
+// guidance — wrapping with %w so errors.Is(err, tasks.ErrNoStore) still holds.
 func openStore() (*tasks.Store, error) {
-	return tasks.Open(flagDir, logOption())
+	s, err := tasks.Open(flagDir, logOption())
+	if errors.Is(err, tasks.ErrNoStore) {
+		return nil, fmt.Errorf("%w — run 'taskmgr init' to create one", err)
+	}
+	return s, err
 }
 
 var versionCmd = &cobra.Command{
