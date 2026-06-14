@@ -27,7 +27,7 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
 ```
 
 - **`Resolve`** is the single function a front end calls to get "the store for here".
-  It runs the full resolution algorithm of [CONFIG-SPEC.md](CONFIG-SPEC.md) §5 —
+  It runs the full resolution algorithm of [CONFIG-SPEC.md](CONFIG-SPEC.md) §4 —
   explicit override → local walk-up → central-registry fallback — reading the global
   config, the registry, and the environment through the engine's seams, and returns
   the opened store plus a `ResolveInfo` saying how it was chosen. Returns `ErrNoStore`
@@ -42,9 +42,10 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
   the prefix is invalid.
 - **`InitCentral`** creates a **central** store at `<central_root>/<name>` (an
   ordinary store) **and** writes its registry entry `{path: projectPath, store: name}`
-  in one operation (CONFIG-SPEC §6). An empty `prefix` falls back to the global
-  `default_prefix` (CONFIG-SPEC §3). Fails if the subfolder or a registry entry for
-  that path already exists.
+  in one operation (CONFIG-SPEC §5). An empty `prefix` is derived from the project
+  directory name (else `task`), exactly as for `Init` — prefixes are per-project, with
+  no global default. Fails if the subfolder or a registry entry for that path already
+  exists.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
   logger the store writes observability records to (hook timing, writes, IO errors;
   see MONITORING.md); without it the store is silent. The SDK does not read
@@ -549,7 +550,7 @@ var (
     ErrNoStore            // no store found (no local .tasks and no registry match)
     ErrStoreExists        // a store already exists at the create target
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
-    ErrStoreNotRegistered // --store-name names a store with no registry entry (CONFIG-SPEC §5)
+    ErrStoreNotRegistered // --store-name names a store with no registry entry (CONFIG-SPEC §4)
     ErrAmbiguousOverride  // both a store-path and a store-name override were supplied
 )
 ```
@@ -558,7 +559,7 @@ var (
 found, `ErrStoreNotRegistered` when an explicit `StoreName` has no entry, and
 `ErrAmbiguousOverride` when both `StorePath` and `StoreName` are set. A corrupt
 `config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
-is reported as a (non-sentinel) configuration error (CONFIG-SPEC §3–§4).
+is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`, and
 `RemoveDep` when the target issue lives in `closed/` (closed issues are immutable

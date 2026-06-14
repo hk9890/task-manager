@@ -116,7 +116,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
 | `validate.go` | Single-issue field invariants. |
 | `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
-| `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §5): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
+| `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
 
 ### Imperative-shell files (may import `internal/vfs` / `internal/env`)
 
@@ -124,7 +124,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
-| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §3–§4); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation/relocation. |
+| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation/relocation. |
 
 ### Seams and os/syscall confinement
 

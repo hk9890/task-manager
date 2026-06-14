@@ -27,7 +27,7 @@ taskmgr <command> [subcommand] [args] [flags]
 | Variable | Meaning |
 |---|---|
 | `TASKMGR_DIR` | Store-path override, equivalent to `--store-path`; the flag wins if both are set. |
-| `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §2. |
+| `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
 | `TASKMGR_LOG` | Log level/destination for observability output (mapped to a logger and injected into the SDK). |
 
 ### Output modes
@@ -65,7 +65,7 @@ group with no subcommand prints its help and exits `0`).
 
 The store a command operates on is resolved by the engine (the same logic every
 front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPEC.md)
-§5:
+§4:
 
 1. an explicit **override** — `--store-path` / `TASKMGR_DIR`, or `--store-name`;
 2. otherwise **local walk-up** from `--dir` (or cwd) for a `.tasks` directory (the
@@ -95,7 +95,7 @@ Create a new store for the current project — locally by default, or centrally 
 | Option | Default | Meaning |
 |---|---|---|
 | `--prefix <p>` | derived from directory name | ID prefix for the store (`^[a-z][a-z0-9]*$`). |
-| `--central` | off | Create the store under the central root and register it (instead of a local `.tasks/`). See [CONFIG-SPEC.md](CONFIG-SPEC.md) §6. |
+| `--central` | off | Create the store under the central root and register it (instead of a local `.tasks/`). See [CONFIG-SPEC.md](CONFIG-SPEC.md) §5. |
 | `--store-name <n>` | project basename | With `--central`, the store's subfolder name under the central root. |
 
 - **Local (default):** creates the `.tasks/` store directory and its `config.yaml`
@@ -104,9 +104,9 @@ Create a new store for the current project — locally by default, or centrally 
   adds a registry entry mapping the current project path to it. Fails if that
   subfolder or a registry entry for this path already exists.
 - If `--prefix` is omitted it is derived from the project directory name (lowercased,
-  non-alphanumerics stripped, leading digits removed, truncated); if nothing usable can
-  be derived, it falls back to the global `default_prefix` (CONFIG-SPEC §3), or to
-  `task` when that too is unset.
+  non-alphanumerics stripped, leading digits removed, truncated; falls back to `task`).
+  This holds for both local and central stores — prefixes are per project, with no
+  global default (CONFIG-SPEC §5).
 - **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with
   `--central`, also the registry `name`).
 
@@ -115,7 +115,7 @@ Create a new store for the current project — locally by default, or centrally 
 ## 2.1 Store management
 
 The `taskmgr store` command group manages stores and the central registry
-([CONFIG-SPEC.md](CONFIG-SPEC.md) §4, §6). A store is always referenced **explicitly**
+([CONFIG-SPEC.md](CONFIG-SPEC.md) §3, §5). A store is always referenced **explicitly**
 as either a path or a registry name — never guessed.
 
 ### `taskmgr where`
@@ -131,14 +131,14 @@ diagnostic for the resolution rule above.
 List the central stores in the registry: each entry's project `path`, `store` name,
 and store path, plus a health flag for **dangling** entries (missing subfolder or
 missing project path) and **orphan** subfolders (a store under the central root with
-no entry). See CONFIG-SPEC §4.2.
+no entry). See CONFIG-SPEC §3.
 
 - **Output (JSON):** array of `{"path", "store", "store_path", "status"}`.
 
 ### `taskmgr store move`
 
 Relocate a store and update the registry in one step — local↔central or central→central
-(CONFIG-SPEC §6). Source and target are each given **explicitly**:
+(CONFIG-SPEC §5). Source and target are each given **explicitly**:
 
 | Option | Meaning |
 |---|---|
