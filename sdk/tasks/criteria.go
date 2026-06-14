@@ -23,6 +23,22 @@ const (
 	LabelMatchAny
 )
 
+// TextMatch controls how a multi-word Text value is interpreted in a Criteria.
+type TextMatch int
+
+const (
+	// TextPhrase matches Text as a single contiguous substring (default): the
+	// whole value compiles to one `text ~ "..."`, so words must appear adjacent
+	// and in order. This is the zero value, so existing callers are unaffected.
+	TextPhrase TextMatch = iota
+	// TextAllWords splits Text on whitespace and requires every word to appear
+	// (order-independent AND): `text ~ "w1" && text ~ "w2"`. This is the
+	// search-box semantic users expect; SearchExpr uses it. Matching stays
+	// per-word *substring* (inherited from `~`), so "cat dog" also matches
+	// "category dogma" — it is not whole-word/token matching.
+	TextAllWords
+)
+
 // WorkState constrains the ready/blocked state of a result.
 type WorkState int
 
@@ -42,8 +58,14 @@ const (
 // The zero value compiles to "" (the always-true predicate).
 // LabelMatch defaults to LabelMatchAll (the issue must carry every listed label).
 type Criteria struct {
-	// Text is matched as text ~ "..." (case-insensitive substring of id+title+description).
+	// Text is matched against id+title+description (case-insensitive). How a
+	// multi-word value is interpreted is controlled by TextMatch.
 	Text string
+
+	// TextMatch controls how a multi-word Text is interpreted: TextPhrase (default,
+	// one contiguous substring) or TextAllWords (each whitespace-separated word
+	// AND-ed, order-independent).
+	TextMatch TextMatch
 
 	// Statuses lists the statuses the issue may have (OR-ed). Any unknown Status
 	// value causes Build to return a *ValidationError.
@@ -121,9 +143,9 @@ func (c Criteria) Build() (string, error) {
 	// Accumulate top-level AND fragments.
 	var parts []string
 
-	// text ~ "..."
-	if c.Text != "" {
-		parts = append(parts, fmt.Sprintf("text ~ %s", quoteVal(c.Text)))
+	// text ~ "..."  (phrase: one substring; all-words: AND of per-word substrings)
+	if frag := buildTextExpr(c.Text, c.TextMatch); frag != "" {
+		parts = append(parts, frag)
 	}
 
 	// statuses: OR-group
@@ -250,6 +272,31 @@ func eqOrGroup(field string, vals []string) string {
 		return sub[0]
 	}
 	return "(" + strings.Join(sub, " || ") + ")"
+}
+
+// buildTextExpr compiles the Text field to a filter fragment per the TextMatch
+// mode. TextPhrase emits a single `text ~ "<text>"`. TextAllWords splits the text
+// on whitespace and AND-joins one `text ~ "<word>"` per word, so every word must
+// appear (order-independent). Empty or whitespace-only text yields "" (no
+// constraint). Quoting is delegated to quoteVal, keeping the bareword/quoting rule
+// in the one audited place.
+func buildTextExpr(text string, mode TextMatch) string {
+	if mode == TextAllWords {
+		words := strings.Fields(text)
+		if len(words) == 0 {
+			return ""
+		}
+		frags := make([]string, len(words))
+		for i, w := range words {
+			frags[i] = fmt.Sprintf("text ~ %s", quoteVal(w))
+		}
+		return strings.Join(frags, " && ")
+	}
+	// TextPhrase (default): the whole value as one contiguous substring.
+	if text == "" {
+		return ""
+	}
+	return fmt.Sprintf("text ~ %s", quoteVal(text))
 }
 
 // ---------------------------------------------------------------------------

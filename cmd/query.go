@@ -111,16 +111,18 @@ var searchFilter filterFlags
 
 var searchCmd = &cobra.Command{
 	Use:   "search <text> [more words...]",
-	Short: "Search issues by text (ID, title, description); multiple words are joined",
+	Short: "Search issues by text (ID, title, description); every word must match (AND)",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Join all positional arguments with spaces so `search foo bar` searches
-		// for the phrase "foo bar" rather than silently dropping "bar".
-		// Translate into a text ~ "<text>" expression; combine with -q if given.
-		textExpr := fmt.Sprintf(`text ~ %q`, strings.Join(args, " "))
-		if searchFilter.query != "" {
+		// Build the shared AND-of-words search expression (tasks.SearchExpr) so the
+		// CLI and any SDK/UI caller search identically; combine with -q if given.
+		textExpr := tasks.SearchExpr(strings.Join(args, " "))
+		switch {
+		case textExpr == "":
+			// Whitespace-only query: no text constraint; leave any -q as-is.
+		case searchFilter.query != "":
 			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
-		} else {
+		default:
 			searchFilter.query = textExpr
 		}
 		return runList(cmd, &searchFilter)

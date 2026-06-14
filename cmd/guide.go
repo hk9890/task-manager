@@ -104,7 +104,8 @@ joined by && || ! and parentheses:
   taskmgr list -q 'type == bug && label ~ "area:reports"'
   taskmgr list -q 'ready && priority <= 2'
   taskmgr list --all -q 'closed > "2026-01-01"'
-  taskmgr search "export"        # shorthand for: list -q 'text ~ "export"'
+  taskmgr search export          # shorthand for: list -q 'text ~ "export"'
+  taskmgr search drill nav       # every word must match: text ~ "drill" && text ~ "nav"
 
 Fields:    status, type, priority, assignee, creator, parent, label,
            text (id/title/description), created, updated, closed,

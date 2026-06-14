@@ -54,6 +54,90 @@ func TestCriteria_Build_Text(t *testing.T) {
 	}
 }
 
+func TestCriteria_Build_TextPhrase_IsDefaultZeroValue(t *testing.T) {
+	// TextMatch zero value must be TextPhrase so existing Text callers are
+	// unaffected: a multi-word Text stays one contiguous substring.
+	var tm tasks.TextMatch
+	if tm != tasks.TextPhrase {
+		t.Errorf("TextMatch zero value = %d, want TextPhrase = %d", tm, tasks.TextPhrase)
+	}
+	expr, err := tasks.Criteria{Text: "drill nav"}.Build()
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	want := `text ~ "drill nav"`
+	if expr != want {
+		t.Errorf("default (phrase) multi-word: got %q, want %q", expr, want)
+	}
+}
+
+func TestCriteria_Build_TextAllWords_MultipleWords_ANDGroup(t *testing.T) {
+	expr, err := tasks.Criteria{Text: "drill nav", TextMatch: tasks.TextAllWords}.Build()
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	// Each word is a separate AND clause; order-independent at match time.
+	want := `text ~ "drill" && text ~ "nav"`
+	if expr != want {
+		t.Errorf("TextAllWords multi-word: got %q, want %q", expr, want)
+	}
+}
+
+func TestCriteria_Build_TextAllWords_SingleWord(t *testing.T) {
+	// A single word is identical to phrase mode, so `search foo` == `text ~ "foo"`.
+	expr, err := tasks.Criteria{Text: "drill", TextMatch: tasks.TextAllWords}.Build()
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	want := `text ~ "drill"`
+	if expr != want {
+		t.Errorf("TextAllWords single word: got %q, want %q", expr, want)
+	}
+}
+
+func TestCriteria_Build_TextAllWords_CollapsesWhitespace(t *testing.T) {
+	// Runs of whitespace (incl. tabs) collapse to single word boundaries.
+	expr, err := tasks.Criteria{Text: "  drill\t nav  ", TextMatch: tasks.TextAllWords}.Build()
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	want := `text ~ "drill" && text ~ "nav"`
+	if expr != want {
+		t.Errorf("TextAllWords whitespace: got %q, want %q", expr, want)
+	}
+}
+
+func TestCriteria_Build_TextAllWords_Empty(t *testing.T) {
+	// Empty / whitespace-only Text yields no constraint (the zero expression).
+	for _, in := range []string{"", "   ", "\t\n"} {
+		expr, err := tasks.Criteria{Text: in, TextMatch: tasks.TextAllWords}.Build()
+		if err != nil {
+			t.Fatalf("Build(%q) error: %v", in, err)
+		}
+		if expr != "" {
+			t.Errorf("TextAllWords %q: got %q, want %q", in, expr, "")
+		}
+	}
+}
+
+func TestCriteria_Build_TextAllWords_ComposesWithFacets(t *testing.T) {
+	// The per-word text fragments drop into the existing top-level && chain and
+	// compose cleanly with a self-parenthesizing status OR-group — no precedence
+	// trap, because text never emits || internally.
+	expr, err := tasks.Criteria{
+		Text:      "drill nav",
+		TextMatch: tasks.TextAllWords,
+		Statuses:  []tasks.Status{tasks.StatusOpen, tasks.StatusInProgress},
+	}.Build()
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	want := `text ~ "drill" && text ~ "nav" && (status == "open" || status == "in_progress")`
+	if expr != want {
+		t.Errorf("text+facets: got %q, want %q", expr, want)
+	}
+}
+
 func TestCriteria_Build_SingleStatus(t *testing.T) {
 	expr, err := tasks.Criteria{Statuses: []tasks.Status{tasks.StatusOpen}}.Build()
 	if err != nil {
