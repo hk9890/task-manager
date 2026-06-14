@@ -1,7 +1,7 @@
 package tasks
 
 // import.go — the Import primitive: a validated, direct write of a complete
-// issue end-state sourced from an external system (beads, Jira, …).
+// issue end-state sourced from an external system (e.g. Jira, GitHub).
 //
 // Unlike Create — which AUTHORS a new issue (store clock, always StatusOpen,
 // comments added one call at a time) — Import RECONSTRUCTS an existing issue:

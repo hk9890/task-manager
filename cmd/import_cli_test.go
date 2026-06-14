@@ -54,9 +54,9 @@ type cliImportResult struct {
 
 func TestL4_Import_SingleClosedWithComment(t *testing.T) {
 	root := initImportStore(t)
-	env := `{"source_id":"bd-1","title":"old closed task","type":"bug","priority":1,
+	env := `{"source_id":"ext-1","title":"old closed task","type":"bug","priority":1,
 	  "status":"closed","created_at":"2025-01-02T10:00:00Z","updated_at":"2025-03-01T09:00:00Z",
-	  "closed_at":"2025-03-01T09:00:00Z","close_reason":"fixed","labels":["beads:bd-1"],
+	  "closed_at":"2025-03-01T09:00:00Z","close_reason":"fixed","labels":["ext:ext-1"],
 	  "comments":[{"author":"alice","created_at":"2025-02-01T12:00:00Z","body":"a note"}]}`
 
 	stdout, stderr, code := taskmgrStdin(t, root, env, "import", "--json")
@@ -67,7 +67,7 @@ func TestL4_Import_SingleClosedWithComment(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
 		t.Fatalf("bad result json %q: %v", stdout, err)
 	}
-	if res.SourceID != "bd-1" || res.ID == "" {
+	if res.SourceID != "ext-1" || res.ID == "" {
 		t.Fatalf("result = %+v", res)
 	}
 
@@ -92,8 +92,8 @@ func TestL4_Import_BatchWithEdges(t *testing.T) {
 	root := initImportStore(t)
 	// Dependency order: epic first (with a known ID), then a child referencing it.
 	ndjson := strings.Join([]string{
-		`{"source_id":"bd-epic","id":"imp-epic1","title":"epic","type":"epic","status":"open","created_at":"2025-01-01T00:00:00Z"}`,
-		`{"source_id":"bd-child","title":"child","parent":"imp-epic1","blocked_by":["imp-epic1"],"status":"in_progress","created_at":"2025-01-05T00:00:00Z"}`,
+		`{"source_id":"ext-epic","id":"imp-epic1","title":"epic","type":"epic","status":"open","created_at":"2025-01-01T00:00:00Z"}`,
+		`{"source_id":"ext-child","title":"child","parent":"imp-epic1","blocked_by":["imp-epic1"],"status":"in_progress","created_at":"2025-01-05T00:00:00Z"}`,
 	}, "\n")
 
 	stdout, stderr, code := taskmgrStdin(t, root, ndjson, "import", "--batch", "--json")

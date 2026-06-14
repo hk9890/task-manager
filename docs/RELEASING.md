@@ -2,9 +2,8 @@
 
 task-manager has two release artifacts: the **`taskmgr` CLI binary** and the
 **`sdk/tasks` Go module**. There is no automated release pipeline yet — releases
-are cut manually with `make` and git tags. (A GoReleaser-based flow, like the one
-in beads-workbench, is the intended direction; CI already runs build and tests on
-every push.)
+are cut manually with `make` and git tags. (A GoReleaser-based flow is the
+intended direction; CI already runs build and tests on every push.)
 
 ## Versioning
 

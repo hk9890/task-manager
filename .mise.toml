@@ -15,10 +15,6 @@ description = "Build taskmgr from the current source and run it in your shell's 
 # Single line so mise appends your args to the taskmgr invocation (not the build step).
 run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/taskmgr"'
 
-[tasks.import-beads]
-description = "Import the beads tracker into a .tasks store in your current dir (prompts before overwriting). Extra args after -- (e.g. -- -y to skip the prompt)."
-run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec python3 "$MISE_PROJECT_ROOT/scripts/import_beads.py" --prefix at'
-
 [tasks.build]
 description = "Build the taskmgr binary into ./bin"
 run = """

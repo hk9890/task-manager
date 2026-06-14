@@ -60,8 +60,7 @@ func (t Type) Valid() bool {
 	return false
 }
 
-// Priority bounds. Lower is more urgent, matching the beads convention
-// (0 = critical .. 4 = trivial).
+// Priority bounds. Lower is more urgent (0 = critical .. 4 = trivial).
 const (
 	PriorityMin     = 0
 	PriorityMax     = 4
@@ -123,7 +122,7 @@ type Ref struct {
 }
 
 // Detail is an issue enriched with its derived inverse relationships and
-// resolved reference metadata. It is what a viewer (e.g. beads-workbench)
+// resolved reference metadata. It is what a viewer (e.g. a web UI)
 // renders for a single issue.
 type Detail struct {
 	Issue

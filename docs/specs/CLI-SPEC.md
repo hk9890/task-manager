@@ -196,8 +196,8 @@ Import a complete, externally-sourced issue **verbatim** — its final status
 (including `closed`), original `created`/`updated`/`closed` timestamps, labels,
 edges, and full comment log — in a single validated write. Unlike `create` (which
 authors a new, open issue stamped with the store clock), `import` is a direct
-write of an end-state: it is the low-level primitive a migration adapter (beads,
-Jira, …) drives. All source-specific mapping lives in the adapter; taskmgr only
+write of an end-state: it is the low-level primitive a migration adapter (e.g.
+Jira, GitHub) drives. All source-specific mapping lives in the adapter; taskmgr only
 validates the envelope against the data model and writes it.
 
 | Option | Default | Meaning |
@@ -210,12 +210,12 @@ The envelope is a JSON object (timestamps RFC3339):
 
 ```jsonc
 {
-  "source_id": "bd-1",            // optional; echoed in the result, not stored
+  "source_id": "ext-1",           // optional; echoed in the result, not stored
   "id": "at-keepme",              // optional caller-supplied taskmgr ID (else allocated)
   "title": "…", "type": "bug", "priority": 1,
   "status": "closed",             // any valid status; default open
   "assignee": "…", "creator": "…",
-  "labels": ["beads:bd-1"],
+  "labels": ["ext:ext-1"],
   "parent": "<id>", "blocked_by": ["<id>"], "related": ["<id>"],
   "created_at": "2025-01-02T10:00:00Z",
   "updated_at": "2025-03-01T09:00:00Z",
