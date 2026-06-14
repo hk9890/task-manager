@@ -34,11 +34,33 @@ taskmgr <command> [subcommand] [args] [flags]
 | `0` | Success. |
 | `1` | Any error (not found, validation failure, no store, I/O). The message is printed to stderr, prefixed `taskmgr: `. |
 
+### Errors & help on misuse
+
+All errors go to stderr prefixed `taskmgr: ` and leave stdout empty (exit `1`), but
+two classes are presented differently:
+
+- **Runtime errors** (not found, validation failure, dependency cycle, no store, …)
+  print the message alone — terse and self-explanatory. They are *not* wrapped in
+  usage text.
+- **Misuse** — wrong positional args, a missing required flag, or an unknown/bad
+  flag — prints a compact **help block**: the error, the command's one-line purpose,
+  its usage line and a synthesised example, its own flags (or, for a command group,
+  its subcommands), and a `Run 'taskmgr <command> --help'` pointer.
+
+Mistyped commands are corrected, not dead-ended: an unknown top-level command or an
+unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
+group with no subcommand prints its help and exits `0`).
+
 ### Discovery
 
 The store is located by walking up from `--dir` (or cwd) until a `.tasks`
 directory is found. Most commands fail with a "no store" error if none exists;
 `init` is the exception.
+
+Agents can self-orient without external docs: `taskmgr guide` (§5) prints a
+workflow how-to, `taskmgr commands` (§5) prints the machine catalog, and every
+command supports `--help`. The root help and `init` success output both point at
+`taskmgr guide`.
 
 ---
 
@@ -97,7 +119,9 @@ unless the expression selects them or `--all` is given. Default order: priority
 `&&`, `||`, `!`, and parentheses (e.g. `status == "open" && priority <= 1`). The
 grammar, the full field/operator table, value syntax, and error semantics are
 defined once, at the engine layer, in **[QUERY-SPEC.md](QUERY-SPEC.md)**; the CLI
-passes the string to the SDK unchanged.
+passes the string to the SDK unchanged. The `-q` flag help carries inline examples,
+and `taskmgr guide` (§5) restates the grammar in brief, so an agent in a terminal —
+without QUERY-SPEC.md in context — can still discover and use it.
 
 ```
 status == "open"
@@ -316,7 +340,7 @@ Idempotent.
 
 ---
 
-## 5. Catalog commands
+## 5. Catalog & discovery commands
 
 | Command | Output |
 |---|---|
@@ -325,6 +349,7 @@ Idempotent.
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
 | `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, and a usage example — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
+| `taskmgr guide` | A compact, workflow-shaped how-to: the issue model, the everyday command loop, the filter language in brief, and where to find more. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with a conformance test keeping its model lists in step with the SDK. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. |
 
 ---
 
@@ -397,7 +422,8 @@ taskmgr comment  edit <id> <comment-id> [body] [--author --file]
 taskmgr comment  rm   <id> <comment-id> [--author]
 taskmgr labels | statuses | types
 taskmgr version
-taskmgr commands
+taskmgr commands                             # machine catalog (YAML/JSON)
+taskmgr guide                                # workflow how-to (start here)
 
 Global: --json, -C/--dir <path>
 ```

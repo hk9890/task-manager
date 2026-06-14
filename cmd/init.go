@@ -42,6 +42,7 @@ If omitted, it is derived from the directory name.`,
 			return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix()})
 		}
 		fmt.Printf("Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
+		fmt.Fprintln(os.Stderr, "next: run 'taskmgr guide' to learn the workflow")
 		return nil
 	},
 }

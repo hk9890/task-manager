@@ -25,7 +25,7 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	f := cmd.Flags()
 	// -q/--query: filter expression (QUERY-SPEC.md). Closed-referencing expressions
 	// automatically include the cold partition; --all is not required in that case.
-	f.StringVarP(&ff.query, "query", "q", "", "filter expression (QUERY-SPEC.md); closed-scope auto-detected")
+	f.StringVarP(&ff.query, "query", "q", "", `filter expression, e.g. 'status == "open" && priority <= 1' or 'ready && priority <= 2' (see 'taskmgr guide'); closed-scope auto-detected`)
 	// --all reads the cold partition (closed/) in addition to the hot set. When a
 	// closed-referencing -q expression is used, --all is not needed but harmless.
 	f.BoolVar(&ff.all, "all", false, "include closed issues (reads the cold partition)")

@@ -99,8 +99,11 @@ func docFor(c *cobra.Command) commandDoc {
 // exampleFor synthesises a concrete usage example from the command's own
 // metadata: positional args declared in Use, plus any required flags.
 func exampleFor(c *cobra.Command) string {
-	// Group commands (no Run of their own) are invoked via a subcommand.
-	if c.HasAvailableSubCommands() && !c.Runnable() {
+	// Group commands (subcommands, no positional args of their own) are invoked via
+	// a subcommand. Detect this structurally rather than by Runnable(): the misuse-
+	// help layer attaches a dispatcher RunE to groups at startup, which would
+	// otherwise make them look runnable.
+	if c.HasAvailableSubCommands() && len(strings.Fields(c.Use)) <= 1 {
 		return c.CommandPath() + " <subcommand>"
 	}
 	parts := []string{c.CommandPath()}
