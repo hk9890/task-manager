@@ -19,6 +19,16 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|---|
 | `--json` | off | Emit machine-readable JSON instead of the human table/detail view. |
 | `-C, --dir <path>` | cwd | Start directory for locating the store; `.tasks` is found by walking up. |
+| `--store-path <path>` | — | Override resolution: operate on the store at this explicit path (no walk-up, no registry). |
+| `--store-name <name>` | — | Override resolution: operate on the central store with this registry name. Mutually exclusive with `--store-path`. |
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `TASKMGR_DIR` | Store-path override, equivalent to `--store-path`; the flag wins if both are set. |
+| `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §2. |
+| `TASKMGR_LOG` | Log level/destination for observability output (mapped to a logger and injected into the SDK). |
 
 ### Output modes
 
@@ -51,12 +61,22 @@ Mistyped commands are corrected, not dead-ended: an unknown top-level command or
 unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
 group with no subcommand prints its help and exits `0`).
 
-### Discovery
+### Store resolution
 
-The store is located by walking up from `--dir` (or cwd) until a `.tasks`
-directory is found. Most commands fail with a "no store" error if none exists;
-`init` is the exception. The error is actionable rather than a dead end —
-`taskmgr: no .tasks directory found — run 'taskmgr init' to create one`.
+The store a command operates on is resolved by the engine (the same logic every
+front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPEC.md)
+§5:
+
+1. an explicit **override** — `--store-path` / `TASKMGR_DIR`, or `--store-name`;
+2. otherwise **local walk-up** from `--dir` (or cwd) for a `.tasks` directory (the
+   long-standing behaviour — a local store always wins);
+3. otherwise the **central registry** — if a central store is mapped to the current
+   project path, use it.
+
+Most commands fail with a "no store" error if none of these resolves; `init` is the
+exception. The error is actionable rather than a dead end — `taskmgr: no .tasks
+directory found — run 'taskmgr init' to create one`. Use `taskmgr where` (§2) to see
+which store resolved and why.
 
 Agents can self-orient without external docs: `taskmgr guide` (§5) prints a
 workflow how-to, `taskmgr commands` (§5) prints the machine catalog, and every
@@ -69,18 +89,75 @@ command supports `--help`. The root help and `init` success output both point at
 
 ### `taskmgr init`
 
-Create a new store in the current project.
+Create a new store for the current project — locally by default, or centrally with
+`--central`.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--prefix <p>` | derived from directory name | ID prefix for the store (`^[a-z][a-z0-9]*$`). |
+| `--central` | off | Create the store under the central root and register it (instead of a local `.tasks/`). See [CONFIG-SPEC.md](CONFIG-SPEC.md) §6. |
+| `--store-name <n>` | project basename | With `--central`, the store's subfolder name under the central root. |
 
-- Creates the `.tasks/` store directory and its `config.yaml`.
-- If `--prefix` is omitted it is derived from the working directory name
-  (lowercased, non-alphanumerics stripped, leading digits removed, truncated; falls
-  back to `task`).
-- Fails if a store already exists.
-- **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON).
+- **Local (default):** creates the `.tasks/` store directory and its `config.yaml`
+  in the current project. Fails if a local store already exists.
+- **Central (`--central`):** creates `<central_root>/<name>/` as an ordinary store and
+  adds a registry entry mapping the current project path to it. Fails if that
+  subfolder or a registry entry for this path already exists.
+- If `--prefix` is omitted it is derived from the project directory name (lowercased,
+  non-alphanumerics stripped, leading digits removed, truncated); if nothing usable can
+  be derived, it falls back to the global `default_prefix` (CONFIG-SPEC §3), or to
+  `task` when that too is unset.
+- **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with
+  `--central`, also the registry `name`).
+
+---
+
+## 2.1 Store management
+
+The `taskmgr store` command group manages stores and the central registry
+([CONFIG-SPEC.md](CONFIG-SPEC.md) §4, §6). A store is always referenced **explicitly**
+as either a path or a registry name — never guessed.
+
+### `taskmgr where`
+
+Show which store the current working directory resolves to and **why**: the kind
+(`local` / `central` / `override`), the store path, and the project path. The
+diagnostic for the resolution rule above.
+
+- **Output (JSON):** `{"kind", "store_path", "project_path"}`.
+
+### `taskmgr store list`
+
+List the central stores in the registry: each entry's project `path`, `store` name,
+and store path, plus a health flag for **dangling** entries (missing subfolder or
+missing project path) and **orphan** subfolders (a store under the central root with
+no entry). See CONFIG-SPEC §4.2.
+
+- **Output (JSON):** array of `{"path", "store", "store_path", "status"}`.
+
+### `taskmgr store move`
+
+Relocate a store and update the registry in one step — local↔central or central→central
+(CONFIG-SPEC §6). Source and target are each given **explicitly**:
+
+| Option | Meaning |
+|---|---|
+| `--src-path <p>` | Source store given as a filesystem path. |
+| `--src-storename <n>` | Source store given as a registry name. |
+| `--target-path <p>` | Destination given as a filesystem path (creates a local store there). |
+| `--target-storename <n>` | Destination given as a registry name (a central store; defaults to the source project's basename). |
+
+Exactly one `--src-*` and one `--target-*` are required. The store folder is moved
+(carrying all its data) and the registry entry is added/updated/removed to match.
+
+### `taskmgr store link` / `taskmgr store unlink`
+
+Edit the registry without moving any files — for repair or manual setup.
+
+- `store link --path <project> --store <name>` adds (or updates) an entry mapping a
+  project path to an existing central store subfolder.
+- `store unlink --store <name>` (or `--path <project>`) removes an entry. It removes
+  only the mapping; it never deletes the store's data (hence `unlink`, not `remove`).
 
 ---
 
@@ -402,7 +479,12 @@ prints a structured error:
 ## 7. Command summary
 
 ```
-taskmgr init     [--prefix X]
+taskmgr init     [--prefix X] [--central [--store-name N]]
+taskmgr where                                # which store resolves here, and why
+taskmgr store    list
+taskmgr store    move  --src-path|--src-storename … --target-path|--target-storename …
+taskmgr store    link   --path <project> --store <name>
+taskmgr store    unlink --store <name> | --path <project>
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
@@ -426,5 +508,6 @@ taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)
 taskmgr guide                                # workflow how-to (start here)
 
-Global: --json, -C/--dir <path>
+Global: --json, -C/--dir <path>, --store-path <path> | --store-name <name>
+Env:    TASKMGR_DIR, TASKMGR_HOME, TASKMGR_LOG
 ```

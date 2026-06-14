@@ -3,8 +3,9 @@
 A high-level description of how task-manager is structured: the layers, the Go
 modules, the storage engine at the core, and the invariants that hold the design
 together. Detail lives in the companion specs:
-[storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md), and the
-[hooks](HOOK-SPEC.md) extension system.
+[storage](TASK-STORAGE-SPEC.md), [config & resolution](CONFIG-SPEC.md),
+[CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md), and the [hooks](HOOK-SPEC.md) extension
+system.
 
 ---
 
@@ -101,8 +102,9 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | One of two packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
-| `tasks/internal/exec` | process seam | The other `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
+| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
+| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment for store resolution (CONFIG-SPEC) — `UserHomeDir`, `Getenv`. `Environment` interface + OS impl + `Fake` (for hermetic resolution tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
 ### Pure-core files (no `os`, no `internal/vfs`)
@@ -114,26 +116,33 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
 | `validate.go` | Single-issue field invariants. |
 | `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
+| `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §5): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
 
-### Imperative-shell files (may import `internal/vfs`)
+### Imperative-shell files (may import `internal/vfs` / `internal/env`)
 
 | File | Responsibility |
 |---|---|
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §3–§4); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation/relocation. |
 
 ### Seams and os/syscall confinement
 
-`internal/vfs` (disk) and `internal/exec` (hook processes) are the **only** two
-locations for `os`/`syscall` calls. Every other package — pure core and
-imperative shell alike — reaches the filesystem via the `vfs.FS` interface and
-spawns hook processes via the `exec.Runner` interface, so both can be swapped for
-in-memory/scripted fakes in tests. This confinement is enforced at two levels:
+`internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
+(user environment) are the **only** three locations for `os`/`syscall` calls. Every
+other package — pure core and imperative shell alike — reaches the filesystem via
+the `vfs.FS` interface, spawns hook processes via the `exec.Runner` interface, and
+reads the environment via the `env.Environment` interface, so all three can be
+swapped for in-memory/scripted/fake implementations in tests. Store resolution
+(CONFIG-SPEC) therefore reads `HOME` and the environment **only** through the `env`
+seam — keeping it hermetically testable with no real `HOME` touched — which is why
+the engine, not a front end, can own resolution without sacrificing test isolation.
+This confinement is enforced at two levels:
 
-- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`
-  and `internal/exec`.
+- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`,
+  `internal/exec`, and `internal/env`.
 - **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
-  fails the build if any non-test file outside those two seams imports `os` or
+  fails the build if any non-test file outside those three seams imports `os` or
   `syscall`; `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
   `internal/vfs` import.
 
@@ -207,8 +216,11 @@ Deliberately out of scope, because they are unused weight:
   like "tests must pass before close" are not engine features; they live in the hook
   extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at
   transitions and keeps the core free of policy;
-- **multi-project workspaces** — a store tracks exactly one project, committed with
-  its repo; there is no enclosing workspace or `--project` selection;
+- **multi-project workspaces** — a store still tracks exactly **one** project; there
+  is no enclosing workspace that aggregates several projects, and no `--project`
+  selection. A store may live outside its repo under a per-user central root and be
+  found by path ([CONFIG-SPEC.md](CONFIG-SPEC.md)), but that resolves to a single
+  store — it is not a workspace;
 - a **REST / HTTP API** or other remote front end — a future possibility, not built;
   if added it would import the SDK and get its own spec.
 
