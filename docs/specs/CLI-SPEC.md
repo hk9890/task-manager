@@ -165,7 +165,7 @@ Create a new issue and allocate its ID.
 
 - **Output:** the new ID (`{"id"}` in JSON).
 
-### `taskmgr import [--file <path>] [--batch]`
+### `taskmgr import [--file <path>] [--batch] [--run-hooks]`
 
 Import a complete, externally-sourced issue **verbatim** — its final status
 (including `closed`), original `created`/`updated`/`closed` timestamps, labels,
@@ -179,6 +179,7 @@ validates the envelope against the data model and writes it.
 |---|---|---|
 | `--file <path>` | `-` | Read the import envelope from a file (`-` = stdin). |
 | `--batch` | off | Input is a stream of envelopes (NDJSON / concatenated JSON); each is imported independently (best-effort). |
+| `--run-hooks` | off | Run lifecycle hooks for each imported issue (gated as a `pre-create`/`post-create`; [HOOK-SPEC.md](HOOK-SPEC.md) §9). Default omits hooks so bulk loading does not fire a gate per issue. |
 
 The envelope is a JSON object (timestamps RFC3339):
 
@@ -358,6 +359,18 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.
 
+**Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
+their output alongside the normal result. On success the JSON carries optional
+`"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
+(post-hook failures, which never fail the write). A pre-hook **denial** exits non-zero and
+prints a structured error:
+
+```json
+{ "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
+  "issue_id": "dtt-0042", "exit": 1, "reason": "3 unit tests failing",
+  "hints": ["run `make fmt` before retrying"] }
+```
+
 ---
 
 ## 7. Command summary
@@ -366,7 +379,7 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 taskmgr init     [--prefix X]
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
-taskmgr import   [--file <path>] [--batch]   # JSON envelope on stdin/file
+taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
 taskmgr show     <id>
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]

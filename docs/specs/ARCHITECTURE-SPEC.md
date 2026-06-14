@@ -3,7 +3,8 @@
 A high-level description of how task-manager is structured: the layers, the Go
 modules, the storage engine at the core, and the invariants that hold the design
 together. Detail lives in the companion specs:
-[storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md).
+[storage](TASK-STORAGE-SPEC.md), [CLI](CLI-SPEC.md), [SDK](SDK-SPEC.md), and the
+[hooks](HOOK-SPEC.md) extension system.
 
 ---
 
@@ -100,7 +101,8 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | **The only package that calls `os`/`syscall`.** `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/vfs` | disk seam | One of two packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/exec` | process seam | The other `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
 ### Pure-core files (no `os`, no `internal/vfs`)
@@ -120,16 +122,19 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
 
-### vfs seam and os/syscall confinement
+### Seams and os/syscall confinement
 
-`internal/vfs` is the **sole** location for `os`/`syscall` calls. Every other
-package (pure core and imperative shell alike) calls filesystem operations via
-the `vfs.FS` interface. This confinement is enforced at two levels:
+`internal/vfs` (disk) and `internal/exec` (hook processes) are the **only** two
+locations for `os`/`syscall` calls. Every other package — pure core and
+imperative shell alike — reaches the filesystem via the `vfs.FS` interface and
+spawns hook processes via the `exec.Runner` interface, so both can be swapped for
+in-memory/scripted fakes in tests. This confinement is enforced at two levels:
 
-- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`.
+- **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`
+  and `internal/exec`.
 - **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
-  fails the build if any non-test, non-vfs file imports `os` or `syscall`;
-  `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
+  fails the build if any non-test file outside those two seams imports `os` or
+  `syscall`; `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
   `internal/vfs` import.
 
 ---
@@ -145,9 +150,13 @@ enforced:
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
-4. **Write atomically**: temp file + `fsync` + `rename` over the target (the
+4. **Run pre-hooks** for the transition ([HOOK-SPEC.md](HOOK-SPEC.md) §4): a gate that
+   does not allow aborts here — the lock is released and nothing is written.
+5. **Write atomically**: temp file + `fsync` + `rename` over the target (the
    append-only comment sidecar is the one exception — `O_APPEND` + `fsync`).
-5. **Release the lock.**
+6. **Release the lock.**
+7. **Run post-hooks** outside the lock ([HOOK-SPEC.md](HOOK-SPEC.md) §4): non-vetoing
+   notifications that cannot change the committed outcome.
 
 Reads take a fresh snapshot of the directory and never hold the lock.
 
@@ -194,7 +203,10 @@ Deliberately out of scope, because they are unused weight:
 - memories / notes-as-knowledge, "prime"-style context dumps;
 - external tracker integrations (Jira, Linear, GitHub);
 - a database or SQL backend; a sync engine or federation;
-- coordination gates, swarms, configurable status/type catalogs;
+- swarms, configurable status/type catalogs, and **policy baked into the core** — rules
+  like "tests must pass before close" are not engine features; they live in the hook
+  extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at
+  transitions and keeps the core free of policy;
 - **multi-project workspaces** — a store tracks exactly one project, committed with
   its repo; there is no enclosing workspace or `--project` selection;
 - a **REST / HTTP API** or other remote front end — a future possibility, not built;
@@ -214,3 +226,9 @@ The engine depends on essentially nothing beyond YAML encoding; the CLI adds a
 command framework. The guiding principle is subtractive: prefer the smallest design
 that does the job, keep every artifact human-readable, and centralize writes so
 correctness is enforced in exactly one place.
+
+A feature in the **core must earn its place**: if a behaviour can be expressed as a hook
+([HOOK-SPEC.md](HOOK-SPEC.md)) rather than engine code, it is a hook. The core carries only
+issues, dependencies, and ready-work; per-repository policy and reactions live in the
+extension system. That split is what lets the engine stay small while still supporting
+complex, project-specific workflows.

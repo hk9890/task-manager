@@ -21,7 +21,7 @@ func TestL3_CheckRefs_ClosedParentAccepted(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	parent, err := s.Create(tasks.CreateInput{Title: "parent epic"})
+	parent, err := unwrap(s.Create(tasks.CreateInput{Title: "parent epic"}))
 	if err != nil {
 		t.Fatalf("Create parent: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestL3_CheckRefs_ClosedParentAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	child, err := s2.Create(tasks.CreateInput{Title: "child of closed parent", Parent: parent.ID})
+	child, err := unwrap(s2.Create(tasks.CreateInput{Title: "child of closed parent", Parent: parent.ID}))
 	if err != nil {
 		t.Errorf("Create with closed parent must succeed on real disk, got: %v", err)
 		return
@@ -53,7 +53,7 @@ func TestL3_CheckRefs_ClosedBlockerAccepted(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestL3_CheckRefs_ClosedBlockerAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	dep, err := s2.Create(tasks.CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s2.Create(tasks.CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Errorf("Create with closed blocker must succeed on real disk, got: %v", err)
 		return
@@ -84,11 +84,11 @@ func TestL3_Ready_ClosedBlockerCountsAsResolved(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(tasks.CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
+	dep, err := unwrap(s.Create(tasks.CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -130,14 +130,14 @@ func TestL3_Detail_ResolvesClosedParentRef(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	parent, err := s.Create(tasks.CreateInput{Title: "closed parent"})
+	parent, err := unwrap(s.Create(tasks.CreateInput{Title: "closed parent"}))
 	if err != nil {
 		t.Fatalf("Create parent: %v", err)
 	}
 	if _, err := s.Close(parent.ID, "done"); err != nil {
 		t.Fatalf("Close parent: %v", err)
 	}
-	child, err := s.Create(tasks.CreateInput{Title: "child", Parent: parent.ID})
+	child, err := unwrap(s.Create(tasks.CreateInput{Title: "child", Parent: parent.ID}))
 	if err != nil {
 		t.Fatalf("Create child: %v", err)
 	}

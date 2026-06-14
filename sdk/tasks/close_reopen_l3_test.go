@@ -25,14 +25,14 @@ func TestL3_Close_MoveAndReload(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	iss, err := s.Create(tasks.CreateInput{Title: "lifecycle test"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "lifecycle test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	id := iss.ID
 
 	// Close it.
-	closed, err := s.Close(id, "all done")
+	closed, err := unwrap(s.Close(id, "all done"))
 	if err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestL3_Close_MoveAndReload(t *testing.T) {
 	}
 
 	// Reopen.
-	reopened, err := s2.Reopen(id)
+	reopened, err := unwrap(s2.Reopen(id))
 	if err != nil {
 		t.Fatalf("Reopen: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestL3_Close_MoveAndReload(t *testing.T) {
 
 	// After Reopen, Update must work.
 	newTitle := "updated after reopen"
-	out, err := s2.Update(id, tasks.UpdateInput{Title: &newTitle})
+	out, err := unwrap(s2.Update(id, tasks.UpdateInput{Title: &newTitle}))
 	if err != nil {
 		t.Fatalf("Update after Reopen: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestL3_Close_SidecarStaysInComments(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	iss, err := s.Create(tasks.CreateInput{Title: "sidecar stays"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "sidecar stays"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestL3_Close_CommentOnClosedIssue(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	iss, err := s.Create(tasks.CreateInput{Title: "post-close comment"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "post-close comment"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestL3_ImmutableInPlace_UpdateRejected(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	iss, err := s.Create(tasks.CreateInput{Title: "immutable"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "immutable"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

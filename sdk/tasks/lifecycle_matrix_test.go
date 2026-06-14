@@ -66,13 +66,13 @@ const (
 func prepareSubject(t *testing.T, s *tasks.Store, state lifecycleState) (subjectID, blockerID, commentID string) {
 	t.Helper()
 
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
 	blockerID = blocker.ID
 
-	subject, err := s.Create(tasks.CreateInput{Title: "subject"})
+	subject, err := unwrap(s.Create(tasks.CreateInput{Title: "subject"}))
 	if err != nil {
 		t.Fatalf("Create subject: %v", err)
 	}
@@ -690,12 +690,12 @@ func TestLifecycleMatrix(t *testing.T) {
 func TestLifecycleMatrix_WouldHaveCaughtC1(t *testing.T) {
 	s := setupLifecycleStore(t, "c1t")
 
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
 
-	subject, err := s.Create(tasks.CreateInput{Title: "subject"})
+	subject, err := unwrap(s.Create(tasks.CreateInput{Title: "subject"}))
 	if err != nil {
 		t.Fatalf("Create subject: %v", err)
 	}

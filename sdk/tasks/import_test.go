@@ -18,11 +18,11 @@ var (
 
 func TestImportOpenPreservesTimestamps(t *testing.T) {
 	s := newTestStore(t)
-	iss, err := s.Import(ImportInput{
+	iss, err := unwrap(s.Import(ImportInput{
 		Title: "an imported task", Type: TypeBug, Priority: ptr(1),
 		Status: StatusOpen, Created: tCreated, Updated: tUpdated,
 		Labels: []string{"beads:bd-1"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -43,10 +43,10 @@ func TestImportOpenPreservesTimestamps(t *testing.T) {
 
 func TestImportClosedLandsInClosedPartition(t *testing.T) {
 	s := newTestStore(t)
-	iss, err := s.Import(ImportInput{
+	iss, err := unwrap(s.Import(ImportInput{
 		Title: "old closed task", Status: StatusClosed,
 		Created: tCreated, Updated: tUpdated, Closed: tClosed, CloseReason: "fixed",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -69,9 +69,9 @@ func TestImportClosedLandsInClosedPartition(t *testing.T) {
 func TestImportClosedDefaultsClosedTimestamp(t *testing.T) {
 	s := newTestStore(t)
 	// No Closed provided → defaults to Updated so the closed invariant holds.
-	iss, err := s.Import(ImportInput{
+	iss, err := unwrap(s.Import(ImportInput{
 		Title: "closed no ts", Status: StatusClosed, Created: tCreated, Updated: tUpdated,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -83,13 +83,13 @@ func TestImportClosedDefaultsClosedTimestamp(t *testing.T) {
 
 func TestImportComments(t *testing.T) {
 	s := newTestStore(t)
-	iss, err := s.Import(ImportInput{
+	iss, err := unwrap(s.Import(ImportInput{
 		Title: "with comments", Status: StatusOpen, Created: tCreated,
 		Comments: []ImportComment{
 			{Author: "alice", Created: tComment, Body: "first note"},
 			{Author: "bob", Body: "second note"}, // Created zero → defaults to issue Created
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -110,18 +110,18 @@ func TestImportComments(t *testing.T) {
 
 func TestImportEdgesResolveInDependencyOrder(t *testing.T) {
 	s := newTestStore(t)
-	parent, err := s.Import(ImportInput{ID: "agt-epic1", Title: "epic", Type: TypeEpic, Status: StatusOpen})
+	parent, err := unwrap(s.Import(ImportInput{ID: "agt-epic1", Title: "epic", Type: TypeEpic, Status: StatusOpen}))
 	if err != nil {
 		t.Fatalf("import parent: %v", err)
 	}
-	blocker, err := s.Import(ImportInput{Title: "blocker", Status: StatusOpen})
+	blocker, err := unwrap(s.Import(ImportInput{Title: "blocker", Status: StatusOpen}))
 	if err != nil {
 		t.Fatalf("import blocker: %v", err)
 	}
-	child, err := s.Import(ImportInput{
+	child, err := unwrap(s.Import(ImportInput{
 		Title: "child", Status: StatusInProgress,
 		Parent: parent.ID, BlockedBy: []string{blocker.ID}, Related: []string{blocker.ID},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("import child: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestImportMissingRefRejected(t *testing.T) {
 
 func TestImportCallerSuppliedID(t *testing.T) {
 	s := newTestStore(t)
-	iss, err := s.Import(ImportInput{ID: "agt-keepme", Title: "x", Status: StatusOpen})
+	iss, err := unwrap(s.Import(ImportInput{ID: "agt-keepme", Title: "x", Status: StatusOpen}))
 	if err != nil || iss.ID != "agt-keepme" {
 		t.Fatalf("want id agt-keepme, got %q err=%v", iss.ID, err)
 	}

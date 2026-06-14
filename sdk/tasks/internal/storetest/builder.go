@@ -181,12 +181,12 @@ func (b *Builder) materialize(s *tasks.Store) {
 			Creator:  spec.creator,
 			Assignee: spec.assignee,
 		}
-		iss, err := s.Create(in)
+		res, err := s.Create(in)
 		if err != nil {
 			b.t.Fatalf("storetest: Create(%q): %v", spec.id, err)
 		}
-		if iss.ID != spec.id {
-			b.t.Fatalf("storetest: Issue(%q): got ID %q", spec.id, iss.ID)
+		if res.Issue.ID != spec.id {
+			b.t.Fatalf("storetest: Issue(%q): got ID %q", spec.id, res.Issue.ID)
 		}
 	}
 

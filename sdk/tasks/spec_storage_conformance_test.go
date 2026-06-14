@@ -370,7 +370,7 @@ func TestSpec_Storage_SidecarCreatedLazily(t *testing.T) {
 		return tick
 	}
 
-	iss, err := s.Create(CreateInput{Title: "no comment yet"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "no comment yet"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestSpec_Storage_SidecarPathUnchangedAfterClose(t *testing.T) {
 		return tick
 	}
 
-	iss, err := s.Create(CreateInput{Title: "to close"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "to close"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestSpec_Storage_ClosedLayout(t *testing.T) {
 		return tick
 	}
 
-	iss, err := s.Create(CreateInput{Title: "layout test"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "layout test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

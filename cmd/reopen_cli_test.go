@@ -29,11 +29,11 @@ func newTestStoreDirWithClosed(t *testing.T) (root, openID, closedID string) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	open, err := s.Create(tasks.CreateInput{Title: "open issue"})
+	open, err := unwrap(s.Create(tasks.CreateInput{Title: "open issue"}))
 	if err != nil {
 		t.Fatalf("Create open: %v", err)
 	}
-	closed, err := s.Create(tasks.CreateInput{Title: "closed issue"})
+	closed, err := unwrap(s.Create(tasks.CreateInput{Title: "closed issue"}))
 	if err != nil {
 		t.Fatalf("Create to-close: %v", err)
 	}

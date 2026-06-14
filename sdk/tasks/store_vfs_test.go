@@ -35,7 +35,7 @@ func TestOpenWithFS_RealOsFS(t *testing.T) {
 	s2.now = s.now
 
 	// Create an issue through the seam-routed store.
-	iss, err := s2.Create(CreateInput{Title: "seam test"})
+	iss, err := unwrap(s2.Create(CreateInput{Title: "seam test"}))
 	if err != nil {
 		t.Fatalf("Create via seam: %v", err)
 	}
@@ -63,11 +63,11 @@ func TestOpenWithFS_AllOps(t *testing.T) {
 	s2.cfg = s.cfg
 	s2.now = fixedClock()
 
-	a, err := s2.Create(CreateInput{Title: "a"})
+	a, err := unwrap(s2.Create(CreateInput{Title: "a"}))
 	if err != nil {
 		t.Fatalf("Create a: %v", err)
 	}
-	b, err := s2.Create(CreateInput{Title: "b"})
+	b, err := unwrap(s2.Create(CreateInput{Title: "b"}))
 	if err != nil {
 		t.Fatalf("Create b: %v", err)
 	}

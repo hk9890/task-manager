@@ -9,6 +9,8 @@ The authoritative contract lives in `docs/specs/`:
 - [CLI-SPEC.md](specs/CLI-SPEC.md) — the `taskmgr` command surface, options, and JSON output.
 - [QUERY-SPEC.md](specs/QUERY-SPEC.md) — the filter-expression language for selecting issues.
 - [SDK-SPEC.md](specs/SDK-SPEC.md) — the `sdk/tasks` public Go API.
+- [HOOK-SPEC.md](specs/HOOK-SPEC.md) — lifecycle-gate hooks: the per-repository extension
+  system for policy and reactions (pre-hooks gate a transition, post-hooks notify).
 
 ## Repository layout
 

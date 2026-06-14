@@ -47,6 +47,36 @@ type refDTO struct {
 	Priority int    `json:"priority"`
 }
 
+// mutationDTO is the --json shape of a successful gated mutation: the issue plus
+// any hook hints and post-hook warnings (HOOK-SPEC §6.2). The embedded issueDTO
+// keeps the issue fields at the top level, so the shape is backward-compatible
+// (hints/warnings appear only when present).
+type mutationDTO struct {
+	issueDTO
+	Hints    []string `json:"hints,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// createResultDTO is the --json shape of `create`: the new id plus any hook
+// hints/warnings.
+type createResultDTO struct {
+	ID       string   `json:"id"`
+	Hints    []string `json:"hints,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// hookDeniedDTO is the --json error printed when a pre-hook denies a transition
+// (HOOK-SPEC §6.2). "error" is always "hook_denied".
+type hookDeniedDTO struct {
+	Error   string   `json:"error"`
+	Event   string   `json:"event"`
+	Hook    string   `json:"hook"`
+	IssueID string   `json:"issue_id,omitempty"`
+	Exit    int      `json:"exit"`
+	Reason  string   `json:"reason"`
+	Hints   []string `json:"hints,omitempty"`
+}
+
 type commentDTO struct {
 	ID       string    `json:"id"`
 	Author   string    `json:"author,omitempty"`

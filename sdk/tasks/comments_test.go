@@ -434,7 +434,7 @@ func TestStoreAll_NeverOpensSidecar(t *testing.T) {
 	s, m := newCommentMemStore(t)
 
 	// Create an issue.
-	iss, err := s.Create(CreateInput{Title: "test issue"})
+	iss, err := unwrap(s.Create(CreateInput{Title: "test issue"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

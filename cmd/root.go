@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -32,10 +33,21 @@ concurrent writers.`,
 	SilenceErrors: true,
 }
 
+// silentError marks an error whose output the command already emitted to stdout
+// (e.g. a hook_denied JSON object); Execute then exits non-zero without printing
+// the usual "taskmgr: …" stderr line, so a --json consumer sees only the JSON.
+type silentError struct{ err error }
+
+func (e silentError) Error() string { return e.err.Error() }
+func (e silentError) Unwrap() error { return e.err }
+
 // Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
+		var se silentError
+		if !errors.As(err, &se) {
+			fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
+		}
 		os.Exit(1)
 	}
 }
@@ -49,7 +61,7 @@ func init() {
 
 // openStore locates and opens the project store, honouring the --dir flag.
 func openStore() (*tasks.Store, error) {
-	return tasks.Open(flagDir)
+	return tasks.Open(flagDir, logOption())
 }
 
 var versionCmd = &cobra.Command{

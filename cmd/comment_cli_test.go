@@ -83,7 +83,7 @@ func newTestStoreDir(t *testing.T) (string, string) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	iss, err := s.Create(tasks.CreateInput{Title: "cli comment test"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "cli comment test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

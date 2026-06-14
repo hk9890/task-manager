@@ -126,7 +126,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	iss, err := s.Create(tasks.CreateInput{Title: "creator present", Creator: "alice"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "creator present", Creator: "alice"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestL4_IssueDTO_CreatorOmittedWhenEmpty(t *testing.T) {
 	})
 	// Create with no creator (engine keeps it empty — the CLI normally fills $USER,
 	// but we bypass the CLI here to test the DTO omitempty path directly).
-	iss, err := s.Create(tasks.CreateInput{Title: "no creator"})
+	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "no creator"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -241,11 +241,11 @@ func TestL4_NestedDTO_CreatorInBlockedDTO(t *testing.T) {
 		tick = tick.Add(time.Second)
 		return tick
 	})
-	blocker, err := s.Create(tasks.CreateInput{Title: "blocker", Creator: "alice"})
+	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker", Creator: "alice"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(tasks.CreateInput{Title: "dependent", Creator: "bob"})
+	dep, err := unwrap(s.Create(tasks.CreateInput{Title: "dependent", Creator: "bob"}))
 	if err != nil {
 		t.Fatalf("Create dep: %v", err)
 	}

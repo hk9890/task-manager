@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -99,11 +100,11 @@ var updateCmd = &cobra.Command{
 			in.Parent = &updateFlags.parent
 		}
 
-		iss, err := s.Update(args[0], in)
+		res, err := s.Update(args[0], in)
 		if err != nil {
-			return err
+			return mutationError(err)
 		}
-		return reportMutation(iss, "Updated")
+		return reportResult(res, "Updated")
 	},
 }
 
@@ -118,11 +119,11 @@ var closeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		iss, err := s.Close(args[0], closeReason)
+		res, err := s.Close(args[0], closeReason)
 		if err != nil {
-			return err
+			return mutationError(err)
 		}
-		return reportMutation(iss, "Closed")
+		return reportResult(res, "Closed")
 	},
 }
 
@@ -138,11 +139,11 @@ hot directory.`,
 		if err != nil {
 			return err
 		}
-		iss, err := s.Reopen(args[0])
+		res, err := s.Reopen(args[0])
 		if err != nil {
-			return err
+			return mutationError(err)
 		}
-		return reportMutation(iss, "Reopened")
+		return reportResult(res, "Reopened")
 	},
 }
 
@@ -372,12 +373,51 @@ var commentRmCmd = &cobra.Command{
 }
 
 // reportMutation prints a uniform success line (or the JSON detail).
-func reportMutation(iss *tasks.Issue, verb string) error {
+// reportResult prints a successful gated mutation, surfacing hook hints and
+// post-hook warnings (HOOK-SPEC §6.2). With --json the issue carries "hints" and
+// "warnings"; in text mode they print as notes on stderr so stdout stays clean.
+func reportResult(res *tasks.MutationResult, verb string) error {
 	if flagJSON {
-		return printJSON(toIssueDTO(iss))
+		return printJSON(mutationDTO{
+			issueDTO: toIssueDTO(res.Issue),
+			Hints:    res.Hints,
+			Warnings: res.Warnings,
+		})
 	}
-	fmt.Printf("%s %s\n", verb, iss.ID)
+	fmt.Printf("%s %s\n", verb, res.Issue.ID)
+	printNotes(res.Hints, res.Warnings)
 	return nil
+}
+
+// printNotes writes hook hints and warnings to stderr as advisory notes.
+func printNotes(hints, warnings []string) {
+	for _, h := range hints {
+		fmt.Fprintln(os.Stderr, "hint: "+h)
+	}
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "warning: "+w)
+	}
+}
+
+// mutationError renders a mutation error. A pre-hook denial becomes a structured
+// hook_denied object on stdout in --json mode (HOOK-SPEC §6.2) and exits 1
+// without the duplicate stderr line; any other error propagates unchanged (the
+// root prints "taskmgr: …" and exits 1).
+func mutationError(err error) error {
+	var de *tasks.HookDeniedError
+	if errors.As(err, &de) && flagJSON {
+		_ = printJSON(hookDeniedDTO{
+			Error:   "hook_denied",
+			Event:   de.Event,
+			Hook:    de.Hook,
+			IssueID: de.IssueID,
+			Exit:    de.Exit,
+			Reason:  de.Reason,
+			Hints:   de.Hints,
+		})
+		return silentError{err}
+	}
+	return err
 }
 
 func init() {

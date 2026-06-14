@@ -57,7 +57,7 @@ func TestDeferredStaysInActivePartition(t *testing.T) {
 
 func TestImportDeferredStatusPassesThrough(t *testing.T) {
 	s := newTestStore(t)
-	iss, err := s.Import(ImportInput{Title: "imported deferred", Status: StatusDeferred, Created: tCreated})
+	iss, err := unwrap(s.Import(ImportInput{Title: "imported deferred", Status: StatusDeferred, Created: tCreated}))
 	if err != nil {
 		t.Fatalf("Import deferred: %v", err)
 	}

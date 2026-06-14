@@ -16,11 +16,11 @@ import (
 func TestAddDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -56,11 +56,11 @@ func TestAddDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 func TestRemoveDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -100,11 +100,11 @@ func TestRemoveDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 func TestDep_AfterReopen_Succeeds(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	blocker, err := s.Create(CreateInput{Title: "blocker"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "dependent"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "dependent"}))
 	if err != nil {
 		t.Fatalf("Create dependent: %v", err)
 	}
@@ -140,11 +140,11 @@ func TestDep_AfterReopen_Succeeds(t *testing.T) {
 func TestWriteIssue_DefenseInDepth_ClosedIssueNotResurrected(t *testing.T) {
 	s := newMemStoreForClose(t)
 
-	blocker, err := s.Create(CreateInput{Title: "b"})
+	blocker, err := unwrap(s.Create(CreateInput{Title: "b"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	dep, err := s.Create(CreateInput{Title: "d"})
+	dep, err := unwrap(s.Create(CreateInput{Title: "d"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
