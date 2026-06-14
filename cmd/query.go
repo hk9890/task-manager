@@ -121,6 +121,12 @@ var searchCmd = &cobra.Command{
 		case textExpr == "":
 			// Whitespace-only query: no text constraint; leave any -q as-is.
 		case searchFilter.query != "":
+			// -q is an opaque, freeform filter expression — it cannot be reconstructed
+			// as a typed Criteria, so string concatenation is the only option here.
+			// (This is NOT the "don't concatenate" case in SDK-SPEC §3: that rule is
+			// about structured facets, which DO go through Criteria.) Parenthesize the
+			// user's expression so any internal `||` is protected under the `&&`:
+			// `(<user -q>) && text ~ "a" && text ~ "b"`.
 			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
 		default:
 			searchFilter.query = textExpr
