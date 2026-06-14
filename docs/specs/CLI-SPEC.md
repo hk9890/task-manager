@@ -55,7 +55,8 @@ group with no subcommand prints its help and exits `0`).
 
 The store is located by walking up from `--dir` (or cwd) until a `.tasks`
 directory is found. Most commands fail with a "no store" error if none exists;
-`init` is the exception.
+`init` is the exception. The error is actionable rather than a dead end —
+`taskmgr: no .tasks directory found — run 'taskmgr init' to create one`.
 
 Agents can self-orient without external docs: `taskmgr guide` (§5) prints a
 workflow how-to, `taskmgr commands` (§5) prints the machine catalog, and every
