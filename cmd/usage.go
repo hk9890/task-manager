@@ -49,6 +49,13 @@ func installUsageErrors(root *cobra.Command) {
 		// that errors with a suggestion instead. The root is left alone: cobra already
 		// gives a concise "unknown command … Did you mean?" for top-level typos.
 		if c.HasParent() && c.HasAvailableSubCommands() && !c.Runnable() {
+			// SuggestionsFor reads SuggestionsMinimumDistance directly (default 0);
+			// cobra's own unknown-command path lazily defaults it to 2. Set it once
+			// here, where the dispatcher is installed, so requireSubcommand's
+			// near-miss suggestions match cobra's top-level behaviour.
+			if c.SuggestionsMinimumDistance <= 0 {
+				c.SuggestionsMinimumDistance = 2
+			}
 			c.RunE = requireSubcommand
 		}
 		for _, sub := range c.Commands() {
@@ -65,11 +72,8 @@ func requireSubcommand(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		return cmd.Help()
 	}
-	// SuggestionsFor reads SuggestionsMinimumDistance directly (default 0); cobra's
-	// unknown-command path lazily defaults it to 2. Match that so near-misses suggest.
-	if cmd.SuggestionsMinimumDistance <= 0 {
-		cmd.SuggestionsMinimumDistance = 2
-	}
+	// SuggestionsMinimumDistance was primed when this dispatcher was installed (see
+	// installUsageErrors), so SuggestionsFor returns near-misses here.
 	msg := fmt.Sprintf("unknown subcommand %q for %q", args[0], cmd.CommandPath())
 	if sugg := cmd.SuggestionsFor(args[0]); len(sugg) > 0 {
 		msg += "\n\nDid you mean this?\n\t" + strings.Join(sugg, "\n\t")
@@ -101,11 +105,33 @@ func displayName(cmd *cobra.Command) string {
 	return strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
 }
 
-// isRequiredFlagError reports whether err is cobra's "required flag(s) … not set",
-// which ValidateRequiredFlags returns outside the args-validator and FlagErrorFunc
-// hooks, so Execute classifies it as a usage error by message.
-func isRequiredFlagError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "required flag(s)")
+// missingRequiredFlags returns the "--name" of each required flag on cmd that was
+// not set. Cobra validates required flags after the args-validator and
+// FlagErrorFunc hooks and reports them as a plain error, so Execute detects the
+// case structurally — via the required annotation — rather than by matching
+// cobra's English message (which would silently degrade if the wording changed).
+// A non-empty result is unambiguous: cobra runs RunE only once required flags are
+// satisfied, so any unset required flag means the run failed on that validation,
+// not at runtime.
+func missingRequiredFlags(cmd *cobra.Command) []string {
+	if cmd == nil {
+		return nil
+	}
+	var missing []string
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if _, req := f.Annotations[cobra.BashCompOneRequiredFlag]; req && !f.Changed {
+			missing = append(missing, "--"+f.Name)
+		}
+	})
+	return missing
+}
+
+// requiredFlagsMsg renders the missing required flags as a misuse headline.
+func requiredFlagsMsg(missing []string) string {
+	if len(missing) == 1 {
+		return "missing required flag " + missing[0]
+	}
+	return "missing required flags " + strings.Join(missing, ", ")
 }
 
 // positionalPlaceholders splits a command's Use line into its required (<...>) and

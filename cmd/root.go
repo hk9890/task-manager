@@ -59,10 +59,15 @@ func Execute() {
 			renderUsageError(ue)
 		case errors.As(err, &se):
 			// Output already emitted to stdout (e.g. a hook_denied JSON object).
-		case isRequiredFlagError(err):
-			renderUsageError(&usageError{cmd: cmd, msg: err.Error()})
 		default:
-			fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
+			// Cobra reports missing required flags outside the args/flag hooks as a
+			// plain error; detect them structurally and render as misuse-help too,
+			// naming the flags. Anything else is a genuine runtime error: stay terse.
+			if missing := missingRequiredFlags(cmd); len(missing) > 0 {
+				renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)})
+			} else {
+				fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
+			}
 		}
 		os.Exit(1)
 	}

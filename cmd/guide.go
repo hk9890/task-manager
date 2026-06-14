@@ -9,16 +9,21 @@ import (
 // guideText is the canonical, binary-owned how-to for taskmgr. It is the prose
 // sibling of `commands` (the machine catalog): different jobs, both kept. Keep it
 // lean — the model, the everyday loop, the filter basics, and, above all, where to
-// find more. Because it ships in the binary it can never drift from the real CLI,
-// so a consuming skill collapses to "run `taskmgr guide` and follow it".
+// find more. Because it ships in the binary, a consuming skill collapses to "run
+// `taskmgr guide` and follow it".
+//
+// Unlike `commands` (derived from the live command tree, so it literally cannot
+// drift), this prose is hand-maintained. guide_test.go guards the model lists
+// (statuses, types) against the SDK so they cannot silently fall out of step; keep
+// the rest honest by hand when the CLI changes.
 //
 // Plain text on purpose (this is read in a terminal); no backticks so it can live
 // in a raw string literal.
 const guideText = `taskmgr — how to use it
 
-taskmgr is a file-based issue tracker. Each issue is a Markdown file under a
-.tasks/ directory, located by walking up from the current directory. -C <path>
-overrides the start directory.
+taskmgr is an issue tracker you drive entirely through this CLI — create issues,
+link them, find what is ready to work on, and record progress. It operates on the
+project you run it from; pass -C <path> to target a project elsewhere.
 
 ## The model
 
@@ -98,10 +103,6 @@ stderr prefixed "taskmgr:" and names the offending field and the allowed values.
   taskmgr commands          machine catalog of every command (YAML; --json for JSON)
   taskmgr <command> --help  one command's flags, usage, and an example
   taskmgr show <id>         everything known about a single issue
-
-Keep the tracker honest: when scope changes or direction shifts, update or close
-the affected issue immediately; file a follow-up rather than reopening finished
-work, so the closed record stays a faithful account of what happened.
 `
 
 var guideCmd = &cobra.Command{
@@ -110,9 +111,9 @@ var guideCmd = &cobra.Command{
 	Long: `Print a compact, workflow-shaped how-to for taskmgr: the issue model, the
 everyday command loop, the filter language in brief, and where to find more. It is
 the prose companion to "taskmgr commands" (the machine catalog) and is emitted by
-the binary, so it never drifts from the actual CLI.
+the binary, so it travels with the CLI.
 
-Plain Markdown to stdout; pass --json to wrap it as {"guide": "..."}.`,
+Plain text to stdout; pass --json to wrap it as {"guide": "..."}.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if flagJSON {

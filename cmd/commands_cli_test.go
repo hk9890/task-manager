@@ -109,6 +109,17 @@ func TestL4_Commands_YAMLCatalog(t *testing.T) {
 	if show, ok := byName["show"]; ok && !strings.Contains(show.Example, "<id>") {
 		t.Errorf("show example should include the <id> placeholder, got %q", show.Example)
 	}
+
+	// Group commands (dep/rel/comment) are invoked via a subcommand, so their
+	// synthesised example must point at <subcommand> rather than bottom out at the
+	// bare group name. This guards the structural group-detection in exampleFor,
+	// which the "taskmgr <name>" prefix check above does not: both "taskmgr dep"
+	// (the regression) and "taskmgr dep <subcommand>" (correct) satisfy that prefix.
+	for _, group := range []string{"dep", "rel", "comment"} {
+		if g, ok := byName[group]; ok && !strings.Contains(g.Example, "<subcommand>") {
+			t.Errorf("group %q example should point at a subcommand, got %q", group, g.Example)
+		}
+	}
 }
 
 func TestL4_Commands_JSON(t *testing.T) {
