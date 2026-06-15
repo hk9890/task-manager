@@ -35,6 +35,12 @@ var (
 	ErrAlreadyExists = errors.New("issue already exists")
 	ErrNoStore       = errors.New("no .tasks directory found")
 	ErrStoreExists   = errors.New(".tasks directory already exists")
+	// ErrStoreNotRegistered is returned by Resolve when an explicit StoreName
+	// override names a store with no registry entry (CONFIG-SPEC §4).
+	ErrStoreNotRegistered = errors.New("no central store registered under that name")
+	// ErrAmbiguousOverride is returned by Resolve when both a store-path and a
+	// store-name override are supplied (CONFIG-SPEC §4); they are mutually exclusive.
+	ErrAmbiguousOverride = errors.New("store-path and store-name overrides are mutually exclusive")
 	// ErrImmutable is returned when a caller attempts an in-place write to a
 	// closed issue (which lives in closed/ and is immutable per TASK-STORAGE-SPEC §5).
 	// Reopen is the only permitted mutation for a closed issue; comment appends
@@ -166,16 +172,22 @@ func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
 // returns an open Store. It fails if a data directory already exists. Options
 // (e.g. WithLogger) configure the store.
 func Init(root, prefix string, opts ...Option) (*Store, error) {
-	prefix = strings.TrimSpace(prefix)
-	if !prefixRe.MatchString(prefix) {
-		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
-	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
-	fs := vfs.NewOS()
-	dir := filepath.Join(absRoot, DataDirName)
+	return initData(absRoot, filepath.Join(absRoot, DataDirName), prefix, vfs.NewOS(), opts)
+}
+
+// initData creates a store whose data directory is dir, tracking project root,
+// with the given ID prefix, using fs. It fails (ErrStoreExists) if dir already
+// exists. It is the shared creation path for Init (local: dir = root/.tasks) and
+// InitCentral (central: dir = <central_root>/stores/<name>, root = project path).
+func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error) {
+	prefix = strings.TrimSpace(prefix)
+	if !prefixRe.MatchString(prefix) {
+		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
+	}
 	if _, err := fs.Stat(dir); err == nil {
 		return nil, ErrStoreExists
 	}
@@ -183,7 +195,7 @@ func Init(root, prefix string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: absRoot, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	s.applyOptions(opts)
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
@@ -192,8 +204,9 @@ func Init(root, prefix string, opts ...Option) (*Store, error) {
 }
 
 // Open locates the data directory by walking up from start (or the current
-// working directory if start is empty) and loads its config. Options (e.g.
-// WithLogger) configure the store.
+// working directory if start is empty) and loads its config. It performs only
+// local discovery — no global config or central registry; consumers that want
+// the central fallback call Resolve (CONFIG-SPEC §4). Options configure the store.
 func Open(start string, opts ...Option) (*Store, error) {
 	fs := vfs.NewOS()
 	if start == "" {
@@ -207,24 +220,49 @@ func Open(start string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	root, dir, found, err := findLocalStore(fs, abs)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrNoStore
+	}
+	return openData(root, dir, fs, opts)
+}
+
+// findLocalStore walks up from start (which must be absolute) looking for a
+// DataDirName directory. On success it returns the project root (the parent of
+// the data dir) and the data dir itself. found is false when the filesystem root
+// is reached without a match.
+func findLocalStore(fs vfs.FS, start string) (root, dir string, found bool, err error) {
+	abs := start
 	for {
-		dir := filepath.Join(abs, DataDirName)
-		if fi, err := fs.Stat(dir); err == nil && fi.IsDir() {
-			s := &Store{root: abs, dir: dir, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
-			s.applyOptions(opts)
-			cfg, err := s.readConfig()
-			if err != nil {
-				return nil, err
-			}
-			s.cfg = cfg
-			return s, nil
+		d := filepath.Join(abs, DataDirName)
+		if fi, statErr := fs.Stat(d); statErr == nil && fi.IsDir() {
+			return abs, d, true, nil
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
-			return nil, ErrNoStore
+			return "", "", false, nil
 		}
 		abs = parent
 	}
+}
+
+// openData opens an existing store whose data directory is dir, tracking project
+// root, using fs, and loads its config. root is reported by Root() and used as
+// the hook working directory — for a central store that is the tracked project
+// path, not the parent of dir. It is the shared open path for Open (local) and
+// Resolve (central / override).
+func openData(root, dir string, fs vfs.FS, opts []Option) (*Store, error) {
+	s := &Store{root: root, dir: dir, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s.applyOptions(opts)
+	cfg, err := s.readConfig()
+	if err != nil {
+		return nil, err
+	}
+	s.cfg = cfg
+	return s, nil
 }
 
 // Root returns the project root directory.

@@ -10,10 +10,11 @@ import (
 )
 
 // TestImportBoundary_OnlyVfsImportsOS verifies that no non-test Go file
-// outside the two seams — sdk/tasks/internal/vfs (the disk seam) and
-// sdk/tasks/internal/exec (the process seam) — imports the "os" or "syscall"
-// packages. This is the grep-guard for the single-writer / seam rule: os and
-// syscall are concentrated in vfs (filesystem) and exec (hook processes) only.
+// outside the three seams — sdk/tasks/internal/vfs (disk),
+// sdk/tasks/internal/exec (hook processes), and sdk/tasks/internal/env (user
+// environment, for store resolution) — imports the "os" or "syscall" packages.
+// This is the grep-guard for the single-writer / seam rule: os and syscall are
+// concentrated in those three seams only.
 func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 	// Locate the sdk/tasks root by walking up from the test binary's working
 	// directory. We search for the directory that contains store.go.
@@ -32,7 +33,7 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 		// permitted os/syscall (vfs = disk, exec = hook processes) and the
 		// storetest package (test-only support package; may use os like vfs).
 		if d.IsDir() {
-			if d.Name() == "vfs" || d.Name() == "exec" || d.Name() == "storetest" {
+			if d.Name() == "vfs" || d.Name() == "exec" || d.Name() == "env" || d.Name() == "storetest" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -81,6 +82,8 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 	imperativeShell := map[string]bool{
 		"store.go":    true,
 		"comments.go": true,
+		"config.go":   true, // global config loader (env/vfs seams)
+		"registry.go": true, // central registry + Resolve/Stores/InitCentral
 	}
 
 	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"

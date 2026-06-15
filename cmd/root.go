@@ -18,8 +18,10 @@ var (
 )
 
 var (
-	flagJSON bool
-	flagDir  string
+	flagJSON      bool
+	flagDir       string
+	flagStorePath string
+	flagStoreName string
 )
 
 var rootCmd = &cobra.Command{
@@ -76,15 +78,29 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit machine-readable JSON")
 	rootCmd.PersistentFlags().StringVarP(&flagDir, "dir", "C", "", "start directory for locating .tasks (default: current directory)")
+	rootCmd.PersistentFlags().StringVar(&flagStorePath, "store-path", "", "operate on the store at this exact path (overrides discovery)")
+	rootCmd.PersistentFlags().StringVar(&flagStoreName, "store-name", "", "operate on the central store with this registry name (also names the store on 'init --central')")
 
 	rootCmd.AddCommand(versionCmd)
 }
 
-// openStore locates and opens the project store, honouring the --dir flag. When
-// no store exists it turns the SDK's generic ErrNoStore into actionable CLI
-// guidance — wrapping with %w so errors.Is(err, tasks.ErrNoStore) still holds.
+// resolveOptions builds the SDK resolution request from the global flags
+// (CONFIG-SPEC §4). The same flags drive every command.
+func resolveOptions() tasks.ResolveOptions {
+	return tasks.ResolveOptions{
+		WorkDir:   flagDir,
+		StorePath: flagStorePath,
+		StoreName: flagStoreName,
+	}
+}
+
+// openStore resolves and opens the store for the current context, honouring the
+// --dir / --store-path / --store-name flags and the central registry
+// (CONFIG-SPEC §4). When no store resolves it turns the SDK's generic ErrNoStore
+// into actionable CLI guidance — wrapping with %w so errors.Is(err,
+// tasks.ErrNoStore) still holds.
 func openStore() (*tasks.Store, error) {
-	s, err := tasks.Open(flagDir, logOption())
+	s, _, err := tasks.Resolve(resolveOptions(), logOption())
 	if errors.Is(err, tasks.ErrNoStore) {
 		return nil, fmt.Errorf("%w — run 'taskmgr init' to create one", err)
 	}
