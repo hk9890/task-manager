@@ -17,7 +17,7 @@ without pulling in any CLI dependencies.
 ## 1. Opening a store
 
 ```go
-func Resolve(opts ResolveOptions) (*Store, ResolveInfo, error)   // the front-end entry point
+func Resolve(opts ResolveOptions, sopts ...Option) (*Store, ResolveInfo, error) // the front-end entry point
 func Open(start string, opts ...Option) (*Store, error)          // low-level: local walk-up only
 func Init(root, prefix string, opts ...Option) (*Store, error)   // create a local store
 func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, error) // create + register

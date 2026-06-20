@@ -139,3 +139,7 @@ func (osFS) Remove(name string) error {
 func (osFS) Getwd() (string, error) {
 	return os.Getwd()
 }
+
+func (osFS) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}

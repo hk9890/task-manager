@@ -53,6 +53,12 @@ type FS interface {
 
 	// Getwd returns the current working directory.
 	Getwd() (string, error)
+
+	// EvalSymlinks returns path with any symbolic links resolved. It requires
+	// the path to exist; a non-existent path returns an error so the caller can
+	// fall back to the lexical (cleaned) path. Used by store resolution to
+	// compare canonical project paths (CONFIG-SPEC §4).
+	EvalSymlinks(path string) (string, error)
 }
 
 // IsNotExist reports whether err represents a "file not found" condition,

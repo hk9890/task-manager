@@ -361,5 +361,22 @@ func (m *Mem) Getwd() (string, error) {
 	return "/", nil
 }
 
+// EvalSymlinks returns the cleaned path if it names an existing file or
+// directory. Mem has no symbolic links, so resolution is the identity (after
+// Clean). A non-existent path returns an os.ErrNotExist-wrapped error, matching
+// filepath.EvalSymlinks, so resolution callers fall back to the lexical path.
+func (m *Mem) EvalSymlinks(path string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clean := filepath.Clean(path)
+	if _, ok := m.files[clean]; ok {
+		return clean, nil
+	}
+	if m.dirs[clean] {
+		return clean, nil
+	}
+	return "", fmt.Errorf("%w: %s", os.ErrNotExist, path)
+}
+
 // compile-time check that Mem satisfies FS.
 var _ FS = (*Mem)(nil)
