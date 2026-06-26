@@ -129,7 +129,9 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 ### Seams and os/syscall confinement
 
 `internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
-(user environment) are the **only** three locations for `os`/`syscall` calls. Every
+(user environment) are the **only** three production locations for `os`/`syscall`
+calls. (The test-only `internal/storetest` fixture builder also touches `os` — like
+`vfs` — to materialize real-`TempDir` stores; it is exempt for the same reason.) Every
 other package — pure core and imperative shell alike — reaches the filesystem via
 the `vfs.FS` interface, spawns hook processes via the `exec.Runner` interface, and
 reads the environment via the `env.Environment` interface, so all three can be

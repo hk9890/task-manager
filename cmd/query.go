@@ -29,7 +29,7 @@ func addFilterFlags(cmd *cobra.Command, ff *filterFlags) {
 	// --all reads the cold partition (closed/) in addition to the hot set. When a
 	// closed-referencing -q expression is used, --all is not needed but harmless.
 	f.BoolVar(&ff.all, "all", false, "include closed issues (reads the cold partition)")
-	f.StringVar(&ff.sort, "sort", "", "sort by: id|priority|created|updated|closed (default: priority)")
+	f.StringVar(&ff.sort, "sort", "", "sort by: work|id|priority|created|updated|closed (default: work)")
 	f.BoolVar(&ff.reverse, "reverse", false, "reverse sort order")
 	f.IntVar(&ff.limit, "limit", 0, "maximum number of results (0 = all)")
 }

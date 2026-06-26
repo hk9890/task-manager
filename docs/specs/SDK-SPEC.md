@@ -590,6 +590,7 @@ Sentinel errors, testable with `errors.Is`:
 ```go
 var (
     ErrNotFound           // issue not found
+    ErrAlreadyExists      // a caller-supplied Create/Import ID is already in use
     ErrNoStore            // no store found (no local .tasks and no registry match)
     ErrStoreExists        // a store already exists at the create target
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
