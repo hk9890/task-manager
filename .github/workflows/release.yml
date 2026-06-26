@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'          # CLI release tags only — `sdk/*` module tags never trigger this
+  pull_request:
+    paths:                 # validate the release config on PRs that touch it (snapshot, no publish)
+      - '.goreleaser.yaml'
+      - '.github/workflows/release.yml'
+
+# Default every job to read-only. Only the publish job below elevates to write,
+# so the PR/snapshot path carries no write-capable token even while it builds PR
+# code (GitHub does not allow expressions in `permissions:`, hence two jobs).
+permissions:
+  contents: read
+
+jobs:
+  # Tag push -> real cross-platform build + (draft) GitHub release.
+  release:
+    name: GoReleaser (release)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the GitHub release and upload assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # GoReleaser needs full history + tags for the changelog
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pin the tag so the parallel `sdk/v*` tag on the same commit is never picked up.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+  # PR touching the release config -> snapshot build only (no publish, read-only
+  # token). Catches a broken .goreleaser.yaml before any tag is ever cut.
+  validate:
+    name: GoReleaser (snapshot)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser (snapshot)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --snapshot --clean
