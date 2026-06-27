@@ -1,0 +1,113 @@
+# GoReleaser — build the taskmgr CLI for every platform and publish a (draft)
+# GitHub release. Driven on a `v*` tag by .github/workflows/release.yml.
+#
+# Validate locally without publishing:
+#   goreleaser check
+#   goreleaser release --snapshot --clean
+#
+# Note: local dev uses a go.work workspace, but release builds (and downstream
+# `go install`) ignore go.work and resolve the SDK from its published
+# `sdk/vX.Y.Z` tag — so the CLI tag must be cut after that SDK tag exists
+# (see docs/RELEASING.md).
+version: 2
+
+project_name: taskmgr
+
+builds:
+  - id: taskmgr
+    main: .
+    binary: taskmgr
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      # Mirror the makefile: stamp cmd.{Version,Commit,Date}. {{ .Tag }} keeps the
+      # leading `v`, so `taskmgr version` prints `v0.6.0` exactly like the
+      # `git describe`-derived local build.
+      - -s -w
+      - -X github.com/hk9890/task-manager/cmd.Version={{ .Tag }}
+      - -X github.com/hk9890/task-manager/cmd.Commit={{ .ShortCommit }}
+      - -X github.com/hk9890/task-manager/cmd.Date={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: taskmgr
+    # e.g. taskmgr_v0.6.0_linux_amd64.tar.gz — matches the prior hand-built names.
+    name_template: "taskmgr_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_LICENSES
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+# Generate a CycloneDX SBOM (via syft) for each release archive.
+sboms:
+  - artifacts: archive
+
+# Keyless (Sigstore/OIDC) signature over checksums.txt — which in turn covers
+# every artifact. Produces checksums.txt.sig + checksums.txt.pem. Requires
+# `id-token: write` in the workflow and cosign on PATH (see release.yml).
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: "⚠️ Breaking changes"
+      regexp: '(?i)!:'
+      order: 0
+    - title: Features
+      regexp: '(?i)^feat'
+      order: 1
+    - title: Fixes
+      regexp: '(?i)^fix'
+      order: 2
+    - title: Docs
+      regexp: '(?i)^docs'
+      order: 3
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '(?i)^chore'
+      - '(?i)^test'
+      - '(?i)^ci'
+      - '(?i)merge pull request'
+      - '(?i)co-authored-by'
+
+release:
+  github:
+    owner: hk9890
+    name: task-manager
+  # Draft so a maintainer curates the notes before publishing (today's practice).
+  # Set `draft: false` to publish automatically the moment a tag is pushed.
+  draft: true
+  prerelease: auto
+  name_template: "task-manager {{ .Tag }}"

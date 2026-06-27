@@ -1,0 +1,150 @@
+[tools]
+go = "1.26.3"
+"go:gotest.tools/gotestsum" = "1.13.0"
+"go:golang.org/x/tools/cmd/goimports" = "0.30.0"
+"go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "2.1.6"
+"go:golang.org/x/vuln/cmd/govulncheck" = "1.1.4"
+
+[env]
+CGO_ENABLED = "0"
+
+# ---- build & run -----------------------------------------------------------
+
+[tasks.taskmgr]
+description = "Build taskmgr from the current source and run it in your shell's directory. Usage: mise run taskmgr -- <args>  (e.g. mise run taskmgr -- ready)"
+# Single line so mise appends your args to the taskmgr invocation (not the build step).
+run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/taskmgr"'
+
+[tasks.build]
+description = "Build the taskmgr binary into ./bin"
+run = """
+VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+PKG=github.com/hk9890/task-manager/cmd
+go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/taskmgr .
+"""
+
+# ---- format / vet / lint / tidy (both modules) -----------------------------
+
+[tasks.fmt]
+description = "Format Go source (goimports, both modules)"
+run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks main.go"
+
+[tasks."fmt:check"]
+description = "Fail if any file is not formatted"
+run = """
+OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks main.go)
+if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
+"""
+
+[tasks.vet]
+description = "go vet (both modules)"
+run = """
+go vet ./...
+(cd sdk && go vet ./...)
+"""
+
+[tasks."build:all"]
+description = "Compile every module (root, sdk, bench) — catches excluded-module rot"
+run = """
+go build ./...
+(cd sdk && go build ./...)
+(cd bench && go build ./...)
+"""
+
+[tasks."vet:all"]
+description = "go vet every module (root, sdk, bench)"
+run = """
+go vet ./...
+(cd sdk && go vet ./...)
+(cd bench && go vet ./...)
+"""
+
+[tasks."test:fuzz"]
+description = "Run fuzz seed corpora for the sdk module (no-ops cleanly if no fuzz targets exist yet)"
+dir = "sdk"
+run = "go test -run=Fuzz ./..."
+[tasks."test:fuzz".env]
+CGO_ENABLED = "1"
+
+[tasks.lint]
+description = "golangci-lint at pinned version (both modules)"
+run = """
+golangci-lint run --timeout=5m ./...
+(cd sdk && golangci-lint run --timeout=5m ./...)
+"""
+
+[tasks.tidy]
+description = "go mod tidy (both modules)"
+run = """
+go mod tidy
+(cd sdk && go mod tidy)
+"""
+
+[tasks.vuln]
+description = "govulncheck (both modules)"
+run = """
+govulncheck ./...
+(cd sdk && govulncheck ./...)
+"""
+
+# ---- tests -----------------------------------------------------------------
+# L1 (pure) + L2 (store on vfs.Mem) run by default; L3 (real temp dir) + L4 (CLI)
+# are gated behind the `integration` build tag. See docs/implementation/TESTING-STRATEGY.md.
+
+[tasks.test]
+description = "L1 pure + L2 store-on-Mem — fast, both modules"
+run = """
+gotestsum --format pkgname-and-test-fails -- -race ./...
+(cd sdk && gotestsum --format pkgname-and-test-fails -- -race ./...)
+"""
+[tasks.test.env]
+CGO_ENABLED = "1"
+
+[tasks."test:sdk"]
+description = "SDK module tests only (fast)"
+dir = "sdk"
+run = "gotestsum --format pkgname-and-test-fails -- -race ./..."
+[tasks."test:sdk".env]
+CGO_ENABLED = "1"
+
+[tasks."test:cli"]
+description = "CLI module tests only (fast)"
+run = "gotestsum --format pkgname-and-test-fails -- -race ./..."
+[tasks."test:cli".env]
+CGO_ENABLED = "1"
+
+[tasks."test:integration"]
+description = "L3 real temp dir + L4 CLI (integration build tag, both modules)"
+run = """
+gotestsum --format pkgname-and-test-fails -- -race -tags=integration ./...
+(cd sdk && gotestsum --format pkgname-and-test-fails -- -race -tags=integration ./...)
+"""
+[tasks."test:integration".env]
+CGO_ENABLED = "1"
+
+[tasks."test:all"]
+description = "All layers (L1-L4, both modules)"
+depends = ["test", "test:integration"]
+
+[tasks."test:coverage"]
+description = "All layers with a coverage threshold (COVERAGE_THRESHOLD, default 75)"
+run = """
+go test -race -tags=integration -coverprofile=coverage.out -covermode=atomic ./...
+COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+echo "Total coverage: ${COVERAGE}% (threshold: ${COVERAGE_THRESHOLD:-75}%)"
+if [ "${COVERAGE%.*}" -lt "${COVERAGE_THRESHOLD:-75}" ]; then echo "FAIL: below threshold"; exit 1; fi
+"""
+[tasks."test:coverage".env]
+CGO_ENABLED = "1"
+
+# ---- gates -----------------------------------------------------------------
+
+[tasks.quality]
+description = "Fast pre-commit gate: vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
+depends = ["vet:all", "build:all", "lint", "test", "test:fuzz"]
+
+[tasks."quality:full"]
+description = "Pre-handoff gate: vet + lint + all layers + build/vet all modules + fuzz seeds"
+depends = ["vet:all", "build:all", "lint", "test", "test:integration", "test:fuzz"]

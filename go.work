@@ -1,0 +1,14 @@
+// Local development workspace. This wires the CLI, SDK, and bench modules
+// together so `go build`/`go test` use the in-tree SDK without a `replace`
+// directive in go.mod.
+//
+// go.work is intentionally committed but only affects local development:
+// `go install <module>@<version>` and downstream consumers ignore it entirely,
+// and release builds resolve the SDK from its published `sdk/vX.Y.Z` tag.
+go 1.26
+
+use (
+	.
+	./sdk
+	./bench
+)

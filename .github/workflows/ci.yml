@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Least-privilege default token: build/test/lint only need read access.
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ── root module ───────────────────────────────────────────────────────
+
+      - name: fmt-check (root)
+        run: |
+          out="$(gofmt -l cmd sdk/tasks main.go)"
+          if [ -n "$out" ]; then
+            echo "unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet (root)
+        run: go vet ./...
+
+      # -race needs CGO; ubuntu-latest ships a C compiler. The race detector
+      # guards the single-writer locking invariant (see the flock test, which
+      # is integration-tagged) and any other concurrent paths.
+      - name: test (root)
+        run: CGO_ENABLED=1 go test -race ./...
+
+      - name: test integration (root)
+        run: CGO_ENABLED=1 go test -race -tags integration ./...
+
+      # ── sdk module ────────────────────────────────────────────────────────
+
+      - name: fmt-check (sdk)
+        working-directory: sdk
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: vet (sdk)
+        working-directory: sdk
+        run: go vet ./...
+
+      - name: test (sdk)
+        working-directory: sdk
+        run: CGO_ENABLED=1 go test -race ./...
+
+      - name: test integration (sdk)
+        working-directory: sdk
+        run: CGO_ENABLED=1 go test -race -tags integration ./...
+
+      # ── bench module (standalone; excluded from root/sdk build) ──────────
+
+      - name: build (bench)
+        working-directory: bench
+        run: go build ./...
+
+      - name: vet (bench)
+        working-directory: bench
+        run: go vet ./...
+
+      # ── fuzz seed corpora (no-ops if no fuzz targets exist yet) ──────────
+
+      - name: fuzz seeds (sdk)
+        working-directory: sdk
+        run: CGO_ENABLED=1 go test -run=Fuzz ./...
+
+      # ── binary ────────────────────────────────────────────────────────────
+
+      - name: build taskmgr
+        run: go build -o bin/taskmgr .
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up mise (pins go + golangci-lint 2.1.6)
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
+
+      - name: golangci-lint (both modules)
+        run: mise run lint

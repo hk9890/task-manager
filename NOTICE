@@ -1,0 +1,8 @@
+task-manager
+Copyright 2026 Hans Kohlreiter
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party software. The licenses and notices for those
+dependencies are collected in THIRD_PARTY_LICENSES, which is also bundled with
+each binary release archive.

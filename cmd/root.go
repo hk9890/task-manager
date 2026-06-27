@@ -1,0 +1,136 @@
+// Copyright 2026 Hans Kohlreiter
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package cmd
+
+import (
+	"errors"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
+)
+
+// Build info, overridable via -ldflags.
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
+var (
+	flagJSON      bool
+	flagDir       string
+	flagStorePath string
+	flagStoreName string
+)
+
+var rootCmd = &cobra.Command{
+	Use:   "taskmgr",
+	Short: "Task Manager — a file-based task tracker",
+	Long: `taskmgr is a lean, file-based task tracker. Each issue is a Markdown file
+with YAML frontmatter under a project's .tasks directory. taskmgr is the only
+thing that should write those files — it validates everything and serializes
+concurrent writers.
+
+Agents: run 'taskmgr guide' for a how-to, 'taskmgr commands' for the full catalog.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+}
+
+// silentError marks an error whose output the command already emitted to stdout
+// (e.g. a hook_denied JSON object); Execute then exits non-zero without printing
+// the usual "taskmgr: …" stderr line, so a --json consumer sees only the JSON.
+type silentError struct{ err error }
+
+func (e silentError) Error() string { return e.err.Error() }
+func (e silentError) Unwrap() error { return e.err }
+
+// Execute runs the root command.
+func Execute() {
+	installUsageErrors(rootCmd)
+	// ExecuteC returns the command that ran, so a required-flag failure (which cobra
+	// reports outside the args/flag hooks) can still be rendered as misuse-help.
+	cmd, err := rootCmd.ExecuteC()
+	if err != nil {
+		var ue *usageError
+		var se silentError
+		switch {
+		case errors.As(err, &ue):
+			// Misinvocation: render the compact help block (purpose, usage, example,
+			// flags/subcommands, --help pointer) instead of the bare one-liner.
+			renderUsageError(ue)
+		case errors.As(err, &se):
+			// Output already emitted to stdout (e.g. a hook_denied JSON object).
+		default:
+			// Cobra reports missing required flags outside the args/flag hooks as a
+			// plain error; detect them structurally and render as misuse-help too,
+			// naming the flags. Anything else is a genuine runtime error: stay terse.
+			if missing := missingRequiredFlags(cmd); len(missing) > 0 {
+				renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)})
+			} else {
+				fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
+			}
+		}
+		os.Exit(1)
+	}
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit machine-readable JSON")
+	rootCmd.PersistentFlags().StringVarP(&flagDir, "dir", "C", "", "start directory for locating .tasks (default: current directory)")
+	rootCmd.PersistentFlags().StringVar(&flagStorePath, "store-path", "", "operate on the store at this exact path (overrides discovery)")
+	rootCmd.PersistentFlags().StringVar(&flagStoreName, "store-name", "", "operate on the central store with this registry name (also names the store on 'init --central')")
+
+	rootCmd.AddCommand(versionCmd)
+}
+
+// resolveOptions builds the SDK resolution request from the global flags
+// (CONFIG-SPEC §4). The same flags drive every command.
+func resolveOptions() tasks.ResolveOptions {
+	return tasks.ResolveOptions{
+		WorkDir:   flagDir,
+		StorePath: flagStorePath,
+		StoreName: flagStoreName,
+	}
+}
+
+// openStore resolves and opens the store for the current context, honouring the
+// --dir / --store-path / --store-name flags and the central registry
+// (CONFIG-SPEC §4). When no store resolves it turns the SDK's generic ErrNoStore
+// into actionable CLI guidance — wrapping with %w so errors.Is(err,
+// tasks.ErrNoStore) still holds.
+func openStore() (*tasks.Store, error) {
+	s, _, err := tasks.Resolve(resolveOptions(), logOption())
+	if errors.Is(err, tasks.ErrNoStore) {
+		return nil, fmt.Errorf("%w — run 'taskmgr init' to create one", err)
+	}
+	return s, err
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if flagJSON {
+			return printJSON(map[string]string{"version": Version, "commit": Commit, "date": Date})
+		}
+		fmt.Printf("taskmgr %s (commit %s, built %s)\n", Version, Commit, Date)
+		return nil
+	},
+}
