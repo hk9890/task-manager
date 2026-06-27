@@ -17,12 +17,12 @@ all: build
 # Build the taskmgr binary into ./bin.
 build:
 	@echo "Building taskmgr $(VERSION)..."
-	@go build $(LDFLAGS) -o bin/taskmgr .
+	@go build $(LDFLAGS) -o bin/taskmgr ./cmd/taskmgr
 
 # Install taskmgr onto $PATH.
 install:
 	@echo "Installing taskmgr to $(INSTALL_BIN_DIR)..."
-	@go build $(LDFLAGS) -o $(INSTALL_BIN_DIR)/taskmgr .
+	@go build $(LDFLAGS) -o $(INSTALL_BIN_DIR)/taskmgr ./cmd/taskmgr
 
 # Run all tests (both modules).
 test: test-sdk test-cli

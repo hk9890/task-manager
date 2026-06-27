@@ -15,7 +15,7 @@ project_name: taskmgr
 
 builds:
   - id: taskmgr
-    main: .
+    main: ./cmd/taskmgr
     binary: taskmgr
     env:
       - CGO_ENABLED=0

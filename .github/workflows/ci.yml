@@ -91,7 +91,7 @@ jobs:
       # ── binary ────────────────────────────────────────────────────────────
 
       - name: build taskmgr
-        run: go build -o bin/taskmgr .
+        run: go build -o bin/taskmgr ./cmd/taskmgr
 
   lint:
     name: Lint

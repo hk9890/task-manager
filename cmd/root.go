@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 
@@ -32,6 +33,39 @@ var (
 	Commit  = "none"
 	Date    = "unknown"
 )
+
+// buildInfo returns the effective version/commit/date. The vars above are
+// stamped via -ldflags for `make` and GoReleaser builds; for a plain
+// `go install …@vX.Y.Z` (which sets no ldflags) it falls back to the module
+// version and VCS settings the Go toolchain embeds in the binary.
+func buildInfo() (version, commit, date string) {
+	version, commit, date = Version, Commit, Date
+	if version != "dev" {
+		return // already stamped via -ldflags
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		version = v
+	}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) > 7 {
+				commit = s.Value[:7]
+			} else if s.Value != "" {
+				commit = s.Value
+			}
+		case "vcs.time":
+			if s.Value != "" {
+				date = s.Value
+			}
+		}
+	}
+	return
+}
 
 var (
 	flagJSON      bool
@@ -127,10 +161,11 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		version, commit, date := buildInfo()
 		if flagJSON {
-			return printJSON(map[string]string{"version": Version, "commit": Commit, "date": Date})
+			return printJSON(map[string]string{"version": version, "commit": commit, "date": date})
 		}
-		fmt.Printf("taskmgr %s (commit %s, built %s)\n", Version, Commit, Date)
+		fmt.Printf("taskmgr %s (commit %s, built %s)\n", version, commit, date)
 		return nil
 	},
 }

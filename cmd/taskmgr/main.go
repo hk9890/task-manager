@@ -17,6 +17,10 @@
 // Command taskmgr is the command-line front-end for a file-based task tracker.
 // It is a thin wrapper over the tasks SDK, which owns all file access and
 // validation.
+//
+// Living in cmd/taskmgr (rather than the module root) means
+// `go install github.com/hk9890/task-manager/cmd/taskmgr@latest` produces a
+// binary named `taskmgr`, matching the release archives and the docs.
 package main
 
 import "github.com/hk9890/task-manager/cmd"
