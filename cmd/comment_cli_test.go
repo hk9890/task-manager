@@ -72,7 +72,7 @@ func taskmgrBin(t *testing.T) string {
 	_taskmgrBinOnce.Do(func() {
 		bin := filepath.Join(os.TempDir(), "taskmgr-test-bin")
 		out, err := exec.Command("go", "build", "-o", bin,
-			"github.com/hk9890/task-manager").CombinedOutput()
+			"github.com/hk9890/task-manager/cmd/taskmgr").CombinedOutput()
 		if err != nil {
 			_taskmgrBinErr = fmt.Errorf("go build failed: %v\n%s", err, out)
 			return
