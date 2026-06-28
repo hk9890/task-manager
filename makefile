@@ -40,10 +40,10 @@ vet:
 	@cd sdk && go vet ./...
 
 fmt:
-	@gofmt -w cmd sdk/tasks main.go
+	@gofmt -w cmd sdk/tasks
 
 fmt-check:
-	@out="$$(gofmt -l cmd sdk/tasks main.go)"; \
+	@out="$$(gofmt -l cmd sdk/tasks)"; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi
 
 tidy:
