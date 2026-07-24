@@ -283,10 +283,10 @@ open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
 [ "$open_children" -eq 0 ] || { echo "epic has $open_children open children" >&2; exit 1; }
 ```
 
-`closed` is a date field, not a boolean — the only bare booleans in the filter
-language are `ready` and `blocked` ([QUERY-SPEC](QUERY-SPEC.md) §2), so `!closed`
-is a parse error. The example also assumes `taskmgr` and `jq` are on the hook's
-inherited `PATH`; the engine guarantees only the §4 environment variables.
+`closed` is a date field: the only bare booleans are `ready` and `blocked`
+([QUERY-SPEC](QUERY-SPEC.md) §2), so `!closed` is a parse error. The snippet also
+assumes `taskmgr` and `jq` are on the hook's inherited `PATH` — the engine
+guarantees only the §4 environment variables.
 
 ### 5.2 Example — `pre-create` (structure validation)
 

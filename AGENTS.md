@@ -29,8 +29,8 @@ project is green** before handoff.
 
 ### Diagnosing behaviour (hooks, latency, errors)
 
-Load [docs/MONITORING.md](docs/MONITORING.md) — what is logged at which level, the
-`TASKMGR_LOG` levels, and how to capture and aggregate a run.
+Load [docs/MONITORING.md](docs/MONITORING.md) — what is logged at which level, and
+how to capture and aggregate a run.
 
 ### Change, commit & release workflow
 
@@ -41,4 +41,4 @@ artifacts, see [docs/RELEASING.md](docs/RELEASING.md).
 ### Contributing (external)
 
 [CONTRIBUTING.md](CONTRIBUTING.md) — prerequisites, the build/test gate, and PR
-conventions for contributors outside this routing table.
+conventions.

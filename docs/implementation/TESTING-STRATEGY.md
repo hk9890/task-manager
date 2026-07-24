@@ -5,8 +5,8 @@ Four layers, split by *what they touch*. The seam that makes the split possible 
 logic needs no disk, the shell is tested on an in-memory FS, and a real temp dir is
 the source of truth for durability.
 
-The command surface and the pre-commit / pre-handoff gates are owned by
-[docs/TESTING.md](../TESTING.md); this file owns the layer model and the fixtures.
+Command surface and gates: [docs/TESTING.md](../TESTING.md). This file owns the
+layer model and the fixtures.
 
 ## Layers
 
@@ -67,16 +67,14 @@ store := st.Mem()        // L2: in-memory, instant
 store := st.TempDir(t)   // L3: materialized on real osFS
 ```
 
-`storetest` is an internal package, so only tests inside the `sdk` module can
-import it. L4 CLI tests in `cmd/` drive the public `Store` API or the built binary
-instead.
+`storetest` is internal, so only `sdk`-module tests can import it; L4 tests in
+`cmd/` use the public `Store` API or the built binary.
 
 ## Conventions
 
 - Tests sit next to the code (`*_test.go`). Never hand-roll a real `.tasks/`.
-- Deterministic time only; never assert the wall clock. Inside package `tasks`
-  override the unexported `Store.now`; from `cmd/` and external consumers call
-  `Store.SetNow`.
+- Deterministic time only; never assert the wall clock. `Store.now` inside package
+  `tasks`, `Store.SetNow` from `cmd/` and external consumers.
 - Assert sentinels with `errors.Is`; field failures are `*ValidationError` (`Field`);
   query parse failures are `*ParseError` (`Pos`).
 - **TDD:** with the harness in place, write the layer-appropriate failing test

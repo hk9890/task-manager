@@ -207,9 +207,8 @@ type Hook struct {
 }
 ```
 
-`HookTimeout` and `Hooks` are parsed and validated lazily on the first write, not
-on read, so a malformed value never breaks queries. Event names, gate semantics,
-and the timeout rules are specified in [HOOK-SPEC](HOOK-SPEC.md) §3.1–§3.4.
+`HookTimeout` and `Hooks` are validated lazily on the first write, not on read, so
+a malformed value never breaks queries. Semantics: [HOOK-SPEC](HOOK-SPEC.md) §3.
 
 ---
 
@@ -621,8 +620,8 @@ found, `ErrStoreNotRegistered` when an explicit `StoreName` has no entry, and
 is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
 `ErrAlreadyExists` is returned by `Create` and `Import` when the caller supplies an
-explicit `ID` that the store already holds. It cannot occur for an allocated ID:
-those are retried against the existing set.
+explicit `ID` the store already holds; allocated IDs retry against the existing set
+and cannot hit it.
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`,
 `RemoveDep`, `AddRelated`, and `RemoveRelated` when the target issue lives in

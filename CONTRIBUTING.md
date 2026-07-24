@@ -18,25 +18,20 @@ enable it.
 ## Prerequisites
 
 - **Go 1.26+** (pinned in `go.mod`).
-- Optionally [`mise`](https://mise.jdx.dev): `mise install` provisions the exact
-  toolchain CI uses, including golangci-lint 2.1.6. Without it you can build and
-  test, but you cannot reproduce the lint job locally.
+- Optionally [`mise`](https://mise.jdx.dev): `mise install` provisions the toolchain
+  CI uses, including golangci-lint 2.1.6. Without it you cannot reproduce the lint
+  job locally.
 
 ## Build & test (the green gate)
-
-Every change must keep the whole project green. The gate, and what it does and
-does not cover, is documented in [docs/TESTING.md](docs/TESTING.md) — that file
-owns it. The short version:
 
 ```bash
 mise run build         # -> ./bin/taskmgr  (or: make build)
 mise run quality:full  # vet + lint + every test layer + build/vet all modules
 ```
 
-Run `mise run quality:full` before pushing. If you are not using mise,
-`make fmt vet test` covers formatting, vet, and the fast L1/L2 layers only — it
-runs no linter and no integration tests, so CI will check strictly more than you
-did.
+Run `quality:full` before pushing. The `make fmt vet test` fallback covers only
+fmt, vet, and L1/L2 — no linter, no integration tests — so CI checks strictly more.
+Details: [docs/TESTING.md](docs/TESTING.md), which owns the gate.
 
 ## Where changes go
 

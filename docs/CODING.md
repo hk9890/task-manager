@@ -10,13 +10,13 @@ logging/observability design, see [MONITORING.md](MONITORING.md).
 
 ```bash
 mise run build             # -> ./bin/taskmgr
-mise run fmt               # one task per invocation: mise appends trailing
-mise run vet               # words as *arguments* to the first task, so
-mise run lint              # `mise run fmt vet lint` runs fmt with two bad paths
+mise run fmt               # one task per invocation — mise passes trailing
+mise run vet               # words as arguments, not as further tasks
+mise run lint
 mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
 mise run test:integration  # L3 real temp dir + L4 CLI
 mise run quality           # vet + lint + test  (pre-commit gate)
-mise run quality:full      # the above plus L3/L4  (pre-handoff gate)
+mise run quality:full      # + L3/L4            (pre-handoff gate)
 ```
 
 ## Single-writer rule
@@ -25,9 +25,8 @@ Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `
 and every consumer go through the `Store` API. **Within `sdk/tasks`, only the three
 seams `internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
 (user environment — CONFIG-SPEC) may import `os`/`syscall`;** the pure core imports
-none of them. `sdk/tasks/importboundary_test.go` enforces this mechanically. The
-rule is scoped to the SDK module: `cmd/` is the process boundary and reads `os`
-directly for args, env, and exit codes.
+none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-only:
+`cmd/` is the process boundary and reads `os` directly.
 
 ## Where changes go
 
@@ -66,12 +65,8 @@ seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bu
 ## Modules
 
 Three modules: root (the CLI), `sdk/` (minimal-dep — only `yaml.v3`), and `bench/`.
-The committed `go.work` (`use . ./sdk ./bench`) is what makes local builds and tests
-resolve the in-tree SDK — the root `go.mod` has no `replace` and instead pins the
-published `sdk vX.Y.Z` for consumers, who ignore `go.work` entirely. `bench/` is
-excluded from `go build ./...` and `make test`, but it *is* a workspace member built
-and vetted by `build:all`/`vet:all`, so `mise run quality` fails on a bench compile
-error. Run `mise run tidy` after changing imports.
-
-See [ARCHITECTURE-SPEC §5](specs/ARCHITECTURE-SPEC.md) for the authoritative module
-and seam description.
+The committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has
+no `replace` and pins the published `sdk vX.Y.Z` for consumers. `bench/` is outside
+`go build ./...` and `make test` but is built and vetted by `mise run quality`.
+Run `mise run tidy` after changing imports. Authoritative:
+[ARCHITECTURE-SPEC §4](specs/ARCHITECTURE-SPEC.md).

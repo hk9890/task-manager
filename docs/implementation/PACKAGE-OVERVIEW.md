@@ -3,10 +3,9 @@
 A one-screen orientation map of the SDK module (`sdk/tasks` + its internal
 packages) and the CLI module (`cmd`).
 
-**This file owns nothing.** The authoritative package table, the pure-core /
-imperative-shell file split, and the `os`/`syscall` seam rule all live in
-[ARCHITECTURE-SPEC §5](../specs/ARCHITECTURE-SPEC.md); read it before changing
-package structure. Test layers: [TESTING-STRATEGY.md](TESTING-STRATEGY.md).
+**This file owns nothing.** The package table, the pure-core/shell split, and the
+seam rule are normative in [ARCHITECTURE-SPEC §5](../specs/ARCHITECTURE-SPEC.md).
+Test layers: [TESTING-STRATEGY.md](TESTING-STRATEGY.md).
 
 ## Layout
 
@@ -36,10 +35,9 @@ bench/                      separate module; excluded from go build ./... and ma
   import. Compiles an expression to a `Predicate` over a `Row` interface and
   returns `*ParseError`. `tasks` adapts `*Issue`→`Row` and re-exports
   `ParseError` (`type ParseError = query.ParseError`).
-- **`internal/vfs` · `internal/exec` · `internal/env`** — the three seams, and the
-  only packages in the SDK that call `os`/`syscall`. Disk, hook processes, and the
-  user environment respectively; each has a real implementation and a
-  test double. Details and the guard tests: ARCHITECTURE-SPEC §5.
+- **`internal/vfs` · `internal/exec` · `internal/env`** — the three seams (disk,
+  hook processes, user environment) and the only SDK packages that call
+  `os`/`syscall`. Each has a real implementation and a test double.
 - **`internal/storetest`** — builds a populated store from a declarative spec into
   *either* `vfs.Mem` or a real `t.TempDir()`. A normal (non-`_test.go`) package so
   any package's tests can import it; because only test files import it, it never
@@ -49,8 +47,8 @@ bench/                      separate module; excluded from go build ./... and ma
 ## Rules (load-bearing)
 
 1. **Seam confinement** — within `sdk/tasks`, only `internal/vfs`, `internal/exec`,
-   and `internal/env` import `os`/`syscall`. Stated normatively in
-   ARCHITECTURE-SPEC §5 and enforced by `sdk/tasks/importboundary_test.go`.
+   and `internal/env` import `os`/`syscall`. Enforced by
+   `sdk/tasks/importboundary_test.go`.
 2. **The pure core imports neither `os` nor `vfs`** — `query`, `frontmatter`,
    `validate`, `ids`, the `ready`/`blocked` graph, and comment `resolve` take
    in-memory inputs and return values/errors (so they unit-test at L1).

@@ -27,8 +27,8 @@ jobs:
 
       # ── root module ───────────────────────────────────────────────────────
 
-      # 2>&1 plus the exit-status check keep a failing gofmt (vanished path,
-      # parse error) from passing the step by listing no files.
+      # 2>&1 + the status check stop a failing gofmt from passing the step by
+      # simply listing no files.
       - name: fmt-check (root)
         run: |
           if ! out="$(gofmt -l cmd sdk/tasks 2>&1)"; then

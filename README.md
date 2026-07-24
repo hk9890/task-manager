@@ -47,8 +47,8 @@ taskmgr close <id> --reason "done"
 taskmgr ready                              # the dependent is now ready
 ```
 
-IDs are opaque random tokens (`proj-3k9f2x`), never sequential — `create` prints
-the allocated ID, so capture it rather than guessing:
+IDs are opaque random tokens (`proj-3k9f2x`), never sequential — capture the one
+`create` prints rather than guessing:
 
 ```bash
 id=$(taskmgr create --title "First task" --json | jq -r .id)

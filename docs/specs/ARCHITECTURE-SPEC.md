@@ -86,18 +86,15 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
   `github.com/hk9890/task-manager/sdk/tasks` without inheriting the CLI's
   dependencies.
 - **Module wiring.** The root `go.mod` carries **no `replace`**: it requires the
-  published `github.com/hk9890/task-manager/sdk vX.Y.Z`, so downstream consumers and
-  release builds resolve the SDK from its `sdk/vX.Y.Z` tag. The committed `go.work`
-  (`use . ./sdk ./bench`) is what makes *local* builds and tests use the in-tree
-  copy; `go.work` is ignored by `go install <module>@<version>` and by consumers.
-  Releases therefore require the version pin to be bumped, not a directive removed.
-- **`bench`** is a standalone module — the one place a `replace` is used
-  (`bench/go.mod`) — holding a scaling harness. It is excluded from
-  `go build ./...` and the default test suite, but as a workspace member it is
-  compiled and vetted by the `build:all`/`vet:all` tasks in the quality gate.
+  published `…/sdk vX.Y.Z`, which consumers and release builds resolve from the
+  `sdk/vX.Y.Z` tag. The committed `go.work` (`use . ./sdk ./bench`) points *local*
+  builds at the in-tree copy and is ignored by `go install <module>@<version>`.
+  A release therefore bumps the pin; it never removes a directive.
+- **`bench`** is a standalone scaling harness and the one place a `replace` is used
+  (`bench/go.mod`). Excluded from `go build ./...` and the default test suite, but
+  as a workspace member it is compiled and vetted by `build:all`/`vet:all`.
 - **`main` is at `cmd/taskmgr/`**, not the module root, so
-  `go install github.com/hk9890/task-manager/cmd/taskmgr@latest` yields a binary
-  named `taskmgr`.
+  `go install …/cmd/taskmgr@latest` yields a binary named `taskmgr`.
 
 ---
 
@@ -119,10 +116,9 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 
 ### Imperative-shell files (may import `internal/vfs` / `internal/env`)
 
-The shell is an **exhaustive, closed set of four files**. Every other non-test file
-in `sdk/tasks` is pure core by definition — that is the rule
-`TestImportBoundary_PureCoreNoVfs` enforces, so a new file is pure core unless it is
-added to the guard's `imperativeShell` map in the same change.
+A **closed set of four files**; every other non-test file in `sdk/tasks` is pure core
+by definition. `TestImportBoundary_PureCoreNoVfs` enforces this, so a new file is
+pure core unless it is added to the guard's `imperativeShell` map.
 
 | File | Responsibility |
 |---|---|
@@ -132,9 +128,8 @@ added to the guard's `imperativeShell` map in the same change.
 
 ### Pure-core files (no `internal/vfs`)
 
-The complement of the table above. None of these import `os` or `internal/vfs`;
-`hookrun.go` and `log.go` are the two permitted to reach the `internal/exec` seam,
-which is what lets a pure-core file spawn a hook without touching disk.
+The complement of the table above — no `os`, no `internal/vfs`. `hookrun.go` and
+`log.go` are the two permitted to reach the `internal/exec` seam.
 
 | File | Responsibility |
 |---|---|
@@ -144,10 +139,10 @@ which is what lets a pure-core file spawn a hook without touching disk.
 | `validate.go` | Single-issue field invariants. |
 | `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
-| `mutation.go` | `MutationResult`; the gated-write sequence shared by every mutation — validate + index (§6 step 3), run pre-hooks around the caller's write (step 4), collect hints/warnings after post-hooks (step 7). |
-| `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and update-insensitive equality. |
-| `import.go` | The `Import` primitive: a validated direct write of a complete externally-sourced issue end-state (caller supplies status and timestamps, unlike `Create`). |
-| `query.go` / `criteria.go` / `search.go` | The query surface: `compileExpr` plus the `*Issue`→`query.Row` adapter, the structured `Criteria` builder, and `SearchExpr` free-text→expression — all three produce or evaluate QUERY-SPEC expressions. |
+| `mutation.go` | `MutationResult`; the gated-write sequence every mutation shares — validate+index (§6 step 3), pre-hooks around the write (step 4), hints/warnings after post-hooks (step 7). |
+| `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and equality. |
+| `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
+| `query.go` / `criteria.go` / `search.go` | The query surface: `compileExpr` + the `*Issue`→`query.Row` adapter, the `Criteria` builder, and `SearchExpr` free-text→expression. |
 | `hooks.go` | Hook config types (`Hook`) and their validation (HOOK-SPEC §3). |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |

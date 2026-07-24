@@ -54,9 +54,8 @@ For the CLI:
 
 This is environment-controlled and needs no entry in the store's `config.yaml`.
 
-**SDK embedders choose their own format and sink.** `tasks.WithLogger` takes any
-`*slog.Logger`, so a JSON handler, a file, or a network sink is a caller decision —
-the engine only emits records:
+SDK embedders pick their own format and sink — `tasks.WithLogger` takes any
+`*slog.Logger`:
 
 ```go
 h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
@@ -65,11 +64,10 @@ store, err := tasks.Open("", tasks.WithLogger(slog.New(h)))
 
 ## Capturing and aggregating
 
-Logs are the only measurement mechanism, so "measuring" is capturing stderr and
-aggregating the fields in the table above:
+Measuring means capturing stderr and aggregating the fields above:
 
 ```bash
-# Capture a debug-level run, keeping stdout (--json) clean and separate.
+# Capture a debug-level run; stdout (--json) stays clean.
 TASKMGR_LOG=debug taskmgr close <id> --reason done 2> run.log
 
 # Which hooks are holding the write lock, slowest first?

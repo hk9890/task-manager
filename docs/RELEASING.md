@@ -12,11 +12,10 @@ tag — there is nothing to build).
 - `taskmgr version` prints the build metadata stamped via `-ldflags` into
   `cmd.Version` / `Commit` / `Date`. GoReleaser stamps these from the tag (see
   `.goreleaser.yaml`); a local `make build` / `mise run build` stamps them from
-  `git describe --always`, so an untagged build in a git checkout reports the short
-  commit SHA. `dev` survives only when git is unavailable.
-- A build with **no** `-ldflags` at all — notably
-  `go install …/cmd/taskmgr@vX.Y.Z` — falls back to `debug.ReadBuildInfo`, reporting
-  the module version and the embedded `vcs.revision` (`cmd/root.go`).
+  `git describe --always`, so an untagged checkout reports the short SHA — `dev`
+  only when git is unavailable.
+- With no `-ldflags` at all (`go install …/cmd/taskmgr@vX.Y.Z`), `cmd/root.go`
+  falls back to `debug.ReadBuildInfo` for the module version and `vcs.revision`.
 - The SDK is a **separate Go module** (`sdk/`). Go consumers pin it with a
   module-path tag, `sdk/vX.Y.Z` (`go get …/sdk@vX.Y.Z`). Keep it in step with the
   CLI tag.
@@ -66,10 +65,9 @@ on a clean, up-to-date tree.
    GOWORK=off go mod tidy
    ```
 
-   The pin is a normal code change, so [CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)
-   applies unchanged: commit it on a branch and land it through a pull request —
-   **not** directly on `main`. The tags in this step and the next are cut on the
-   merged `main` commit.
+   The pin is an ordinary code change: land it via PR, never directly on `main`
+   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). Both tags are cut on the merged
+   `main` commit.
 
 5. Tag the CLI on the commit that pins the SDK and push it — this starts the
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
@@ -100,16 +98,14 @@ goreleaser check                                          # validate .goreleaser
 goreleaser release --snapshot --clean --skip=sign,sbom    # build every target into ./dist (no publish)
 ```
 
-`--skip=sign,sbom` matches what `release.yml` passes on the snapshot path: the
-signing and SBOM steps need `cosign` and `syft` on `PATH`, which the snapshot
-validation deliberately does not install. Drop the flag only if you have both
-installed and want to exercise the full pipeline.
+`--skip=sign,sbom` matches `release.yml`'s snapshot path: those steps need `cosign`
+and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
+if you have both.
 
 ## Verifying
 
-After the release publishes, the archives, `checksums.txt`, the per-archive SBOMs,
-and `checksums.txt.sig` / `checksums.txt.pem` are attached to the GitHub release.
-From a downloaded set of artifacts:
+The release carries the archives, `checksums.txt`, per-archive SBOMs, and
+`checksums.txt.sig` / `.pem`. From a downloaded set:
 
 ```bash
 # 1. Contents match the manifest

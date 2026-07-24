@@ -18,8 +18,8 @@ run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr ./cmd/taskmgr && cd "$
 [tasks.build]
 description = "Build the taskmgr binary into ./bin"
 run = """
-# Match the makefile: restrict `git describe` to the `v*` CLI tags so the
-# parallel `sdk/*` tags on the same commit cannot stamp the binary "sdk/vX.Y.Z".
+# Restrict to `v*` CLI tags (as the makefile does) so the parallel `sdk/*` tags
+# on the same commit cannot stamp the binary "sdk/vX.Y.Z".
 VERSION=$(git describe --tags --match "v[0-9]*" --exclude "sdk/*" --always --dirty 2>/dev/null || echo dev)
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -36,8 +36,8 @@ run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks"
 [tasks."fmt:check"]
 description = "Fail if any file is not formatted"
 run = """
-# 2>&1 plus the exit-status check keep a failing goimports (vanished path, parse
-# error) from reporting success by simply listing no files.
+# 2>&1 + the status check stop a failing goimports from reporting success by
+# simply listing no files.
 OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks 2>&1) || { echo "goimports failed:"; echo "$OUT"; exit 1; }
 if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
 """
