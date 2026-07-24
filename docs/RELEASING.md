@@ -11,8 +11,12 @@ tag — there is nothing to build).
 - Semantic version tags: `vX.Y.Z`.
 - `taskmgr version` prints the build metadata stamped via `-ldflags` into
   `cmd.Version` / `Commit` / `Date`. GoReleaser stamps these from the tag (see
-  `.goreleaser.yaml`); a local `make build` stamps them from `git describe`.
-  Untagged local builds report `dev`.
+  `.goreleaser.yaml`); a local `make build` / `mise run build` stamps them from
+  `git describe --always`, so an untagged build in a git checkout reports the short
+  commit SHA. `dev` survives only when git is unavailable.
+- A build with **no** `-ldflags` at all — notably
+  `go install …/cmd/taskmgr@vX.Y.Z` — falls back to `debug.ReadBuildInfo`, reporting
+  the module version and the embedded `vcs.revision` (`cmd/root.go`).
 - The SDK is a **separate Go module** (`sdk/`). Go consumers pin it with a
   module-path tag, `sdk/vX.Y.Z` (`go get …/sdk@vX.Y.Z`). Keep it in step with the
   CLI tag.
@@ -36,10 +40,11 @@ on a clean, up-to-date tree.
    git pull --rebase
    ```
 
-2. Green gate:
+2. Green gate — the full pre-handoff gate, not the fast one
+   (see [TESTING.md](TESTING.md)):
 
    ```bash
-   make fmt vet test
+   mise run quality:full
    ```
 
 3. Pick the version and confirm it is unused:
@@ -59,8 +64,12 @@ on a clean, up-to-date tree.
 
    GOWORK=off go get github.com/hk9890/task-manager/sdk@vX.Y.Z
    GOWORK=off go mod tidy
-   git commit -am "chore: pin sdk vX.Y.Z"
    ```
+
+   The pin is a normal code change, so [CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)
+   applies unchanged: commit it on a branch and land it through a pull request —
+   **not** directly on `main`. The tags in this step and the next are cut on the
+   merged `main` commit.
 
 5. Tag the CLI on the commit that pins the SDK and push it — this starts the
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
@@ -71,8 +80,11 @@ on a clean, up-to-date tree.
    ```
 
 6. GoReleaser builds linux / macOS / Windows archives (amd64 + arm64), a
-   `checksums.txt`, and a **draft** release named `task-manager vX.Y.Z` with a
-   grouped changelog. Open the release, edit the notes if you want, and **publish**.
+   `checksums.txt`, a **CycloneDX SBOM per archive**, a **keyless cosign signature
+   over `checksums.txt`** (`checksums.txt.sig` + `checksums.txt.pem`, which is why
+   the workflow grants `id-token: write`), and a **draft** release named
+   `task-manager vX.Y.Z` with a grouped changelog. Open the release, edit the notes
+   if you want, and **publish**.
 
    > The release is a draft by default so notes can be curated before it goes out.
    > To publish automatically on tag push instead, set `draft: false` in
@@ -84,30 +96,36 @@ GoReleaser config changes are checked on every PR that touches `.goreleaser.yaml
 or the workflow (a snapshot build, no publish). To run the same checks by hand:
 
 ```bash
-goreleaser check                       # validate .goreleaser.yaml
-goreleaser release --snapshot --clean  # build every target into ./dist (no publish)
+goreleaser check                                          # validate .goreleaser.yaml
+goreleaser release --snapshot --clean --skip=sign,sbom    # build every target into ./dist (no publish)
 ```
 
-### Building locally (development)
-
-`make build` still produces a single host binary for local use:
-
-```bash
-make build      # -> ./bin/taskmgr
-```
+`--skip=sign,sbom` matches what `release.yml` passes on the snapshot path: the
+signing and SBOM steps need `cosign` and `syft` on `PATH`, which the snapshot
+validation deliberately does not install. Drop the flag only if you have both
+installed and want to exercise the full pipeline.
 
 ## Verifying
 
+After the release publishes, the archives, `checksums.txt`, the per-archive SBOMs,
+and `checksums.txt.sig` / `checksums.txt.pem` are attached to the GitHub release.
+From a downloaded set of artifacts:
+
 ```bash
-./bin/taskmgr version          # shows the tagged version / commit / date
+# 1. Contents match the manifest
+sha256sum -c checksums.txt
+
+# 2. The manifest itself is authentically ours (keyless / Sigstore)
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem \
+  --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/hk9890/task-manager/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-After the release publishes, the archives + `checksums.txt` are attached to the
-GitHub release. From a consumer, `go get github.com/hk9890/task-manager/sdk@vX.Y.Z`
-must resolve the `sdk/vX.Y.Z` tag.
+Then confirm the binary and the module resolve as expected:
 
-## Visibility
-
-The repository is public. Releases are published as GitHub Releases with
-cross-platform archives and a `checksums.txt`; the `sdk/tasks` module is fetched
-straight from its tag via the Go module proxy.
+```bash
+taskmgr version                                        # tagged version / commit / date
+go get github.com/hk9890/task-manager/sdk@vX.Y.Z       # must resolve the sdk/vX.Y.Z tag
+```

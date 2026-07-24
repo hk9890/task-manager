@@ -98,8 +98,10 @@ stores:
 - A **missing** `mapping.yaml` means "no central stores" (not an error); a **corrupt**
   one is a hard error.
 
-**Dangling entries.** An entry whose `store` subfolder, or whose project `path`, no
-longer exists is **ignored** by resolution (§4) rather than failing the command. A
+**Dangling entries.** An entry whose `store` subfolder no longer exists is **ignored**
+by resolution (§4) rather than failing the command. A missing project `path` is *not*
+a dangling condition: only the store subfolder is checked, so an entry whose project
+directory was deleted or moved still matches and still opens its central store. A
 subfolder with no registry entry is simply unreachable until an entry is added (§5).
 
 **Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
@@ -146,7 +148,7 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
 
 **Prefix.** A store's ID prefix is `--prefix` if given, else derived from the project
 directory name (lowercased, non-alphanumerics stripped, leading digits removed,
-truncated), else `task`. Prefixes are **per project** — there is deliberately no global
+truncated to 8 characters), else `task`. Prefixes are **per project** — there is deliberately no global
 default prefix, so two projects never share a prefix by accident.
 
 Registry writes (today, `init --central`) obey the store durability discipline

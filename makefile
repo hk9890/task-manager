@@ -1,4 +1,7 @@
-.PHONY: all build install test test-cli test-sdk vet fmt fmt-check lint clean tidy
+# No `lint` target: golangci-lint is pinned by .mise.toml, so linting is
+# `mise run lint`. Listing it here without a recipe made `make lint` exit 0
+# without linting anything.
+.PHONY: all build install test test-cli test-sdk vet fmt fmt-check clean tidy
 
 # Derive the CLI version from the most recent `v*` tag. Exclude the parallel
 # `sdk/*` module tags: both tag families land on the same release commit, so an
@@ -42,8 +45,11 @@ vet:
 fmt:
 	@gofmt -w cmd sdk/tasks
 
+# 2>&1 folds gofmt's own errors (a vanished path, a parse failure) into $out and
+# the || arm catches its exit status: without both, a broken invocation printed
+# to stderr, listed no files, and reported success.
 fmt-check:
-	@out="$$(gofmt -l cmd sdk/tasks)"; \
+	@out="$$(gofmt -l cmd sdk/tasks 2>&1)" || { echo "gofmt failed:"; echo "$$out"; exit 1; }; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi
 
 tidy:

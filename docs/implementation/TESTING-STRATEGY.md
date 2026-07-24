@@ -1,9 +1,12 @@
 # Testing Strategy
 
 Four layers, split by *what they touch*. The seam that makes the split possible is
-`internal/vfs.FS` (see [PACKAGE-OVERVIEW.md](PACKAGE-OVERVIEW.md)): pure logic needs
-no disk, the shell is tested on an in-memory FS, and a real temp dir is the source
-of truth for durability.
+`sdk/tasks/internal/vfs.FS` (see [PACKAGE-OVERVIEW.md](PACKAGE-OVERVIEW.md)): pure
+logic needs no disk, the shell is tested on an in-memory FS, and a real temp dir is
+the source of truth for durability.
+
+The command surface and the pre-commit / pre-handoff gates are owned by
+[docs/TESTING.md](../TESTING.md); this file owns the layer model and the fixtures.
 
 ## Layers
 
@@ -26,7 +29,7 @@ L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
 
 ## What Mem can and cannot prove
 
-`vfs.Mem` matches `osFS` on the following contract (as of B4):
+`vfs.Mem` matches `osFS` on the following contract:
 
 - **Parent-dir-must-exist**: `WriteAtomic`, `Append`, and `Rename` all require
   the parent directory to be present in the dirs set (registered via `MkdirAll`).
@@ -41,9 +44,9 @@ L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
 `vfs.Mem` **cannot** prove:
 
 - **Crash durability**: `fsync` is a no-op in memory. A "crash" after `WriteAtomic`
-  but before the parent-dir `fsync` (the A4 path) cannot be modelled in `Mem`.
-  L3 (real `t.TempDir()`) is the only layer that proves the full crash-safe rename
-  sequence.
+  but before the parent-dir `fsync` — the rename-then-parent-dir-fsync sequence in
+  `sdk/tasks/internal/vfs/os.go` — cannot be modelled in `Mem`. L3 (real
+  `t.TempDir()`) is the only layer that proves the full crash-safe rename sequence.
 - **Atomic-append tearing**: `Mem.Append` is a single map update — it cannot
   model a partial write at the boundary of an OS append. L3 is required to prove
   `O_APPEND` durability on the comment sidecar.
@@ -52,22 +55,28 @@ L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
 
 ## Fixtures — one builder, two backends
 
-`internal/storetest` builds a populated store from a spec, materialized into
-`vfs.Mem` (L2, instant) or a real `t.TempDir()` (L3). Same fixture, both layers:
+`sdk/tasks/internal/storetest` builds a populated store from a spec, materialized
+into `vfs.Mem` (L2, instant) or a real `t.TempDir()` (L3). Same fixture, both layers:
 
 ```go
 st := storetest.New(t).
-    Issue("agt-0001", storetest.Open, storetest.Parent("agt-0007")).
-    Closed("agt-0007").
-    Comment("agt-0001", "hans", "first note")
+    Issue("agt-3k9f2x", storetest.Open, storetest.Parent("agt-8mq04b")).
+    Closed("agt-8mq04b").
+    Comment("agt-3k9f2x", "hans", "first note")
 store := st.Mem()        // L2: in-memory, instant
 store := st.TempDir(t)   // L3: materialized on real osFS
 ```
 
+`storetest` is an internal package, so only tests inside the `sdk` module can
+import it. L4 CLI tests in `cmd/` drive the public `Store` API or the built binary
+instead.
+
 ## Conventions
 
 - Tests sit next to the code (`*_test.go`). Never hand-roll a real `.tasks/`.
-- Deterministic time only — override `Store.now`; never assert the wall clock.
+- Deterministic time only; never assert the wall clock. Inside package `tasks`
+  override the unexported `Store.now`; from `cmd/` and external consumers call
+  `Store.SetNow`.
 - Assert sentinels with `errors.Is`; field failures are `*ValidationError` (`Field`);
   query parse failures are `*ParseError` (`Pos`).
 - **TDD:** with the harness in place, write the layer-appropriate failing test
@@ -75,6 +84,6 @@ store := st.TempDir(t)   // L3: materialized on real osFS
 
 ## Commands
 
-`mise run test` (L1+L2) · `mise run test:integration` (L3+L4) ·
-`mise run test:all` · `mise run lint` · `mise run quality` (vet+lint+test) ·
-`mise run quality:full` (+ integration).
+`mise run test` (L1+L2) · `mise run test:integration` (L3+L4) · `mise run test:all`.
+The gates (`quality`, `quality:full`) and the `make` fallback are documented in
+[docs/TESTING.md](../TESTING.md).

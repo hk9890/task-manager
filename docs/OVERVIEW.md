@@ -17,12 +17,23 @@ The authoritative contract lives in `docs/specs/`:
 
 ```
 github.com/hk9890/task-manager   root module — the taskmgr CLI (cobra)
-├── main.go, cmd/               command groups + output rendering
+├── cmd/                        command groups + output rendering
+│   └── taskmgr/                package main — the binary entrypoint
 ├── sdk/tasks/                  separate module — the storage engine + public SDK
 └── bench/                      separate module — scaling harness (out of build/test)
 ```
 
+`main` lives in `cmd/taskmgr/` rather than at the root so that
+`go install github.com/hk9890/task-manager/cmd/taskmgr@latest` produces a binary
+named `taskmgr`.
+
 `sdk` is its own module so consumers can import
-`github.com/hk9890/task-manager/sdk/tasks` without the CLI's dependencies; the root
-module wires the local copy with a `replace … => ./sdk` directive. `bench/` is a
-standalone module kept out of `go build ./...` and `make test`.
+`github.com/hk9890/task-manager/sdk/tasks` without the CLI's dependencies. The root
+`go.mod` **has no `replace`** — it requires the published `sdk vX.Y.Z`, which is what
+downstream consumers and release builds resolve. Local builds and tests use the
+in-tree copy instead because of the committed `go.work` (`use . ./sdk ./bench`),
+which consumers ignore entirely. The only `replace` in the repository is in
+`bench/go.mod`.
+
+`bench/` is a standalone module kept out of `go build ./...` and `make test`, but it
+is a workspace member and is compiled and vetted by `mise run quality`.

@@ -13,28 +13,32 @@ CGO_ENABLED = "0"
 [tasks.taskmgr]
 description = "Build taskmgr from the current source and run it in your shell's directory. Usage: mise run taskmgr -- <args>  (e.g. mise run taskmgr -- ready)"
 # Single line so mise appends your args to the taskmgr invocation (not the build step).
-run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr . && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/taskmgr"'
+run = 'cd "$MISE_PROJECT_ROOT" && go build -o bin/taskmgr ./cmd/taskmgr && cd "${MISE_ORIGINAL_CWD:-$PWD}" && exec "$MISE_PROJECT_ROOT/bin/taskmgr"'
 
 [tasks.build]
 description = "Build the taskmgr binary into ./bin"
 run = """
-VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Match the makefile: restrict `git describe` to the `v*` CLI tags so the
+# parallel `sdk/*` tags on the same commit cannot stamp the binary "sdk/vX.Y.Z".
+VERSION=$(git describe --tags --match "v[0-9]*" --exclude "sdk/*" --always --dirty 2>/dev/null || echo dev)
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 PKG=github.com/hk9890/task-manager/cmd
-go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/taskmgr .
+go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.Date=$DATE" -o bin/taskmgr ./cmd/taskmgr
 """
 
 # ---- format / vet / lint / tidy (both modules) -----------------------------
 
 [tasks.fmt]
 description = "Format Go source (goimports, both modules)"
-run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks main.go"
+run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks"
 
 [tasks."fmt:check"]
 description = "Fail if any file is not formatted"
 run = """
-OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks main.go)
+# 2>&1 plus the exit-status check keep a failing goimports (vanished path, parse
+# error) from reporting success by simply listing no files.
+OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks 2>&1) || { echo "goimports failed:"; echo "$OUT"; exit 1; }
 if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
 """
 

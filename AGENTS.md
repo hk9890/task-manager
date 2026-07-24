@@ -19,7 +19,7 @@ and links to the specs.
 ### Coding and file changes
 
 **You MUST load [docs/CODING.md](docs/CODING.md) before you touch any code** — it
-covers the single-writer rule, the two-module layout, where each kind of change
+covers the single-writer rule, the three-module layout, where each kind of change
 goes, and keeping the specs in sync.
 
 ### Testing and verification
@@ -27,8 +27,18 @@ goes, and keeping the specs in sync.
 **You MUST load [docs/TESTING.md](docs/TESTING.md), run the suites, and confirm the
 project is green** before handoff.
 
+### Diagnosing behaviour (hooks, latency, errors)
+
+Load [docs/MONITORING.md](docs/MONITORING.md) — what is logged at which level, the
+`TASKMGR_LOG` levels, and how to capture and aggregate a run.
+
 ### Change, commit & release workflow
 
 Follow [docs/CHANGE-WORKFLOW.md](docs/CHANGE-WORKFLOW.md) for branching, worktrees,
 and pull requests — **no direct commits to `main`**. For version tags and release
 artifacts, see [docs/RELEASING.md](docs/RELEASING.md).
+
+### Contributing (external)
+
+[CONTRIBUTING.md](CONTRIBUTING.md) — prerequisites, the build/test gate, and PR
+conventions for contributors outside this routing table.

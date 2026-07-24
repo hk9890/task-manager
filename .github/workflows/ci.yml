@@ -27,9 +27,15 @@ jobs:
 
       # ── root module ───────────────────────────────────────────────────────
 
+      # 2>&1 plus the exit-status check keep a failing gofmt (vanished path,
+      # parse error) from passing the step by listing no files.
       - name: fmt-check (root)
         run: |
-          out="$(gofmt -l cmd sdk/tasks)"
+          if ! out="$(gofmt -l cmd sdk/tasks 2>&1)"; then
+            echo "gofmt failed:"
+            echo "$out"
+            exit 1
+          fi
           if [ -n "$out" ]; then
             echo "unformatted files:"
             echo "$out"
@@ -53,7 +59,11 @@ jobs:
       - name: fmt-check (sdk)
         working-directory: sdk
         run: |
-          out="$(gofmt -l .)"
+          if ! out="$(gofmt -l . 2>&1)"; then
+            echo "gofmt failed:"
+            echo "$out"
+            exit 1
+          fi
           if [ -n "$out" ]; then
             echo "unformatted files:"
             echo "$out"

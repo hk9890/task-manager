@@ -1,20 +1,30 @@
 # Package Overview
 
-The *implementation* layout of the SDK module (`sdk/tasks` + its internal
-packages) and the CLI module (`cmd`). The behavioural contract lives in
-[../specs/](../specs/); this file is the package map and the rules that hold it
-together. Test layers: [TESTING-STRATEGY.md](TESTING-STRATEGY.md).
+A one-screen orientation map of the SDK module (`sdk/tasks` + its internal
+packages) and the CLI module (`cmd`).
+
+**This file owns nothing.** The authoritative package table, the pure-core /
+imperative-shell file split, and the `os`/`syscall` seam rule all live in
+[ARCHITECTURE-SPEC §5](../specs/ARCHITECTURE-SPEC.md); read it before changing
+package structure. Test layers: [TESTING-STRATEGY.md](TESTING-STRATEGY.md).
 
 ## Layout
 
 ```
 sdk/tasks/                  package tasks — public facade + imperative shell
-  model · frontmatter · validate · ids · ready · comments · store · query (adapter)
+  model · frontmatter · validate · ids · ready · comments · store
+  mutation · transition · import · config · registry · resolve
+  query · criteria · search  (query surface)
+  hooks · hookrun · hookpayload  (lifecycle gates)
+  log · doc
   internal/query/           pure filter-expression engine: lex · parse · ast · eval · errors
   internal/vfs/             the disk seam: FS interface · osFS (prod) · Mem (test + faults)
+  internal/exec/            the process seam: Runner interface · OS runner · Fake
+  internal/env/             the environment seam: Environment interface · OS impl · Fake
   internal/storetest/       fixture builder ("make a store") — test-only support package
 cmd/                        taskmgr CLI (cobra); calls Store, never the FS
-bench/                      standalone module; outside build/test
+  taskmgr/                  package main — the binary entrypoint
+bench/                      separate module; excluded from go build ./... and make test
 ```
 
 ## What each package holds
@@ -26,10 +36,10 @@ bench/                      standalone module; outside build/test
   import. Compiles an expression to a `Predicate` over a `Row` interface and
   returns `*ParseError`. `tasks` adapts `*Issue`→`Row` and re-exports
   `ParseError` (`type ParseError = query.ParseError`).
-- **`internal/vfs`** — the **only** package that calls `os`/`syscall`. The `FS`
-  interface (`ReadDir`, `ReadFile`, `Stat`, `WriteAtomic`, `Append`, `Rename`,
-  `MkdirAll`, `Remove`, `Lock`); `osFS` (real — encapsulates temp+fsync+rename and
-  flock); `Mem` (in-memory + fault injection).
+- **`internal/vfs` · `internal/exec` · `internal/env`** — the three seams, and the
+  only packages in the SDK that call `os`/`syscall`. Disk, hook processes, and the
+  user environment respectively; each has a real implementation and a
+  test double. Details and the guard tests: ARCHITECTURE-SPEC §5.
 - **`internal/storetest`** — builds a populated store from a declarative spec into
   *either* `vfs.Mem` or a real `t.TempDir()`. A normal (non-`_test.go`) package so
   any package's tests can import it; because only test files import it, it never
@@ -38,7 +48,9 @@ bench/                      standalone module; outside build/test
 
 ## Rules (load-bearing)
 
-1. **Only `internal/vfs` imports `os`/`syscall`.** Everything else uses the `FS` seam.
+1. **Seam confinement** — within `sdk/tasks`, only `internal/vfs`, `internal/exec`,
+   and `internal/env` import `os`/`syscall`. Stated normatively in
+   ARCHITECTURE-SPEC §5 and enforced by `sdk/tasks/importboundary_test.go`.
 2. **The pure core imports neither `os` nor `vfs`** — `query`, `frontmatter`,
    `validate`, `ids`, the `ready`/`blocked` graph, and comment `resolve` take
    in-memory inputs and return values/errors (so they unit-test at L1).

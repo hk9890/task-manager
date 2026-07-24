@@ -94,7 +94,7 @@ operator a field does not support is a parse error (§4).
   `created` / `updated` comparison is false — a missing timestamp has no value
   that can satisfy any ordering bound.
 - **`ready` / `blocked`** — computed predicates with the meanings fixed by the
-  storage spec (TASK-STORAGE-SPEC.md §9): `ready` = open with no open blocker;
+  storage spec ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §9): `ready` = open with no open blocker;
   `blocked` = non-closed with ≥1 open blocker. These are derived from the
   dependency graph and are **independent of the `status` field**: the `blocked`
   predicate is **not** the same as `status == "blocked"`. The `blocked` *status*

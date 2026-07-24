@@ -75,8 +75,8 @@ Three Go modules:
 
 ```
 github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra)
-├── main.go                              wires command execution
 ├── cmd/                                 command groups + output rendering
+│   └── taskmgr/                         package main — wires command execution
 ├── sdk/                                 separate module — the engine
 │   └── tasks/                           package tasks: storage engine + public API
 └── bench/                               separate module — scaling harness
@@ -84,10 +84,20 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 
 - **`sdk` is its own module** so consumers import
   `github.com/hk9890/task-manager/sdk/tasks` without inheriting the CLI's
-  dependencies. The root module wires the local copy with a `replace` directive.
-- **`bench`** is a standalone module (also `replace`d onto the engine) holding a
-  scaling harness. It is intentionally excluded from `go build ./...` and the test
-  suite.
+  dependencies.
+- **Module wiring.** The root `go.mod` carries **no `replace`**: it requires the
+  published `github.com/hk9890/task-manager/sdk vX.Y.Z`, so downstream consumers and
+  release builds resolve the SDK from its `sdk/vX.Y.Z` tag. The committed `go.work`
+  (`use . ./sdk ./bench`) is what makes *local* builds and tests use the in-tree
+  copy; `go.work` is ignored by `go install <module>@<version>` and by consumers.
+  Releases therefore require the version pin to be bumped, not a directive removed.
+- **`bench`** is a standalone module — the one place a `replace` is used
+  (`bench/go.mod`) — holding a scaling harness. It is excluded from
+  `go build ./...` and the default test suite, but as a workspace member it is
+  compiled and vetted by the `build:all`/`vet:all` tasks in the quality gate.
+- **`main` is at `cmd/taskmgr/`**, not the module root, so
+  `go install github.com/hk9890/task-manager/cmd/taskmgr@latest` yields a binary
+  named `taskmgr`.
 
 ---
 
@@ -107,7 +117,24 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment for store resolution (CONFIG-SPEC) — `UserHomeDir`, `Getenv`. `Environment` interface + OS impl + `Fake` (for hermetic resolution tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
-### Pure-core files (no `os`, no `internal/vfs`)
+### Imperative-shell files (may import `internal/vfs` / `internal/env`)
+
+The shell is an **exhaustive, closed set of four files**. Every other non-test file
+in `sdk/tasks` is pure core by definition — that is the rule
+`TestImportBoundary_PureCoreNoVfs` enforces, so a new file is pure core unless it is
+added to the guard's `imperativeShell` map in the same change.
+
+| File | Responsibility |
+|---|---|
+| `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
+| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
+
+### Pure-core files (no `internal/vfs`)
+
+The complement of the table above. None of these import `os` or `internal/vfs`;
+`hookrun.go` and `log.go` are the two permitted to reach the `internal/exec` seam,
+which is what lets a pure-core file spawn a hook without touching disk.
 
 | File | Responsibility |
 |---|---|
@@ -117,14 +144,15 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `validate.go` | Single-issue field invariants. |
 | `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
-
-### Imperative-shell files (may import `internal/vfs` / `internal/env`)
-
-| File | Responsibility |
-|---|---|
-| `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
-| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
-| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
+| `mutation.go` | `MutationResult`; the gated-write sequence shared by every mutation — validate + index (§6 step 3), run pre-hooks around the caller's write (step 4), collect hints/warnings after post-hooks (step 7). |
+| `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and update-insensitive equality. |
+| `import.go` | The `Import` primitive: a validated direct write of a complete externally-sourced issue end-state (caller supplies status and timestamps, unlike `Create`). |
+| `query.go` / `criteria.go` / `search.go` | The query surface: `compileExpr` plus the `*Issue`→`query.Row` adapter, the structured `Criteria` builder, and `SearchExpr` free-text→expression — all three produce or evaluate QUERY-SPEC expressions. |
+| `hooks.go` | Hook config types (`Hook`) and their validation (HOOK-SPEC §3). |
+| `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
+| `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
+| `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
+| `doc.go` | Package documentation. |
 
 ### Seams and os/syscall confinement
 
@@ -159,8 +187,9 @@ enforced:
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
-4. **Run pre-hooks** for the transition ([HOOK-SPEC.md](HOOK-SPEC.md) §4): a gate that
-   does not allow aborts here — the lock is released and nothing is written.
+4. **Run pre-hooks** for the transition ([HOOK-SPEC.md](HOOK-SPEC.md) §4). These are
+   gates: the first hook that denies or errors aborts the mutation — the lock is
+   released and nothing is written.
 5. **Write atomically**: temp file + `fsync` + `rename` over the target (the
    append-only comment sidecar is the one exception — `O_APPEND` + `fsync`).
 6. **Release the lock.**
@@ -187,7 +216,9 @@ Reads take a fresh snapshot of the directory and never hold the lock.
   separated so the common path stays proportional to open work, not total history.
   The partition axis is **open-vs-closed only** — deferred or long-parked issues
   stay in the hot set; there is deliberately no `parked/` partition (decision
-  at-zib.2.5). The hot scan is O(open) at ~13µs/file, so it degrades gracefully
+  at-39dru2). The hot scan is O(open) at ~13µs/file — measured by the `bench`
+  harness, REDESIGN A/B/C (see [bench/README.md](../../bench/README.md)) — so it
+  degrades gracefully
   even at a few thousand hot issues; a status-based split would add routing
   complexity for no correctness benefit.
 

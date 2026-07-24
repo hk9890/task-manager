@@ -213,7 +213,7 @@ Notes:
 - **Observability.** Every hook invocation is logged with its event, `id`, issue id,
   decision, and **wall-clock duration**; a hook that exceeds `hook_timeout` or errors is
   logged at a higher level. Hook timing is the main signal for the in-lock cost of §8 — see
-  [MONITORING.md](../implementation/MONITORING.md).
+  [MONITORING.md](../MONITORING.md).
 - **Environment.** Each hook process inherits the parent environment plus:
 
   | Variable | Value |
@@ -279,9 +279,14 @@ scan and most hooks don't use them. A hook that does can query the store itself 
 
 ```sh
 open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
-  -q "parent == \"$TASKMGR_ISSUE_ID\" && !closed" | jq length)
+  -q "parent == \"$TASKMGR_ISSUE_ID\" && status != \"closed\"" | jq length)
 [ "$open_children" -eq 0 ] || { echo "epic has $open_children open children" >&2; exit 1; }
 ```
+
+`closed` is a date field, not a boolean — the only bare booleans in the filter
+language are `ready` and `blocked` ([QUERY-SPEC](QUERY-SPEC.md) §2), so `!closed`
+is a parse error. The example also assumes `taskmgr` and `jq` are on the hook's
+inherited `PATH`; the engine guarantees only the §4 environment variables.
 
 ### 5.2 Example — `pre-create` (structure validation)
 
@@ -396,7 +401,7 @@ model.
 block until it returns. With the 2-second default this is negligible; **if you raise
 `hook_timeout` to run a test suite on close, you serialize all writes for that duration.**
 Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
-wall-clock duration is logged (§4, [MONITORING.md](../implementation/MONITORING.md)), so a
+wall-clock duration is logged (§4, [MONITORING.md](../MONITORING.md)), so a
 project can see exactly how long its gates hold the lock and decide whether to raise
 `hook_timeout`, move a slow check to a post-hook, or push it to CI.
 

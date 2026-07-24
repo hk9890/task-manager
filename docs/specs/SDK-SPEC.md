@@ -54,10 +54,10 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
   yields an empty slice, a corrupt one an error.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
   logger the store writes observability records to (hook timing, writes, IO errors;
-  see MONITORING.md); without it the store is silent. The SDK does not read
+  see [MONITORING.md](../MONITORING.md)); without it the store is silent. The SDK does not read
   *logging* configuration — a front end maps `TASKMGR_LOG` to a level and injects the
   logger. (Store **resolution** is the one place the SDK reads the environment, and it
-  does so only through the `internal/env` seam — ARCHITECTURE-SPEC §5 — so it stays
+  does so only through the `internal/env` seam — [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §5 — so it stays
   hermetically testable.)
 
 ```go
@@ -193,8 +193,23 @@ const ( PriorityMin = 0; PriorityMax = 4; PriorityDefault = 2 )
 ### `Config`
 
 ```go
-type Config struct { Prefix string }
+type Config struct {
+    Prefix      string `yaml:"prefix"`                 // prepended to allocated issue IDs
+    HookTimeout string `yaml:"hook_timeout,omitempty"` // per-hook wall-clock limit ("2s"); "" = 2s default, "0" = disabled
+    Hooks       []Hook `yaml:"hooks,omitempty"`        // lifecycle gates
+}
+
+type Hook struct {
+    ID    string   `yaml:"id,omitempty"`   // label for messages/logs; defaults to "<event>#<index>"
+    Event string   `yaml:"event"`          // the lifecycle event that fires it
+    When  string   `yaml:"when,omitempty"` // optional QUERY-SPEC filter over the new issue
+    Run   []string `yaml:"run"`            // argv, executed directly (no shell); required
+}
 ```
+
+`HookTimeout` and `Hooks` are parsed and validated lazily on the first write, not
+on read, so a malformed value never breaks queries. Event names, gate semantics,
+and the timeout rules are specified in [HOOK-SPEC](HOOK-SPEC.md) §3.1–§3.4.
 
 ---
 
@@ -263,7 +278,7 @@ fields are applied.
 `Creator` is intentionally absent from `UpdateInput`: it is provenance — set once
 at creation and never edited afterward. The SDK applies no identity default: an
 empty `CreateInput.Creator` is stored as empty (provenance simply unknown). The
-`$USER` fallback is a CLI-layer convenience (`--creator`, CLI-SPEC.md §4), matching
+`$USER` fallback is a CLI-layer convenience (`--creator`, [CLI-SPEC.md](CLI-SPEC.md) §4), matching
 `--assignee` and comment `--author`; an embedder that wants attribution sets
 `Creator` itself.
 
@@ -590,6 +605,7 @@ Sentinel errors, testable with `errors.Is`:
 ```go
 var (
     ErrNotFound           // issue not found
+    ErrAlreadyExists      // an explicit CreateInput.ID / ImportInput.ID is already taken
     ErrNoStore            // no store found (no local .tasks and no registry match)
     ErrStoreExists        // a store already exists at the create target
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
@@ -604,8 +620,13 @@ found, `ErrStoreNotRegistered` when an explicit `StoreName` has no entry, and
 `config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
 is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
-`ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`, and
-`RemoveDep` when the target issue lives in `closed/` (closed issues are immutable
+`ErrAlreadyExists` is returned by `Create` and `Import` when the caller supplies an
+explicit `ID` that the store already holds. It cannot occur for an allocated ID:
+those are retried against the existing set.
+
+`ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`,
+`RemoveDep`, `AddRelated`, and `RemoveRelated` when the target issue lives in
+`closed/` (closed issues are immutable
 in place — see storage spec §5). `Close` is idempotent: calling it on an already-closed
 issue returns the existing issue and `nil` (no-op; no in-place write to `closed/`
 is attempted); `Reopen` is symmetric — on an already-active issue it is a no-op
