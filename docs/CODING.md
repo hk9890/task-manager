@@ -26,7 +26,7 @@ and every consumer go through the `Store` API. **Within `sdk/tasks`, only the th
 seams `internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
 (user environment — CONFIG-SPEC) may import `os`/`syscall`;** the pure core imports
 none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-only:
-`cmd/` is the process boundary and reads `os` directly.
+`cmd/` is the process boundary and reads `os` directly for args, env, and exit codes.
 
 ## Where changes go
 
@@ -67,6 +67,7 @@ seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bu
 Three modules: root (the CLI), `sdk/` (minimal-dep — only `yaml.v3`), and `bench/`.
 The committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has
 no `replace` and pins the published `sdk vX.Y.Z` for consumers. `bench/` is outside
-`go build ./...` and `make test` but is built and vetted by `mise run quality`.
+`go build ./...` and `make test`, but `mise run quality` builds and vets it — so a
+bench compile error fails the gate.
 Run `mise run tidy` after changing imports. Authoritative:
 [ARCHITECTURE-SPEC §4](specs/ARCHITECTURE-SPEC.md).

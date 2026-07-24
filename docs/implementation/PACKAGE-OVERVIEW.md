@@ -37,7 +37,10 @@ bench/                      separate module; excluded from go build ./... and ma
   `ParseError` (`type ParseError = query.ParseError`).
 - **`internal/vfs` · `internal/exec` · `internal/env`** — the three seams (disk,
   hook processes, user environment) and the only SDK packages that call
-  `os`/`syscall`. Each has a real implementation and a test double.
+  `os`/`syscall`. Each has a real implementation and a test double. `vfs.FS` is
+  `ReadDir`, `ReadFile`, `Stat`, `WriteAtomic`, `Append`, `Rename`, `MkdirAll`,
+  `Remove`, `Lock`; `osFS` encapsulates temp+fsync+rename and flock, `Mem` adds
+  fault injection.
 - **`internal/storetest`** — builds a populated store from a declarative spec into
   *either* `vfs.Mem` or a real `t.TempDir()`. A normal (non-`_test.go`) package so
   any package's tests can import it; because only test files import it, it never

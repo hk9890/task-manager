@@ -11,13 +11,17 @@ mise run quality           # vet + lint + L1/L2 + build/vet all modules + fuzz  
 mise run quality:full      # + L3/L4                                           (pre-handoff)
 ```
 
+`make` fallback: `make test` (both modules), `make test-sdk` / `make test-cli` for
+one, `make vet`, `make fmt`, `make fmt-check` (fails instead of rewriting).
+
 L3/L4 sit behind the `integration` build tag, so a plain `go test ./...` skips
 them — including the entire CLI suite. Raw equivalent:
 `go test -race -tags=integration ./...`, once per module.
 
-A change is not green until `quality:full` passes. CI runs strictly more: `-race`
-everywhere, an `sdk`-wide `gofmt -l .`, a bench build/vet, fuzz seeds, and the
-pinned golangci-lint. There is no `make lint` — linting is `mise run lint`.
+A change is not green until `quality:full` passes. CI
+(`.github/workflows/ci.yml`) runs strictly more: `-race` everywhere, an `sdk`-wide
+`gofmt -l .`, a bench build/vet, fuzz seeds, and the pinned golangci-lint. There is
+no `make lint` — linting is `mise run lint`.
 
 ## Conventions
 
