@@ -1,5 +1,5 @@
 # No `lint` target — linting is `mise run lint` (golangci-lint is pinned there).
-# Listing `lint` here without a recipe made `make lint` exit 0 without linting.
+# Never add it to .PHONY without a recipe: that makes `make lint` a silent no-op.
 .PHONY: all build install test test-cli test-sdk vet fmt fmt-check clean tidy
 
 # Derive the CLI version from the most recent `v*` tag. Exclude the parallel
@@ -44,8 +44,7 @@ vet:
 fmt:
 	@gofmt -w cmd sdk/tasks
 
-# 2>&1 + the || arm catch gofmt's own failures. Without them a broken invocation
-# printed to stderr, listed no files, and reported success.
+# 2>&1 folds gofmt's own diagnostics into $out so a broken invocation cannot pass.
 fmt-check:
 	@out="$$(gofmt -l cmd sdk/tasks 2>&1)" || { echo "gofmt failed:"; echo "$$out"; exit 1; }; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi

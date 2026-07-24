@@ -10,14 +10,17 @@ logging/observability design, see [MONITORING.md](MONITORING.md).
 
 ```bash
 mise run build             # -> ./bin/taskmgr
-mise run fmt               # one task per invocation — mise passes trailing
-mise run vet               # words as arguments, not as further tasks
+mise run fmt
+mise run vet
 mise run lint
 mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
 mise run test:integration  # L3 real temp dir + L4 CLI
-mise run quality           # vet + lint + test  (pre-commit gate)
-mise run quality:full      # + L3/L4            (pre-handoff gate)
+mise run quality           # fmt + vet + lint + test  (pre-commit gate)
+mise run quality:full      # + L3/L4                  (pre-handoff gate)
 ```
+
+One task per `mise run`: trailing words become arguments to the first task, so
+`mise run fmt vet lint` runs `fmt` with two bogus paths instead of three tasks.
 
 ## Single-writer rule
 

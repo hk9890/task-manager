@@ -117,8 +117,8 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 ### Imperative-shell files (may import `internal/vfs` / `internal/env`)
 
 A **closed set of four files**; every other non-test file in `sdk/tasks` is pure core
-by definition. `TestImportBoundary_PureCoreNoVfs` enforces this, so a new file is
-pure core unless it is added to the guard's `imperativeShell` map.
+by definition, so a new file is pure core unless it is added to the guard's
+`imperativeShell` map.
 
 | File | Responsibility |
 |---|---|
@@ -126,10 +126,11 @@ pure core unless it is added to the guard's `imperativeShell` map.
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
 | `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
 
-### Pure-core files (no `internal/vfs`)
+### Pure-core files (no filesystem access)
 
-The complement of the table above — no `os`, no `internal/vfs`. `hookrun.go` and
-`log.go` are the two permitted to reach the `internal/exec` seam.
+The complement of the table above, and what `TestImportBoundary_PureCoreNoVfs`
+enforces: no `os`, no `internal/vfs`. `hookrun.go` and `log.go` reach the
+`internal/exec` seam — process work, not filesystem work, so the rule holds.
 
 | File | Responsibility |
 |---|---|

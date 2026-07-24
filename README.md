@@ -38,20 +38,16 @@ Building from a checkout is covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 ```bash
 cd your-project
 taskmgr init --prefix proj                 # create .tasks/
-taskmgr create --title "First task" --type task --priority 1
-taskmgr create --title "Depends on it" --blocked-by <id>
+
+# IDs are opaque random tokens (proj-3k9f2x), never sequential — capture, don't guess.
+id=$(taskmgr create --title "First task" --type task --priority 1 --json | jq -r .id)
+taskmgr create --title "Depends on it" --blocked-by "$id"
+
 taskmgr ready                              # what can I work on now?
-taskmgr show <id>
-taskmgr update <id> --status in_progress
-taskmgr close <id> --reason "done"
+taskmgr show "$id"
+taskmgr update "$id" --status in_progress
+taskmgr close "$id" --reason "done"
 taskmgr ready                              # the dependent is now ready
-```
-
-IDs are opaque random tokens (`proj-3k9f2x`), never sequential — capture the one
-`create` prints rather than guessing:
-
-```bash
-id=$(taskmgr create --title "First task" --json | jq -r .id)
 ```
 
 Add `--json` to any command for machine-readable output. Run `taskmgr guide` for

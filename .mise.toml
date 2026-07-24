@@ -36,8 +36,7 @@ run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks"
 [tasks."fmt:check"]
 description = "Fail if any file is not formatted"
 run = """
-# 2>&1 + the status check stop a failing goimports from reporting success by
-# simply listing no files.
+# 2>&1 folds goimports' own diagnostics into $OUT so a broken run cannot pass.
 OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks 2>&1) || { echo "goimports failed:"; echo "$OUT"; exit 1; }
 if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
 """
@@ -146,9 +145,9 @@ CGO_ENABLED = "1"
 # ---- gates -----------------------------------------------------------------
 
 [tasks.quality]
-description = "Fast pre-commit gate: vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
-depends = ["vet:all", "build:all", "lint", "test", "test:fuzz"]
+description = "Fast pre-commit gate: fmt + vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
+depends = ["fmt:check", "vet:all", "build:all", "lint", "test", "test:fuzz"]
 
 [tasks."quality:full"]
-description = "Pre-handoff gate: vet + lint + all layers + build/vet all modules + fuzz seeds"
-depends = ["vet:all", "build:all", "lint", "test", "test:integration", "test:fuzz"]
+description = "Pre-handoff gate: fmt + vet + lint + all layers + build/vet all modules + fuzz seeds"
+depends = ["fmt:check", "vet:all", "build:all", "lint", "test", "test:integration", "test:fuzz"]

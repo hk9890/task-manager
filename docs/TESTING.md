@@ -18,9 +18,8 @@ L3/L4 sit behind the `integration` build tag, so a plain `go test ./...` skips
 them — including the entire CLI suite. Raw equivalent:
 `go test -race -tags=integration ./...`, once per module.
 
-A change is not green until `quality:full` passes. CI
-(`.github/workflows/ci.yml`) runs strictly more: `-race` everywhere, an `sdk`-wide
-`gofmt -l .`, a bench build/vet, fuzz seeds, and the pinned golangci-lint. There is
+A change is not green until `quality:full` passes; it covers everything
+`.github/workflows/ci.yml` checks, so a green gate should mean a green PR. There is
 no `make lint` — linting is `mise run lint`.
 
 ## Conventions

@@ -40,7 +40,8 @@ gh pr create --fill
 - The branch must be green (`mise run quality:full`) before review.
 - Merge the PR into `main`; do not push to `main` directly.
 - Update tracker state with `taskmgr`: close finished issues and file follow-ups.
+- **Not done** until the branch is pushed, the PR is open or merged, and the
+  tracker state is synced.
 
-Work is not done until the branch is pushed, the PR is open or merged, and the
-tracker state is synced. For version tags and release artifacts, see
+For version tags and release artifacts, see
 [RELEASING.md](RELEASING.md).

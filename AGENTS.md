@@ -38,7 +38,7 @@ Follow [docs/CHANGE-WORKFLOW.md](docs/CHANGE-WORKFLOW.md) for branching, worktre
 and pull requests — **no direct commits to `main`**. For version tags and release
 artifacts, see [docs/RELEASING.md](docs/RELEASING.md).
 
-### Contributing (external)
+### Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md) — prerequisites, the build/test gate, and PR
-conventions.
+[CONTRIBUTING.md](CONTRIBUTING.md) — toolchain prerequisites, `make install`, and
+the PR conventions this repo expects.

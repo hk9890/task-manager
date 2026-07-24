@@ -26,11 +26,11 @@ enable it.
 
 ```bash
 mise run build         # -> ./bin/taskmgr  (or: make build)
-mise run quality:full  # vet + lint + every test layer + build/vet all modules
+make install           # build and put `taskmgr` on your $PATH
+mise run quality:full  # fmt + vet + lint + every test layer + build/vet all modules
 ```
 
-Run `quality:full` before pushing. The `make fmt vet test` fallback covers only
-fmt, vet, and L1/L2 — no linter, no integration tests — so CI checks strictly more.
+Run `quality:full` before pushing — it covers what CI checks.
 Details: [docs/TESTING.md](docs/TESTING.md), which owns the gate.
 
 ## Where changes go

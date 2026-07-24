@@ -27,8 +27,7 @@ jobs:
 
       # ── root module ───────────────────────────────────────────────────────
 
-      # 2>&1 + the status check stop a failing gofmt from passing the step by
-      # simply listing no files.
+      # 2>&1 folds gofmt's own diagnostics into $out so a broken run cannot pass.
       - name: fmt-check (root)
         run: |
           if ! out="$(gofmt -l cmd sdk/tasks 2>&1)"; then

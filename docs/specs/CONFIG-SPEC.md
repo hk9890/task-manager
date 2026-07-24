@@ -99,10 +99,10 @@ stores:
   one is a hard error.
 
 **Dangling entries.** An entry whose `store` subfolder no longer exists is **ignored**
-by resolution (§4) rather than failing the command. A missing project `path` is *not*
-a dangling condition: only the store subfolder is checked, so an entry whose project
-directory was deleted or moved still matches and still opens its central store. A
-subfolder with no registry entry is simply unreachable until an entry is added (§5).
+by resolution (§4) rather than failing the command. A missing project `path` is not:
+an entry whose project directory was deleted or moved still matches and opens its
+central store. A subfolder with no registry entry is simply unreachable until an
+entry is added (§5).
 
 **Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
 `<central_root>/.lock` — an empty file whose only role is its lock state, mirroring a

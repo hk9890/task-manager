@@ -284,9 +284,7 @@ open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
 ```
 
 `closed` is a date field: the only bare booleans are `ready` and `blocked`
-([QUERY-SPEC](QUERY-SPEC.md) §2), so `!closed` is a parse error. The snippet also
-assumes `taskmgr` and `jq` are on the hook's inherited `PATH` — the engine
-guarantees only the §4 environment variables.
+([QUERY-SPEC](QUERY-SPEC.md) §2), so `!closed` is a parse error.
 
 ### 5.2 Example — `pre-create` (structure validation)
 
