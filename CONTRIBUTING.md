@@ -15,25 +15,30 @@ Local development uses a committed `go.work` workspace, so the CLI builds agains
 the in-tree SDK without a `replace` directive. You do not need to do anything to
 enable it.
 
+## Prerequisites
+
+- **Go 1.26+** (pinned in `go.mod`).
+- Optionally [`mise`](https://mise.jdx.dev): `mise install` provisions the toolchain
+  CI uses, including golangci-lint 2.1.6. Without it you cannot reproduce the lint
+  job locally.
+
 ## Build & test (the green gate)
 
-Every change must keep the whole project green:
-
 ```bash
-make fmt        # gofmt both modules
-make vet        # go vet both modules
-make test       # go test both modules
+mise run build         # -> ./bin/taskmgr  (or: make build)
+make install           # build and put `taskmgr` on your $PATH
+mise run quality:full  # fmt + vet + lint + every test layer + build/vet all modules
 ```
 
-The CI workflow additionally runs the tests under `-race` and with the
-`integration` build tag. Please run `make fmt vet test` before pushing.
+Run `quality:full` before pushing — it covers what CI checks.
+Details: [docs/TESTING.md](docs/TESTING.md), which owns the gate.
 
 ## Where changes go
 
 The single most important rule: **the SDK (`sdk/tasks`) is the only component
 that writes the store.** The CLI is a thin layer over it. Before touching code,
 read [docs/CODING.md](docs/CODING.md) — it covers the single-writer rule, the
-two-module layout, and which kind of change belongs where.
+three-module layout, and which kind of change belongs where.
 
 ## Keep the specs in sync
 

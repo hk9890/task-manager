@@ -27,9 +27,14 @@ jobs:
 
       # ── root module ───────────────────────────────────────────────────────
 
+      # 2>&1 folds gofmt's own diagnostics into $out so a broken run cannot pass.
       - name: fmt-check (root)
         run: |
-          out="$(gofmt -l cmd sdk/tasks)"
+          if ! out="$(gofmt -l cmd sdk/tasks 2>&1)"; then
+            echo "gofmt failed:"
+            echo "$out"
+            exit 1
+          fi
           if [ -n "$out" ]; then
             echo "unformatted files:"
             echo "$out"
@@ -53,7 +58,11 @@ jobs:
       - name: fmt-check (sdk)
         working-directory: sdk
         run: |
-          out="$(gofmt -l .)"
+          if ! out="$(gofmt -l . 2>&1)"; then
+            echo "gofmt failed:"
+            echo "$out"
+            exit 1
+          fi
           if [ -n "$out" ]; then
             echo "unformatted files:"
             echo "$out"

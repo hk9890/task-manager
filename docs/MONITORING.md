@@ -12,8 +12,8 @@ the subtractive architecture (ARCHITECTURE-SPEC §10).
   only at or above a configured level (default: warnings and errors).
 - **One mechanism.** The engine and the CLI write through the same structured logger; there
   is no separate metrics path.
-- **Logs are not output.** Logs go to stderr (or a configured sink), never mixed into the
-  JSON a command prints to stdout — a machine consumer parsing `--json` is never polluted.
+- **Logs are not output.** Logs go to stderr, never mixed into the JSON a command prints
+  to stdout — a machine consumer parsing `--json` is never polluted.
 
 ## What is logged
 
@@ -32,7 +32,7 @@ level and `decision` differ — so allow/deny/error are one query away from each
 
 ## Hook timing
 
-Pre-hooks run **inside** the store write lock ([HOOK-SPEC](../specs/HOOK-SPEC.md) §8), so a
+Pre-hooks run **inside** the store write lock ([HOOK-SPEC](specs/HOOK-SPEC.md) §8), so a
 slow gate serializes every other writer for its duration. To make that cost visible rather
 than mysterious, **every hook invocation is logged with its wall-clock `duration_ms`**,
 alongside its event, `id`, issue id, and decision. This is the signal a project uses to
@@ -43,12 +43,42 @@ never silent.
 
 ## Format & configuration
 
-- **Format.** Structured key/value (Go `log/slog`); text for humans by default, JSON when a
-  machine sink is configured.
-- **Destination.** stderr by default; redirectable.
-- **Level.** Settable via the environment (e.g. `TASKMGR_LOG=debug`); default `warn`.
+For the CLI:
 
-These are environment-controlled and need no entry in the store's `config.yaml`.
+- **Level.** `TASKMGR_LOG` accepts `debug`, `info`, `warn`, `error`. The default is
+  `warn`, and an unrecognised value silently falls back to `warn`.
+- **Format.** Always `slog`'s text handler — human-readable key/value. The CLI has no
+  JSON log mode.
+- **Destination.** Always stderr. There is no destination setting; redirect at the
+  shell.
+
+This is environment-controlled and needs no entry in the store's `config.yaml`.
+
+SDK embedders pick their own format and sink — `tasks.WithLogger` takes any
+`*slog.Logger`:
+
+```go
+h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+store, err := tasks.Open("", tasks.WithLogger(slog.New(h)))
+```
+
+## Capturing and aggregating
+
+Measuring means capturing stderr and aggregating the fields above:
+
+```bash
+# Capture a debug-level run; stdout (--json) stays clean.
+TASKMGR_LOG=debug taskmgr close <id> --reason done 2> run.log
+
+# Which hooks are holding the write lock, slowest first?
+grep 'msg=hook' run.log |
+  sed -n 's/.*hook=\([^ ]*\).*duration_ms=\([0-9]*\).*/\2 \1/p' |
+  sort -rn | head
+
+# Deny/error rate across a batch run.
+grep -c 'decision=deny'  run.log
+grep -c 'decision=error' run.log
+```
 
 ## Non-goals
 

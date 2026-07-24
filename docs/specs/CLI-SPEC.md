@@ -28,7 +28,7 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|
 | `TASKMGR_DIR` | Store-path override, equivalent to `--store-path`; the flag wins if both are set. |
 | `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
-| `TASKMGR_LOG` | Log level/destination for observability output (mapped to a logger and injected into the SDK). |
+| `TASKMGR_LOG` | Log level for observability output: `debug`, `info`, `warn`, `error` (default `warn`; an unknown value falls back to `warn`). Records always go to stderr as text. See [MONITORING.md](../MONITORING.md). |
 
 ### Output modes
 
@@ -110,7 +110,7 @@ Create a new store for the current project — locally by default, or centrally 
   must match the store-name grammar (CONFIG-SPEC §3). Fails if that subfolder or a
   registry entry for this path already exists.
 - If `--prefix` is omitted it is derived from the project directory name (lowercased,
-  non-alphanumerics stripped, leading digits removed, truncated; falls back to `task`).
+  non-alphanumerics stripped, leading digits removed, truncated to 8 characters; falls back to `task`).
   This holds for both local and central stores — prefixes are per project, with no
   global default (CONFIG-SPEC §5).
 - **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with

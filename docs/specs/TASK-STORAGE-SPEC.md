@@ -42,14 +42,14 @@ ordinary store — which is what makes relocating one a plain folder move.
 .tasks/                          # store root (one project, committed with the repo)
 ├── config.yaml                  # project config (carries the ID prefix)
 ├── .lock                        # advisory write lock (not an issue)
-├── proj-0001.md                  # an active task file (filename == canonical ID)
-├── proj-0002.md
+├── proj-3k9f2x.md               # an active task file (filename == canonical ID)
+├── proj-8mq04b.md
 ├── comments/                    # comment sidecars for ALL issues, open or closed
-│   ├── proj-0001.yml             #   (cold; never parsed by the hot scan)
-│   ├── proj-0002.yml
-│   └── proj-0003.yml             #   a closed issue keeps its sidecar here
+│   ├── proj-3k9f2x.yml          #   (cold; never parsed by the hot scan)
+│   ├── proj-8mq04b.yml
+│   └── proj-w1e7hd.yml          #   a closed issue keeps its sidecar here
 └── closed/                      # closed task files (cold, immutable)
-    └── proj-0003.md
+    └── proj-w1e7hd.md
 ```
 
 Rules:
@@ -72,7 +72,7 @@ Rules:
   (`<prefix>-0042`, zero-padded decimal) created under the previous scheme
   remain valid and resolvable.
 - **Full pattern:** `^[a-z][a-z0-9]*-[0-9a-z]+$`, max length 64.
-- **Prefix:** matches `^[a-z][a-z0-9]*$`, max length 32; declared in
+- **Prefix:** matches `^[a-z][a-z0-9]*$`; declared in
   `config.yaml`. Every issue ID in the store shares it.
 - **Canonical and stable.** An ID never changes. It appears in three places that
   must agree: the filename (`proj-3k9f2x.md`), the frontmatter `id` field, and any
@@ -127,7 +127,7 @@ hooks:                    # optional; lifecycle-gate hooks run at issue transiti
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max 32. The ID prefix for every issue in the store. |
+| `prefix` | string | yes | `^[a-z][a-z0-9]*$`. The ID prefix for every issue in the store. |
 | `hook_timeout` | duration | no | Global per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
 | `hooks` | list | no | Lifecycle-gate hooks run at issue transitions; full schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3. |
 
@@ -144,7 +144,7 @@ Unknown keys must be ignored by readers, never rejected. The `hooks` block and
 
 ```markdown
 ---
-id: proj-0042
+id: proj-3k9f2x
 title: Fix drill navigation
 status: in_progress
 type: bug
@@ -152,9 +152,9 @@ priority: 1
 assignee: hans
 creator: hans
 labels: [area:details, triage:fix-as-is]
-parent: proj-0007
-blocked_by: [proj-0040]
-related: [proj-0012]
+parent: proj-8mq04b
+blocked_by: [proj-w1e7hd]
+related: [proj-p52otu]
 created: 2026-06-01T10:00:00Z
 updated: 2026-06-04T09:00:00Z
 ---

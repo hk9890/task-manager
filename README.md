@@ -27,23 +27,26 @@ go install github.com/hk9890/task-manager/cmd/taskmgr@latest
 
 # 2. Prebuilt binary — download an archive for your OS/arch from the Releases page:
 #    https://github.com/hk9890/task-manager/releases
-#    (each release ships linux/macOS/Windows × amd64/arm64 + a checksums.txt)
-
-# 3. From a checkout (Go 1.26+)
-make install      # builds `taskmgr` and puts it on your $PATH
+#    (each release ships linux/macOS/Windows × amd64/arm64, a checksums.txt,
+#     a CycloneDX SBOM per archive, and a cosign signature over checksums.txt)
 ```
+
+Building from a checkout is covered in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Usage
 
 ```bash
 cd your-project
 taskmgr init --prefix proj                 # create .tasks/
-taskmgr create --title "First task" --type task --priority 1
-taskmgr create --title "Depends on it" --blocked-by proj-0001
+
+# IDs are opaque random tokens (proj-3k9f2x), never sequential — capture, don't guess.
+id=$(taskmgr create --title "First task" --type task --priority 1 --json | jq -r .id)
+taskmgr create --title "Depends on it" --blocked-by "$id"
+
 taskmgr ready                              # what can I work on now?
-taskmgr show proj-0001
-taskmgr update proj-0001 --status in_progress
-taskmgr close proj-0001 --reason "done"
+taskmgr show "$id"
+taskmgr update "$id" --status in_progress
+taskmgr close "$id" --reason "done"
 taskmgr ready                              # the dependent is now ready
 ```
 

@@ -1,4 +1,6 @@
-.PHONY: all build install test test-cli test-sdk vet fmt fmt-check lint clean tidy
+# No `lint` target — linting is `mise run lint` (golangci-lint is pinned there).
+# Never add it to .PHONY without a recipe: that makes `make lint` a silent no-op.
+.PHONY: all build install test test-cli test-sdk vet fmt fmt-check clean tidy
 
 # Derive the CLI version from the most recent `v*` tag. Exclude the parallel
 # `sdk/*` module tags: both tag families land on the same release commit, so an
@@ -42,8 +44,9 @@ vet:
 fmt:
 	@gofmt -w cmd sdk/tasks
 
+# 2>&1 folds gofmt's own diagnostics into $out so a broken invocation cannot pass.
 fmt-check:
-	@out="$$(gofmt -l cmd sdk/tasks)"; \
+	@out="$$(gofmt -l cmd sdk/tasks 2>&1)" || { echo "gofmt failed:"; echo "$$out"; exit 1; }; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi
 
 tidy:
