@@ -66,6 +66,20 @@ var (
 
 var prefixRe = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
 
+// validatePrefix checks a store ID prefix against the grammar and length bound
+// (TASK-STORAGE-SPEC §3, §4.2). The prefix is assumed already trimmed. The
+// length bound keeps every allocated ID within maxIDLen by construction (see
+// maxPrefixLen), which auto-allocated IDs otherwise rely on without checking.
+func validatePrefix(prefix string) error {
+	if !prefixRe.MatchString(prefix) {
+		return fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
+	}
+	if len(prefix) > maxPrefixLen {
+		return fmt.Errorf("invalid prefix %q: must be at most %d characters", prefix, maxPrefixLen)
+	}
+	return nil
+}
+
 // errNotFound wraps ErrNotFound with the offending ID.
 func errNotFound(id string) error {
 	return fmt.Errorf("%w: %s", ErrNotFound, id)
@@ -169,8 +183,8 @@ func openWithFS(root string, fs vfs.FS) *Store {
 // itself internal; outside callers use Init or Open.
 func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
 	prefix = strings.TrimSpace(prefix)
-	if !prefixRe.MatchString(prefix) {
-		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
+	if err := validatePrefix(prefix); err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(root, DataDirName)
 	if err := fs.MkdirAll(dir, 0o755); err != nil {
@@ -201,8 +215,8 @@ func Init(root, prefix string, opts ...Option) (*Store, error) {
 // InitCentral (central: dir = <central_root>/stores/<name>, root = project path).
 func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error) {
 	prefix = strings.TrimSpace(prefix)
-	if !prefixRe.MatchString(prefix) {
-		return nil, fmt.Errorf("invalid prefix %q: must match %s", prefix, prefixRe.String())
+	if err := validatePrefix(prefix); err != nil {
+		return nil, err
 	}
 	if _, err := fs.Stat(dir); err == nil {
 		return nil, ErrStoreExists
