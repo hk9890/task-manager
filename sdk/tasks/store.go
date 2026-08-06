@@ -1161,7 +1161,7 @@ func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
 func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
-		_, sidecarPath, err := s.prepareCommentMutation(id)
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
 		}
@@ -1178,6 +1178,7 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 		}
 
 		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentAdd, iss.ID, err)
 			return err
 		}
 		out = &c
@@ -1192,7 +1193,7 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
-		_, sidecarPath, err := s.prepareCommentMutation(id)
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
 		}
@@ -1215,6 +1216,7 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 		}
 
 		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentEdit, iss.ID, err)
 			return err
 		}
 		out = &c
@@ -1227,7 +1229,7 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 // commentID and Deleted: true. The issue .md file is NOT rewritten.
 func (s *Store) DeleteComment(id, commentID, author string) error {
 	return s.withLock(func() error {
-		_, sidecarPath, err := s.prepareCommentMutation(id)
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
 			return err
 		}
@@ -1244,7 +1246,11 @@ func (s *Store) DeleteComment(id, commentID, author string) error {
 			Deleted:  true,
 		}
 
-		return appendCommentDoc(s.fs, sidecarPath, c)
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentDelete, iss.ID, err)
+			return err
+		}
+		return nil
 	})
 }
 
@@ -1268,7 +1274,11 @@ func (s *Store) AddDep(dependent, blocker string) error {
 		if err := s.checkRefs(iss); err != nil {
 			return err
 		}
-		return s.writeIssue(iss)
+		if err := s.writeIssue(iss); err != nil {
+			s.logIOError(opDepAdd, iss.ID, err)
+			return err
+		}
+		return nil
 	})
 }
 
@@ -1287,7 +1297,11 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 		}
 		iss.BlockedBy = kept
 		iss.Updated = s.now()
-		return s.writeIssue(iss)
+		if err := s.writeIssue(iss); err != nil {
+			s.logIOError(opDepRemove, iss.ID, err)
+			return err
+		}
+		return nil
 	})
 }
 
@@ -1315,7 +1329,11 @@ func (s *Store) AddRelated(issueID, otherID string) error {
 		if err := s.checkRefs(iss); err != nil {
 			return err
 		}
-		return s.writeIssue(iss)
+		if err := s.writeIssue(iss); err != nil {
+			s.logIOError(opRelAdd, iss.ID, err)
+			return err
+		}
+		return nil
 	})
 }
 
@@ -1347,6 +1365,7 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 		if removeRef(iss, otherID) {
 			iss.Updated = s.now()
 			if err := s.writeIssue(iss); err != nil {
+				s.logIOError(opRelRemove, iss.ID, err)
 				return err
 			}
 		}
@@ -1369,7 +1388,10 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 		}
 		if removeRef(other, issueID) {
 			other.Updated = s.now()
-			return s.writeIssue(other)
+			if err := s.writeIssue(other); err != nil {
+				s.logIOError(opRelRemove, other.ID, err)
+				return err
+			}
 		}
 		return nil
 	})

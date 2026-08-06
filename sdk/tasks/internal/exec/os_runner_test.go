@@ -131,6 +131,43 @@ func TestOSRunner_Timeout(t *testing.T) {
 	}
 }
 
+// A timed-out hook must take its children with it. HOOK-SPEC §3.2 points
+// projects at ["sh", "-c", ...], so the process taskmgr spawns is usually a
+// shell whose real work happens in children. Signalling only that shell leaves
+// the children running and holding the captured pipes, which (a) stalls Wait for
+// the full KillGrace on top of hook_timeout, doubling the lock hold, and (b)
+// orphans them afterwards.
+func TestOSRunner_TimeoutKillsChildren(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "survived")
+	// A backgrounded grandchild that would touch the marker shortly after the
+	// timeout, and a foreground sleep that holds the shell (and the pipes) open.
+	// Job control is off in a non-interactive shell, so the background job stays
+	// in the shell's process group and a group signal reaches it.
+	script := "(sleep 1; touch " + marker + ") & sleep 30"
+
+	r := NewOS()
+	start := time.Now()
+	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 100 * time.Millisecond})
+	elapsed := time.Since(start)
+
+	if res.Category != Timeout {
+		t.Fatalf("got category=%v, want Timeout", res.Category)
+	}
+	// The pipes must close as soon as the group dies. Waiting out KillGrace here
+	// is the regression: it means a child outlived the signal.
+	if elapsed >= KillGrace {
+		t.Errorf("Run took %v (>= KillGrace %v): a child survived the timeout signal and held the pipes", elapsed, KillGrace)
+	}
+
+	// Give the grandchild more than its sleep to prove it is gone, not just slow.
+	time.Sleep(1500 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("grandchild survived the timeout and kept running (orphaned)")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat marker: %v", err)
+	}
+}
+
 func TestOSRunner_TimeoutZeroDisables(t *testing.T) {
 	r := NewOS()
 	res := r.Run(Spec{Argv: []string{"sh", "-c", "exit 0"}, Timeout: 0})

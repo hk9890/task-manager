@@ -35,7 +35,30 @@ import (
 // gives the process KillGrace to exit before os/exec sends SIGKILL. This is the
 // SIGTERM-then-SIGKILL grace of HOOK-SPEC §7, implemented without a manual
 // goroutine.
+//
+// The hook runs in its own process group so the timeout signal reaches its whole
+// tree, not just the process taskmgr spawned — see killGroup.
 type osRunner struct{}
+
+// killGroup signals the entire process group led by pid. Hooks are started with
+// Setpgid, so a hook's process-group id equals its pid and the negated pid
+// addresses the group.
+//
+// Signalling the group rather than the single child matters because HOOK-SPEC
+// §3.2 points projects at ["sh", "-c", ...] for shell features: the shell exits
+// on SIGTERM but its children do not receive it, keep running, and keep the
+// captured stdout/stderr pipes open. os/exec then cannot finish Wait until
+// WaitDelay expires, so the store lock is held for the full KillGrace on top of
+// hook_timeout (HOOK-SPEC §8) and the children are orphaned afterwards.
+//
+// pid must be positive: kill(-0) would signal taskmgr's own process group and
+// kill(-1) every process the user can reach.
+func killGroup(pid int, sig syscall.Signal) error {
+	if pid <= 0 {
+		return nil
+	}
+	return syscall.Kill(-pid, sig)
+}
 
 func (osRunner) Run(spec Spec) Result {
 	if len(spec.Argv) == 0 {
@@ -58,9 +81,17 @@ func (osRunner) Run(spec Spec) Result {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// On timeout, send SIGTERM (default would be SIGKILL); WaitDelay then upgrades
-	// to SIGKILL after KillGrace if the process has not exited.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	// Run the hook in its own process group so a timeout can signal its whole
+	// tree (killGroup). This also detaches the hook from the terminal's
+	// foreground group, so a Ctrl-C aimed at taskmgr no longer reaches it — the
+	// hook is bounded by hook_timeout instead.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// On timeout, send SIGTERM to the whole group (the default would SIGKILL the
+	// spawned process alone); WaitDelay then upgrades to SIGKILL after KillGrace
+	// if it has not exited. A hook that ignores SIGTERM therefore still costs
+	// hook_timeout + KillGrace, which is the documented ceiling (HOOK-SPEC §8).
+	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = KillGrace
 
 	start := time.Now()

@@ -60,7 +60,7 @@ func (s *Store) gateWrite(hs *hookSet, trans transition, old, newIss *Issue, idx
 		return hints, denial
 	}
 	if err := write(); err != nil {
-		s.logIOError(trans, newIss.ID, err)
+		s.logIOError(string(trans), newIss.ID, err)
 		return hints, err
 	}
 	s.logWrite(trans, newIss.ID)

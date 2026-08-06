@@ -19,7 +19,10 @@
 // in-memory issues and return values, so they unit-test at L1.
 package tasks
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // transition is the single lifecycle transition a mutation performs. Each maps
 // to a pre-event and a post-event (HOOK-SPEC §2).
@@ -34,6 +37,12 @@ const (
 
 func (t transition) preEvent() string  { return "pre-" + string(t) }
 func (t transition) postEvent() string { return "post-" + string(t) }
+
+// isPostEvent reports whether event names a post-transition event. It is the
+// pre/post discriminator for code that only has the event string: post-hooks run
+// after the write and outside the lock, so they neither deny nor cost lock time
+// (HOOK-SPEC §4/§8).
+func isPostEvent(event string) bool { return strings.HasPrefix(event, "post-") }
 
 // classify picks the single transition for a mutation by comparing the proposed
 // new issue to the prior old issue (HOOK-SPEC §2.1). old is nil for a create.
