@@ -124,7 +124,9 @@ var updateCmd = &cobra.Command{
 	},
 }
 
-var closeReason string
+var closeFlags struct {
+	reason string
+}
 
 var closeCmd = &cobra.Command{
 	Use:   "close <id>",
@@ -135,7 +137,7 @@ var closeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		res, err := s.Close(args[0], closeReason)
+		res, err := s.Close(args[0], closeFlags.reason)
 		if err != nil {
 			return mutationError(err)
 		}
@@ -259,10 +261,22 @@ var commentCmd = &cobra.Command{
 	Short:   "Manage issue comments",
 }
 
-var commentFlags struct {
-	author string
-	file   string
-}
+// Each comment subcommand gets its own flag struct. They shared one, which made
+// per-subcommand defaults impossible and coupled three commands through a
+// variable none of their code mentions.
+var (
+	commentAddFlags struct {
+		author string
+		file   string
+	}
+	commentEditFlags struct {
+		author string
+		file   string
+	}
+	commentRmFlags struct {
+		author string
+	}
+)
 
 // defaultUser returns s, or $USER when s is empty.
 func defaultUser(s string) string {
@@ -311,13 +325,13 @@ var commentAddCmd = &cobra.Command{
 		if argGiven {
 			arg = args[1]
 		}
-		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+		body, err := resolveCommentBody(cmd, commentAddFlags.file, arg, argGiven,
 			"comment body is empty",
 			"provide a comment body as an argument or via --file")
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentAddFlags.author)
 		c, err := s.AddComment(args[0], author, body)
 		if err != nil {
 			return err
@@ -344,13 +358,13 @@ var commentEditCmd = &cobra.Command{
 		if argGiven {
 			arg = args[2]
 		}
-		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+		body, err := resolveCommentBody(cmd, commentEditFlags.file, arg, argGiven,
 			"comment body is empty; use comment rm to delete",
 			"provide a body as an argument or via --file")
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentEditFlags.author)
 		c, err := s.EditComment(args[0], args[1], author, body)
 		if err != nil {
 			return err
@@ -372,7 +386,7 @@ var commentRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentRmFlags.author)
 		if err := s.DeleteComment(args[0], args[1], author); err != nil {
 			return err
 		}
@@ -446,20 +460,20 @@ func init() {
 	uf.StringSliceVar(&updateFlags.setLabels, "set-labels", nil, "replace the label set")
 	uf.BoolVar(&updateFlags.clearLabels, "clear-labels", false, "remove all labels")
 
-	closeCmd.Flags().StringVar(&closeReason, "reason", "", "reason for closing")
+	closeCmd.Flags().StringVar(&closeFlags.reason, "reason", "", "reason for closing")
 
 	rootCmd.AddCommand(reopenCmd)
 
 	depCmd.AddCommand(depAddCmd, depRmCmd)
 	relCmd.AddCommand(relAddCmd, relRmCmd)
 
-	commentAddCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
-	commentAddCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
+	commentAddCmd.Flags().StringVar(&commentAddFlags.author, "author", "", "comment author (default: $USER)")
+	commentAddCmd.Flags().StringVar(&commentAddFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
-	commentEditCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
-	commentEditCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
+	commentEditCmd.Flags().StringVar(&commentEditFlags.author, "author", "", "comment author (default: $USER)")
+	commentEditCmd.Flags().StringVar(&commentEditFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
-	commentRmCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author for tombstone (default: $USER)")
+	commentRmCmd.Flags().StringVar(&commentRmFlags.author, "author", "", "comment author for tombstone (default: $USER)")
 
 	commentCmd.AddCommand(commentAddCmd, commentEditCmd, commentRmCmd)
 

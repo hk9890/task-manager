@@ -25,6 +25,7 @@ func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // 
 func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
 func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
+func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
@@ -87,6 +88,14 @@ const FileExt        = ".md"         // the per-issue file extension
   yields an empty slice, a corrupt one an error. It takes **no arguments**: the
   registry is global, so there is nothing a working directory or a store-name
   override could select.
+- **`DerivePrefix`** turns a project path into the default ID prefix for a store
+  tracking it (CONFIG-SPEC §5): base name lowercased, non-alphanumerics stripped,
+  leading digits removed, truncated to 8, falling back to `task`. `Init` and
+  `InitCentral` apply it themselves when `prefix` is empty; it is exported so a
+  front end can *show* the default before creating anything, and so no front end
+  has to re-implement it. That matters because the prefix is stamped into every
+  ID the store ever allocates and cannot be changed retroactively — two callers
+  deriving it differently is unrecoverable.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
   logger the store writes observability records to (hook timing, writes, IO errors;
   see [MONITORING.md](../MONITORING.md)); without it the store is silent. The SDK does not read

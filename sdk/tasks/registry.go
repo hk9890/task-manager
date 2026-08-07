@@ -375,7 +375,7 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	}
 
 	if strings.TrimSpace(prefix) == "" {
-		prefix = derivePrefix(project)
+		prefix = DerivePrefix(project)
 	}
 	dir := filepath.Join(croot, storesSubdir, name)
 	s, err := initData(project, dir, prefix, fs, opts)

@@ -103,8 +103,8 @@ func TestDerivePrefix(t *testing.T) {
 		"/home/u/999":        "task",     // nothing usable
 	}
 	for in, want := range cases {
-		if got := derivePrefix(in); got != want {
-			t.Errorf("derivePrefix(%q) = %q, want %q", in, got, want)
+		if got := DerivePrefix(in); got != want {
+			t.Errorf("DerivePrefix(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -151,7 +151,9 @@ var searchCmd = &cobra.Command{
 	},
 }
 
-var readyLimit int
+var readyFlags struct {
+	limit int
+}
 
 var readyCmd = &cobra.Command{
 	Use:   "ready",
@@ -166,8 +168,8 @@ var readyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if readyLimit > 0 && len(issues) > readyLimit {
-			issues = issues[:readyLimit]
+		if readyFlags.limit > 0 && len(issues) > readyFlags.limit {
+			issues = issues[:readyFlags.limit]
 		}
 		return emitIssues(issues)
 	},
@@ -276,6 +278,6 @@ var typesCmd = &cobra.Command{
 func init() {
 	addFilterFlags(listCmd, &listFilter)
 	addFilterFlags(searchCmd, &searchFilter)
-	readyCmd.Flags().IntVar(&readyLimit, "limit", 0, "maximum number of results (0 = all)")
+	readyCmd.Flags().IntVar(&readyFlags.limit, "limit", 0, "maximum number of results (0 = all)")
 	rootCmd.AddCommand(listCmd, searchCmd, readyCmd, blockedCmd, labelsCmd, statusesCmd, typesCmd)
 }
