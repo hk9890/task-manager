@@ -48,6 +48,8 @@ ordinary store — which is what makes relocating one a plain folder move.
 │   ├── proj-3k9f2x.yml          #   (cold; never parsed by the hot scan)
 │   ├── proj-8mq04b.yml
 │   └── proj-w1e7hd.yml          #   a closed issue keeps its sidecar here
+├── content/                     # body sidecars for issues whose body overflowed
+│   └── proj-8mq04b              #   (§4.6; no extension; never read by the hot scan)
 └── closed/                      # closed task files (cold, immutable)
     └── proj-w1e7hd.md
 ```
@@ -58,8 +60,12 @@ Rules:
   not from the directory name (which is `.tasks` for a local store, or the store's
   subfolder name under a central root — see [CONFIG-SPEC.md](CONFIG-SPEC.md)).
 - The **hot set** is the store's top level: the `*.md` task files of non-closed
-  issues. `closed/` and `comments/` are subdirectories and are excluded from the
-  hot scan by construction (the scan ignores subdirectories).
+  issues. `closed/`, `comments/` and `content/` are subdirectories and are
+  excluded from the hot scan by construction (the scan ignores subdirectories).
+- The hot scan reads each `*.md` **in full**, so the cost of "list the active
+  work" is the total size of those files, not merely their count. §4.6 is what
+  bounds it: no file in the hot directory exceeds ~64 KiB, whatever a caller
+  pastes into an issue.
 - A reader resolving a single issue or a reference may descend into `closed/`; the
   bulk "list active work" path never does.
 
@@ -97,7 +103,7 @@ an epic is just an issue that others name as `parent`.
 
 ## 4. File types
 
-Five file types exist. Each section gives the path, purpose, format, schema, and a
+Six file types exist. Each section gives the path, purpose, format, schema, and a
 concrete example.
 
 ### 4.1 Store root
@@ -106,7 +112,7 @@ concrete example.
 |---|---|
 | **Path** | `.tasks/` |
 | **Role** | Marker directory that anchors store discovery and holds the project. |
-| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/` and `closed/` subdirectories. |
+| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/`, `content/` and `closed/` subdirectories. |
 
 ### 4.2 Project config — `config.yaml`
 
@@ -183,6 +189,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `updated` | timestamp | yes | always |
 | `closed` | timestamp | no | status is `closed` |
 | `close_reason` | string | no | status is `closed` and a reason was given |
+| `body_external` | bool | no | the body lives in the content sidecar (§4.6) |
 
 **Field constraints** (rejected before any byte is written):
 
@@ -191,7 +198,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `id` | `^[a-z][a-z0-9]*-[0-9a-z]+$`, max 64; equals the filename stem. |
 | `title` | 1–200 chars after trim; single line (no `LF`); no control characters. |
 | `status` | exactly one of `open`, `in_progress`, `blocked`, `deferred`, `closed`. |
-| `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`. |
+| `type` | exactly one of `task`, `bug`, `feature`, `epic`, `chore`, `doc`. |
 | `priority` | integer `0`–`4` (0 = critical … 4 = trivial); default `2`. |
 | `assignee` | 0–128 chars; single line; no control characters. |
 | `creator` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
@@ -201,12 +208,22 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `related` | 0–256 items; each a valid ID; unique; no self. |
 | `created` / `updated` / `closed` | `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$` (§6). |
 | `close_reason` | 0–4096 chars; may be multi-line (block scalar). |
-| body (description) | 0–65536 bytes; verbatim markdown; trimmed of leading/trailing blank lines only. |
+| `body_external` | bool; omitted when false. Written by the store only (§4.6); never set by a caller. |
+| body (description) | Unbounded, but **at most 65536 bytes are stored in this file** — beyond that it moves to the content sidecar (§4.6). Verbatim markdown; trimmed of leading/trailing blank lines only. |
 
 - **Body.** Everything after the closing `---` is the issue's free-form markdown
   description, stored **verbatim**. Because it is the body and not a YAML scalar,
   it is immune to YAML escaping — code fences, tables, and trailing whitespace
-  survive unchanged.
+  survive unchanged. A body over the inline cap is not in this file at all; see
+  §4.6.
+- **`type: doc`.** A document — a design page, a session note, a handover, a
+  review — is an ordinary issue whose type is `doc`. It shares the ID namespace,
+  the commands, and the lifecycle of every other issue. It differs in exactly one
+  way: it is not work, so it never appears as ready or blocked (§9). Its
+  `status`, `priority` and `assignee` are therefore carried but carry no meaning.
+  Which *kind* of document it is belongs in labels (`kind:design`,
+  `kind:session`, `kind:handover`, `kind:review`), not in the type enum, so a new
+  kind costs no schema change.
 - **No `comments` in frontmatter.** Comments live in the sidecar (§4.4). This keeps
   task files small so the hot scan stays cheap.
 
@@ -307,6 +324,62 @@ deleted: true
 | **Role** | Advisory exclusive write lock for the store (§7). Not an issue; never parsed. |
 | **Format** | Empty; only its `flock` state matters. |
 
+### 4.6 Content sidecar — `content/<id>`
+
+| | |
+|---|---|
+| **Path** | `.tasks/content/<id>` (no extension) |
+| **Role** | Holds an issue's body when it is too large to keep in the `.md`. Created lazily on the first write that overflows. |
+| **Format** | The body verbatim, exactly as it would have appeared after the closing `---`. Not YAML, not framed, no header. |
+
+An issue body over **65536 bytes** (`MaxInlineBody`) is written here instead of
+into the task file, and the task file records `body_external: true` with an empty
+body. This applies to **every issue type**, not only `doc`.
+
+> **Why.** The hot scan reads whole files (§2). Without a ceiling, one pasted log
+> or one generated HTML page makes every `list`, `ready` and `search` in the store
+> pay for it forever. Overflow makes "no hot file exceeds ~64 KiB" an invariant of
+> the format rather than a matter of discipline.
+
+**Rules:**
+
+1. **The flag is authoritative, not the file's existence.** A reader consults
+   `body_external`: when false the body is the `.md`'s own, and any file at
+   `content/<id>` is ignored entirely; when true the body is the sidecar's. This
+   is load-bearing — see rule 4.
+2. **Hysteresis.** A body splits out when it exceeds 65536 bytes, and returns
+   inline only once it drops below **32768** bytes; between the two watermarks
+   the current layout is kept. Without the gap, an issue hovering at the cap
+   would change layout on every edit, and each change moves the whole body
+   between two files — a maximal diff in both directions.
+3. **The path is derived, never stored.** It is always `content/` + the issue ID,
+   with no extension. Nothing user-supplied reaches a filesystem path, so
+   traversal is impossible by construction rather than by validation. The
+   trade-off is accepted: the format does not record whether the bytes are HTML,
+   markdown or a log, and a reader that needs to know must be told by convention
+   (e.g. a `format:html` label) or sniff.
+4. **Write order is the crash contract.** A write touches two files and is *not*
+   a single transaction. The `.md` is therefore written **last on a split** (after
+   the sidecar) and **first on a join** (before the sidecar is removed). Either
+   way a crash between the two leaves the `.md` and the body it names in
+   agreement, and a sidecar nothing points at is inert garbage — never a silent
+   override that resurrects an older body. Orphans are tolerated; nothing
+   collects them.
+   - Residual, accepted: on a split where the body was *already* external, a
+     crash between the two writes can leave the new body beside the previous
+     frontmatter. Nothing is silently reverted; the alternative is a journal.
+5. **Sidecars do not move.** Closing an issue moves only its `.md` into
+   `closed/`; the content sidecar stays at `content/<id>`, exactly as the comment
+   sidecar does (§4.4 rule 6). No sidecar path ever changes.
+6. **A closed issue's content sidecar is immutable**, like its `.md` (§5). The
+   comment sidecar remains the one append-after-close exception.
+7. **Comments never overflow.** A comment body is capped at 65536 bytes and
+   rejected above it (§10). One sidecar holds an issue's whole comment stream, so
+   an unbounded comment would be re-parsed on every read of every comment on that
+   issue, and an overflowing one would need a per-comment file whose lifetime had
+   to track edits and tombstones. Content that large belongs in a `doc` issue,
+   `related` to this one.
+
 ---
 
 ## 5. Lifecycle, partitions, and immutability
@@ -318,11 +391,13 @@ An issue is **active** while its file lives in the store's hot directory and
   sit in the hot directory.
 - **Closing** an issue: set `status: closed`, set the `closed` timestamp (and
   `close_reason` if given), bump `updated`, then **move** the task `.md` into
-  `closed/`. The comment sidecar stays in `comments/` (only the task file moves).
-  The move is a git rename — history is preserved.
+  `closed/`. Both sidecars stay where they are — the comment sidecar in
+  `comments/` and the content sidecar in `content/` — because only the task file
+  moves. The move is a git rename — history is preserved.
 - **Closed files are immutable in place.** While a file resides in `closed/`, no
-  in-place write to it is allowed — the one exception is its append-only comment
-  sidecar (§4.4.6). Reopening is **not** an in-place edit: it moves the file out of
+  in-place write to it is allowed. This covers its content sidecar (§4.6 rule 6)
+  as well as the `.md`; the one exception is its append-only comment sidecar
+  (§4.4.6). Reopening is **not** an in-place edit: it moves the file out of
   `closed/` first, then edits it in the hot directory (see below).
 - **Reopening** moves the file back to the hot directory, clears `closed` /
   `close_reason`, sets `status: open`, bumps `updated`, and re-enables writes.
@@ -353,6 +428,10 @@ An issue is **active** while its file lives in the store's hot directory and
   with an `O_APPEND` + `fsync` write rather than rewritten (a newly created
   sidecar still triggers a parent-dir `fsync`). Both forms happen under the store
   lock (§7).
+- **Atomic per file, not across files.** Every individual write above is atomic.
+  A body overflow (§4.6) writes *two* files — the `.md` and the content sidecar —
+  and that pair is deliberately not a transaction. §4.6 rule 4 fixes the order so
+  that every crash point leaves a consistent, readable issue.
 
 ---
 
@@ -395,12 +474,20 @@ There is no same-type constraint: any issue may parent or block any other.
 
 ## 9. Ready / blocked semantics
 
-- **Ready** = `status: open` issues whose every `blocked_by` is closed. A blocker
-  that exists in `closed/` counts as resolved; a reference that exists in neither
-  the hot directory nor `closed/` is a dangling reference and is a validation
-  error, not silently treated as satisfied. Ordering: priority (most urgent
-  first), then oldest `created`, then ID.
-- **Blocked** = non-closed issues with at least one open blocker.
+- **Ready** = `status: open` issues **of a work type** whose every `blocked_by`
+  is closed. A blocker that exists in `closed/` counts as resolved; a reference
+  that exists in neither the hot directory nor `closed/` is a dangling reference
+  and is a validation error, not silently treated as satisfied. Ordering:
+  priority (most urgent first), then oldest `created`, then ID.
+- **Blocked** = non-closed issues **of a work type** with at least one open
+  blocker.
+- **Work type** = every type except `doc`. A document is not something to be
+  done, so it is excluded from both sets by construction; otherwise every open
+  design note would sit permanently at the head of the ready queue. The exclusion
+  is a property of the engine, not of a caller's filter, so the `ready` /
+  `blocked` query predicates (QUERY-SPEC §3) give the same answer as the
+  corresponding read methods. Documents are excluded from these two views only —
+  they remain fully visible to `list`, `search`, and every filter expression.
 - **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection).
 
 Ready/blocked are **derived from the dependency graph, not from the `status`
@@ -424,6 +511,10 @@ A writer rejects, before anything touches disk:
 - dependency cycles;
 - an issue ID whose prefix does not match the store's configured `prefix`;
 - a comment body that would serialize as a double-quoted (escaped) scalar;
+- a comment body over 65536 bytes — comments do not overflow (§4.6 rule 7);
 - a comment with neither a `body` nor `deleted: true`;
 - a comment `replaces` that does not name an existing earlier comment in the same
   issue.
+
+An issue body is **not** rejected for being large: it overflows to the content
+sidecar instead (§4.6).

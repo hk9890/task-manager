@@ -69,6 +69,12 @@ func (s *Store) closedStatFn() func(id string) bool {
 
 // Ready returns open issues with no unresolved blockers, ordered by priority
 // (most urgent first) then creation time.
+//
+// Documents (type doc) are never ready: they are not work, so an open one would
+// otherwise sit at the top of the queue forever (TASK-STORAGE-SPEC §9). The
+// exclusion lives here, in the engine, rather than in a caller's filter, so
+// every consumer — the CLI, the `ready` query predicate, any future UI — agrees
+// without having to remember it.
 func (s *Store) Ready() ([]*Issue, error) {
 	idx, all, err := s.index()
 	if err != nil {
@@ -77,7 +83,7 @@ func (s *Store) Ready() ([]*Issue, error) {
 	closedStat := s.closedStatFn()
 	var ready []*Issue
 	for _, iss := range all {
-		if iss.Status != StatusOpen {
+		if iss.Status != StatusOpen || !iss.Type.IsWork() {
 			continue
 		}
 		if len(openBlockers(idx, closedStat, iss)) == 0 {
@@ -96,6 +102,10 @@ type BlockedIssue struct {
 
 // Blocked returns non-closed issues that have at least one open blocker, with
 // the blocking issues resolved to refs.
+//
+// Documents (type doc) are excluded for the same reason they are excluded from
+// Ready: they are not work, so "blocked work" should never surface one
+// (TASK-STORAGE-SPEC §9).
 func (s *Store) Blocked() ([]BlockedIssue, error) {
 	idx, all, err := s.index()
 	if err != nil {
@@ -104,7 +114,7 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 	closedStat := s.closedStatFn()
 	var blocked []BlockedIssue
 	for _, iss := range all {
-		if iss.Status.IsClosed() {
+		if iss.Status.IsClosed() || !iss.Type.IsWork() {
 			continue
 		}
 		open := openBlockers(idx, closedStat, iss)
@@ -151,6 +161,14 @@ func (s *Store) Detail(id string) (*Detail, error) {
 		}
 	}
 	d := &Detail{Issue: *iss}
+	// The index is a bulk read, so an overflowed body arrives empty. Detail is a
+	// single-issue path and resolves it, like Get. BodyExternal records where the
+	// bytes actually live, which the embedded Issue can no longer say once its
+	// flag is cleared — a viewer uses it to warn before rendering a huge body.
+	d.BodyExternal = d.bodyExternal
+	if err := s.resolveBody(&d.Issue); err != nil {
+		return nil, err
+	}
 
 	// resolveRef returns a Ref for id, first from the hot index and, if absent,
 	// by falling through to closed/ via Get (cheap: closed reads are lock-free).
@@ -423,6 +441,12 @@ func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 	// already contains closed issues (Stat would be redundant but harmless).
 	closedStat := s.closedStatFn()
 
+	// The "text" virtual field spans the body (QUERY-SPEC §2), so an expression
+	// that uses it must see overflowed bodies too — otherwise a large issue would
+	// be silently unmatchable. Sidecars are read ONLY for such an expression:
+	// structured filters never look at a body, and neither should they pay to.
+	needText := f.Expr != "" && query.ReferencesText(f.Expr)
+
 	var matches []*Issue
 	for _, iss := range all {
 		// Scope guard: exclude closed issues unless the caller opted in.
@@ -430,8 +454,19 @@ func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 			continue
 		}
 
-		// Expression filter: evaluate using the compiled predicate and the Row adapter.
-		row := newIssueRow(iss, idx, closedStat)
+		// Expression filter: evaluate using the compiled predicate and the Row
+		// adapter. An overflowed body is evaluated against a resolved copy so the
+		// issue that goes into the result keeps the bulk-read contract: bodies are
+		// never populated by a list path (SDK-SPEC §4).
+		subject := iss
+		if needText && iss.bodyExternal {
+			resolved, err := s.resolvedCopy(iss)
+			if err != nil {
+				return nil, err
+			}
+			subject = resolved
+		}
+		row := newIssueRow(subject, idx, closedStat)
 		if !pred.Match(row) {
 			continue
 		}

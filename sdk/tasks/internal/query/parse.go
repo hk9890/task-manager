@@ -92,7 +92,7 @@ var knownBareFields = map[string]bool{
 // the drift that caused the deferred-status bug (issue #21, issue #22).
 var (
 	validStatusTokens = []string{"open", "in_progress", "blocked", "deferred", "closed"}
-	validTypeTokens   = []string{"task", "bug", "feature", "epic", "chore"}
+	validTypeTokens   = []string{"task", "bug", "feature", "epic", "chore", "doc"}
 
 	validStatusValues = tokenSet(validStatusTokens)
 	validTypeValues   = tokenSet(validTypeTokens)
@@ -430,6 +430,35 @@ func nodeReferencesClosedWork(n Node) bool {
 			return true
 		}
 		return false
+	}
+	return false
+}
+
+// ReferencesText reports whether the expression compares against the "text"
+// virtual field, and therefore needs each issue's body to evaluate.
+//
+// Store.List uses this to decide whether to read content sidecars for issues
+// whose bodies overflowed. Structured filters (status, type, priority, labels,
+// dates) never touch a body, so they must not pay for one — and `list` with no
+// text term at all is the common path. Like ReferencesClosedWork it parses
+// rather than guessing, so a bareword or a quoted string that merely contains
+// the word "text" does not trigger it.
+func ReferencesText(expr string) bool {
+	n, err := Parse(expr)
+	if err != nil || n == nil {
+		return false
+	}
+	return nodeReferencesText(n)
+}
+
+func nodeReferencesText(n Node) bool {
+	switch v := n.(type) {
+	case *NotNode:
+		return nodeReferencesText(v.Operand)
+	case *BinNode:
+		return nodeReferencesText(v.Left) || nodeReferencesText(v.Right)
+	case *CmpNode:
+		return v.Field == "text"
 	}
 	return false
 }

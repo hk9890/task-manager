@@ -165,6 +165,14 @@ and is the text the `text` query field searches (QUERY-SPEC.md §2). Comments ar
 **not** carried on `Issue`; they live in the sidecar and are loaded on demand
 (§4, `Detail` / `Comments`).
 
+**`Description` is not populated by every read.** A body over `MaxInlineBody`
+lives in a content sidecar (TASK-STORAGE-SPEC §4.6). `Get` and `Detail` resolve
+it; the bulk read paths deliberately do not, and return an empty `Description`
+for such an issue — see §4. Where the body is stored is otherwise not exposed on
+`Issue`: the flag is an internal storage detail, so a caller can never construct
+an `Issue` whose flag disagrees with its `Description`, and any issue handed back
+by `Get`, `Detail` or `ResolveBody` is safe to pass to `Marshal`.
+
 ### `Comment`
 
 ```go
@@ -191,8 +199,14 @@ type Detail struct {
     Blocks        []Ref  // derived: issues blocked by this one
     Children      []Ref  // derived: issues whose parent is this one
     Comments      []Comment
+    BodyExternal  bool   // the body came from the content sidecar, not the .md
 }
 ```
+
+`Detail` always carries a fully resolved `Description`. `BodyExternal` only says
+where the bytes were stored (TASK-STORAGE-SPEC §4.6) — it is the one public place
+that reports this, and is informational: a viewer can use it to say where the
+content lives, or to warn before rendering a very large body.
 
 ### Enums and bounds
 
@@ -204,12 +218,22 @@ func (s Status) Valid() bool
 func (s Status) IsClosed() bool
 
 type Type string
-const ( TypeTask; TypeBug; TypeFeature; TypeEpic; TypeChore )
+const ( TypeTask; TypeBug; TypeFeature; TypeEpic; TypeChore; TypeDoc )
 var Types []Type
 func (t Type) Valid() bool
+func (t Type) IsWork() bool   // false only for TypeDoc
 
 const ( PriorityMin = 0; PriorityMax = 4; PriorityDefault = 2 )
+
+// Body storage bounds (TASK-STORAGE-SPEC §4.6).
+const (
+    MaxInlineBody  = 65536 // above this, an issue body moves to the content sidecar
+    MaxCommentBody = 65536 // hard cap: comments are rejected above this, never overflowed
+)
 ```
+
+`TypeDoc` is an ordinary issue type in every respect except that `IsWork` reports
+false, which is what keeps documents out of `Ready` and `Blocked` (§4).
 
 ### `Config`
 
@@ -453,12 +477,38 @@ func (s *Store) List(f Filter) ([]*Issue, error)      // Query + scope/sort/offs
 func (s *Store) ListPage(f Filter) (Page, error)      // List window + total match count (paging)
 func (s *Store) Find(c Criteria, opt FindOptions) ([]*Issue, error)  // Criteria.Build + List
 func (s *Store) FindPage(c Criteria, opt FindOptions) (Page, error)  // Criteria.Build + ListPage
-func (s *Store) Ready() ([]*Issue, error)             // open, no open blockers
-func (s *Store) Blocked() ([]BlockedIssue, error)     // non-closed with an open blocker
+func (s *Store) Ready() ([]*Issue, error)             // open work, no open blockers (never docs)
+func (s *Store) Blocked() ([]BlockedIssue, error)     // non-closed work with an open blocker (never docs)
 func (s *Store) Detail(id string) (*Detail, error)    // issue + resolved + derived edges + comments
 func (s *Store) Labels() ([]string, error)            // distinct labels, sorted
 func (s *Store) Comments(id string) ([]Comment, error)// the issue's comment log
+func (s *Store) ResolveBody(iss *Issue) error         // fill in an overflowed body; no-op otherwise
 ```
+
+#### Body resolution
+
+Reads split into two classes, and the difference is deliberate:
+
+| Method | `Description` for an overflowed issue |
+|---|---|
+| `Get`, `Detail` | **resolved** — the full body, read from the content sidecar |
+| `All`, `Query`, `List`, `ListPage`, `Find`, `FindPage`, `Ready`, `Blocked` | **empty** |
+
+A bulk path never reads a content sidecar, so listing a thousand issues can never
+materialize gigabytes no matter what they contain. `ResolveBody` is how a caller
+fills in one of them; it is safe on any issue and a no-op when the body is
+already inline. After it returns, the issue is safe to hand to `Marshal`.
+
+> **Compatibility.** Before body overflow, every read populated `Description`.
+> Code that reads a body out of a bulk result must now call `ResolveBody` (or
+> `Get`) for issues large enough to have overflowed. This is a deliberate
+> breaking change, not a deprecation: there is no flag to restore the old
+> behaviour.
+
+The one exception to "bulk paths do not read sidecars" is invisible from the
+outside: an expression that uses the `text` field is evaluated against a resolved
+copy, because `text` spans the body (QUERY-SPEC.md §2). The issues *returned* are
+still unresolved, so the table above holds unconditionally.
 
 ```go
 type BlockedIssue struct {
@@ -512,8 +562,12 @@ type FindOptions struct {
   `Type`, or a negative priority bound), that error is returned and no scan runs.
 - **`Ready`** / **`Blocked`** / **`Labels`** are always hot-only. They are O(open)
   and never read `closed/`. Use `List(Filter{IncludeClosed:true})` for history.
+- **`Ready`** / **`Blocked`** additionally exclude `TypeDoc`: a document is not
+  work (TASK-STORAGE-SPEC §9). The bare `ready` / `blocked` query predicates apply
+  the same exclusion, so the two surfaces cannot disagree.
 - **`Detail`** resolves `ParentRef`, `BlockedBy`, `Related`, computes `Blocks` and
-  `Children` by scanning, and loads `Comments` from the sidecar.
+  `Children` by scanning, loads `Comments` from the sidecar, and resolves an
+  overflowed body (reporting its origin in `BodyExternal`).
 - **`Comments`** / **`Detail.Comments`** return the **resolved effective log**: each
   `replaces`-chain collapsed to its newest document, tombstoned comments omitted
   (storage spec §4.4). The on-disk stream keeps full history; the API returns the
@@ -615,6 +669,15 @@ func Unmarshal(data []byte) (*Issue, error) // file bytes → Issue
 
 Exposed for tools that need to read or render a single file without a `Store`.
 Output conforms to the storage spec (frontmatter + verbatim markdown body).
+
+`Marshal` is unchanged by body overflow: it always writes the `Description` it is
+given, inline, and never errors on size. Splitting a large body across the `.md`
+and the content sidecar is the **store's** job (TASK-STORAGE-SPEC §4.6), not the
+serializer's — which keeps this function pure and preserves the round-trip
+property that anything `Unmarshal` accepts, `Marshal` re-emits. The consequence
+is that a caller who marshals an issue and writes the bytes into the hot
+directory themselves can produce an oversized file; going through `Store` is what
+maintains the invariant.
 
 ---
 

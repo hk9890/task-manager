@@ -45,7 +45,7 @@ project you run it from; pass -C <path> to target a project elsewhere.
 
 Each issue has a type, a status, and a numeric priority:
 
-  type      task (default) · bug · feature · epic · chore
+  type      task (default) · bug · feature · epic · chore · doc
   status    open · in_progress · blocked · deferred · closed
   priority  0 critical · 1 high · 2 normal (default) · 3 low · 4 trivial
 
@@ -61,6 +61,19 @@ Two views are derived from the dependency graph:
   ready    open issues with no open blockers — what you can start now
            (epics appear here too; add type != epic for leaf tasks only)
   blocked  non-closed issues waiting on at least one open blocker
+
+Documents (type doc) never appear in either view — they are not work. They are
+otherwise ordinary issues: listed, searchable, closable, and linkable with
+related. Use them for design pages, session notes, handovers and reviews, and
+say which kind in a label (kind:design, kind:session, ...):
+
+  taskmgr create --title "Auth redesign" --type doc \
+      --label kind:design --description-file page.html
+  taskmgr rel add <doc-id> <task-id>
+
+A body of any size is accepted; large ones are stored beside the issue rather
+than in it. show truncates a long body and says so — use --json when you need
+all of it.
 
 IDs are opaque (e.g. rep-fev72z), not sequential. Never guess one — capture it
 from --json output and reuse it.

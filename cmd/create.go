@@ -107,7 +107,7 @@ func init() {
 	f.StringVar(&createFlags.title, "title", "", "issue title (required)")
 	f.StringVar(&createFlags.description, "description", "", "issue description (markdown body)")
 	f.StringVar(&createFlags.descriptionFile, "description-file", "", `read description from a file ("-" for stdin)`)
-	f.StringVar(&createFlags.typ, "type", "task", "issue type (task|bug|feature|epic|chore)")
+	f.StringVar(&createFlags.typ, "type", "task", "issue type (task|bug|feature|epic|chore|doc)")
 	f.IntVar(&createFlags.priority, "priority", tasks.PriorityDefault, "priority 0 (critical) .. 4 (trivial)")
 	f.StringVar(&createFlags.assignee, "assignee", "", "assignee")
 	f.StringVar(&createFlags.creator, "creator", "", "creator — who filed the issue; recorded once at creation (default: $USER)")

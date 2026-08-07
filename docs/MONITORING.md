@@ -49,6 +49,15 @@ A *failed* write is logged in every case, transition or not: `io_error` carries
 `op=comment_add|comment_edit|comment_delete|dep_add|dep_remove|rel_add|rel_remove`
 otherwise. Nothing fails silently.
 
+`op` names the **operation**, never the file. A write that overflows a large body
+touches two files — the task `.md` and the content sidecar
+([TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md) §4.6) — and a failure of either
+emits one `io_error` under the operation's own `op`, because the sidecar write
+happens inside the same gated closure. So a failed content write during a
+dependency edit logs `op=dep_add`, not a storage-layer name. The sidecar is
+written before the `.md`, so such a failure leaves the issue's previous body
+intact and readable.
+
 ### `deny` vs `warn` vs `error`
 
 The three non-allow outcomes answer different questions, and conflating them
