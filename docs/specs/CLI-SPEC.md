@@ -19,14 +19,12 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|---|
 | `--json` | off | Emit machine-readable JSON instead of the human table/detail view. |
 | `-C, --dir <path>` | cwd | Start directory for locating the store; `.tasks` is found by walking up. |
-| `--store-path <path>` | — | Override resolution: operate on the store at this explicit path (no walk-up, no registry). |
-| `--store-name <name>` | — | Override resolution: operate on the central store with this registry name. Mutually exclusive with `--store-path`. |
+| `--store-name <name>` | — | Override resolution: operate on the central store with this registry name. |
 
 ### Environment variables
 
 | Variable | Meaning |
 |---|---|
-| `TASKMGR_DIR` | Store-path override, equivalent to `--store-path`; the flag wins if both are set. |
 | `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
 | `TASKMGR_LOG` | Log level for observability output: `debug`, `info`, `warn`, `error` (default `warn`; an unknown value falls back to `warn`). Records always go to stderr as text. See [MONITORING.md](../MONITORING.md). |
 
@@ -67,7 +65,7 @@ The store a command operates on is resolved by the engine (the same logic every
 front end uses), in this order — full algorithm in [CONFIG-SPEC.md](CONFIG-SPEC.md)
 §4:
 
-1. an explicit **override** — `--store-path` / `TASKMGR_DIR`, or `--store-name`;
+1. an explicit **override** — `--store-name`;
 2. otherwise **local walk-up** from `--dir` (or cwd) for a `.tasks` directory (the
    long-standing behaviour — a local store always wins);
 3. otherwise the **central registry** — if a central store is mapped to the current
@@ -118,11 +116,12 @@ Create a new store for the current project — locally by default, or centrally 
 
 ---
 
-## 2.1 Store inspection
+## 2.1 Store inspection and relocation
 
-Two read-only commands surface the central setup. Registry *editing* verbs (`store
-move` / `link` / `unlink`) are a deliberate, use-gated follow-up — until then the
-registry is one short YAML file the user can hand-edit (CONFIG-SPEC §5).
+Two read-only commands surface the central setup, and one editing verb moves a
+store between locations. `unlink` — dropping an entry — remains a use-gated
+follow-up; the registry is one short YAML file the user can hand-edit
+(CONFIG-SPEC §5).
 
 ### `taskmgr where`
 
@@ -130,8 +129,7 @@ Show which store the current working directory resolves to and **why** — the d
 for the resolution rule above. It mirrors the engine's `ResolveKind` (SDK-SPEC §1)
 verbatim, so the override distinction is not lost:
 
-- `kind`: `local` | `central` | `override_path` | `override_name`, or `none` when
-  nothing resolves.
+- `kind`: `local` | `central` | `override_name`, or `none` when nothing resolves.
 - `store_path`: the resolved store directory (omitted when `kind` is `none`).
 - `project_path`: the project the store tracks (the store's parent for a local store;
   omitted when `kind` is `none`).
@@ -143,6 +141,34 @@ Never errors on no-store; exits `0` with `kind: none`. **Output (JSON):** `where
 Enumerate the registry entries — each entry's project `path`, `store` name, and the
 store directory. A plain listing (no health classification in this slice; a dangling
 entry, CONFIG-SPEC §3, is shown like any other).
+
+### `taskmgr store move`
+
+Move a store between locations, in one of three modes. Exactly one mode flag is
+required, and they are mutually exclusive.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--central` | off | Promote the local store resolving here into the central root and register it. |
+| `--rename` | off | Rename the central store resolving here (folder and registry entry). |
+| `--relink` | off | Re-point the registry entry named by `--to` at this directory. |
+| `--to <name>` | project basename (with `--central`) | The registry name: the new name for `--central`/`--rename`, the existing entry for `--relink`. Required for `--rename` and `--relink`. |
+
+- **`--central`** requires a store that resolves as `local`; a store that is already
+  central is an error. The store moves to `<central_root>/stores/<to>` and an entry is
+  added for the project path. Fails if that subfolder or an entry for this path already
+  exists. **The local `.tasks` directory is gone afterwards** — there is no confirmation
+  prompt (the CLI is agent-facing and never prompts) and no git interaction, so
+  committing the removal is the user's to do.
+- **`--rename`** requires a store that resolves as `central` or `override_name`; use
+  `--store-name` to rename a store you are not standing in. Fails if `--to` is already
+  taken.
+- **`--relink`** touches no files. Fails if `--to` is not registered, if its store
+  subfolder is missing (it will not create a dangling entry), or if another entry
+  already maps this project path.
+- A store keeps its `config.yaml` verbatim across all three modes, so the ID prefix and
+  the hooks travel with it and existing IDs stay valid.
+- **Output:** the store name, store path, and project path (`storeMoveDTO` in JSON, §6).
 
 - **Output (JSON):** array of `storeListDTO` (§6).
 
@@ -460,8 +486,8 @@ empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 `blocked`.
 
 **`whereDTO`** — emitted by `where`. `kind` is one of `local` | `central` |
-`override_path` | `override_name` | `none` (mirrors the engine's `ResolveKind`,
-SDK-SPEC §1). `store_path` and `project_path` are omitted when `kind` is `none`:
+`override_name` | `none` (mirrors the engine's `ResolveKind`, SDK-SPEC §1).
+`store_path` and `project_path` are omitted when `kind` is `none`:
 
 ```json
 { "kind": "central", "store_path": "/home/you/.taskmgr/stores/my-project",
@@ -471,6 +497,10 @@ SDK-SPEC §1). `store_path` and `project_path` are omitted when `kind` is `none`
 **`storeListDTO`** — emitted by `store list`, one per registry entry:
 `{path, store, store_path}` (the project path, the registry name, and the resolved
 store directory). No health/status field in this slice.
+
+**`storeMoveDTO`** — emitted by `store move`, describing the store after the move:
+`{store, store_path, project_path}` (the registry name, the store directory, and the
+project it now tracks).
 
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
@@ -492,6 +522,9 @@ prints a structured error:
 taskmgr init     [--prefix X] [--central [--store-name N]]
 taskmgr where                                # which store resolves here, and why
 taskmgr store    list                        # enumerate central registry entries
+taskmgr store    move --central [--to N]     # promote the local store here to central
+                 move --rename  --to N       # rename the central store here
+                 move --relink  --to N       # entry N now tracks this directory
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
@@ -515,6 +548,6 @@ taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)
 taskmgr guide                                # workflow how-to (start here)
 
-Global: --json, -C/--dir <path>, --store-path <path> | --store-name <name>
-Env:    TASKMGR_DIR, TASKMGR_HOME, TASKMGR_LOG
+Global: --json, -C/--dir <path>, --store-name <name>
+Env:    TASKMGR_HOME, TASKMGR_LOG
 ```

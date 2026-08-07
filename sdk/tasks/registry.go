@@ -82,23 +82,67 @@ func loadRegistry(fs vfs.FS, croot, home string) ([]registryEntry, error) {
 	return rf.Stores, nil
 }
 
-// loadCentral resolves the home and central root and loads (and validates) the
-// registry — the shared prelude for the central paths of Resolve and Stores.
-func loadCentral(fs vfs.FS, e env.Environment) (home, croot string, entries []registryEntry, err error) {
+// centralPaths resolves the home and the central root through the seams
+// (CONFIG-SPEC §1–§2) without reading the registry.
+func centralPaths(fs vfs.FS, e env.Environment) (home, croot string, err error) {
 	home, err = taskmgrHome(e)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", err
 	}
 	gcfg, err := loadGlobalConfig(fs, home)
 	if err != nil {
+		return "", "", err
+	}
+	return home, centralRoot(gcfg, home), nil
+}
+
+// loadCentral resolves the home and central root and loads (and validates) the
+// registry — the shared prelude for the central paths of Resolve and Stores.
+func loadCentral(fs vfs.FS, e env.Environment) (home, croot string, entries []registryEntry, err error) {
+	home, croot, err = centralPaths(fs, e)
+	if err != nil {
 		return "", "", nil, err
 	}
-	croot = centralRoot(gcfg, home)
 	entries, err = loadRegistry(fs, croot, home)
 	if err != nil {
 		return "", "", nil, err
 	}
 	return home, croot, entries, nil
+}
+
+// saveRegistry serializes entries to <croot>/mapping.yaml atomically. Callers
+// must already hold the central-root lock (CONFIG-SPEC §3/§5).
+func saveRegistry(fs vfs.FS, croot string, entries []registryEntry) error {
+	out, err := yaml.Marshal(registryFile{Version: 1, Stores: entries})
+	if err != nil {
+		return err
+	}
+	return fs.WriteAtomic(filepath.Join(croot, registryFileName), out, 0o644)
+}
+
+// lockCentral prepares the central root and takes its advisory lock, so registry
+// writes serialize across processes (CONFIG-SPEC §3).
+func lockCentral(fs vfs.FS, croot string) (func() error, error) {
+	if err := fs.MkdirAll(croot, 0o755); err != nil {
+		return nil, err
+	}
+	return fs.Lock(filepath.Join(croot, centralLockName))
+}
+
+// moveStoreDir moves a store directory from src to dst while holding the store's
+// own write lock, so a concurrent mutation in that store cannot be split across
+// the two locations.
+func moveStoreDir(fs vfs.FS, src, dst string) error {
+	unlock, err := fs.Lock(filepath.Join(src, lockFileName))
+	if err != nil {
+		return err
+	}
+	moveErr := fs.MoveTree(src, dst)
+	_ = unlock()
+	if moveErr != nil {
+		return fmt.Errorf("move store to %s: %w", dst, moveErr)
+	}
+	return nil
 }
 
 // Resolve maps the working directory (and any override in opts) to a single open
@@ -111,27 +155,7 @@ func Resolve(opts ResolveOptions, sopts ...Option) (*Store, ResolveInfo, error) 
 
 // resolveWith is Resolve with injectable seams, for hermetic tests.
 func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Option) (*Store, ResolveInfo, error) {
-	// 1. Explicit override.
-	storePath := opts.StorePath
-	if storePath == "" {
-		storePath = e.Getenv(envTaskmgrDir)
-	}
-	if storePath != "" && opts.StoreName != "" {
-		return nil, ResolveInfo{}, ErrAmbiguousOverride
-	}
-	if storePath != "" {
-		dir, err := absViaSeam(storePath, fs)
-		if err != nil {
-			return nil, ResolveInfo{}, err
-		}
-		s, err := openData(filepath.Dir(dir), dir, fs, sopts)
-		if err != nil {
-			return nil, ResolveInfo{}, err
-		}
-		return s, ResolveInfo{Kind: ResolvedOverridePath, StorePath: dir, ProjectPath: s.root}, nil
-	}
-
-	// store-name override: open the named central store via the registry.
+	// 1. Explicit override: open the named central store via the registry.
 	if opts.StoreName != "" {
 		home, croot, entries, err := loadCentral(fs, e)
 		if err != nil {
@@ -230,22 +254,14 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	if !validStoreName(name) {
 		return nil, fmt.Errorf("invalid store name %q: must match the store-name grammar (CONFIG-SPEC §3)", name)
 	}
-	home, err := taskmgrHome(e)
+	home, croot, err := centralPaths(fs, e)
 	if err != nil {
 		return nil, err
 	}
-	gcfg, err := loadGlobalConfig(fs, home)
-	if err != nil {
-		return nil, err
-	}
-	croot := centralRoot(gcfg, home)
 	project := canonicalize(fs, projectPath, home, croot)
 
 	// Serialize registry writes under the central-root lock (CONFIG-SPEC §3/§5).
-	if err := fs.MkdirAll(croot, 0o755); err != nil {
-		return nil, err
-	}
-	unlock, err := fs.Lock(filepath.Join(croot, centralLockName))
+	unlock, err := lockCentral(fs, croot)
 	if err != nil {
 		return nil, err
 	}
@@ -255,14 +271,8 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	if err != nil {
 		return nil, err
 	}
-	projKey := lexCanon(projectPath, home, croot)
-	for _, en := range entries {
-		if en.Store == name {
-			return nil, ErrStoreExists
-		}
-		if lexCanon(en.Path, home, croot) == projKey {
-			return nil, fmt.Errorf("a central store is already registered for %q", project)
-		}
+	if err := checkFree(entries, name, project, home, croot); err != nil {
+		return nil, err
 	}
 
 	if strings.TrimSpace(prefix) == "" {
@@ -274,18 +284,202 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 		return nil, err
 	}
 
-	// Append the entry and write the registry atomically.
-	rf := registryFile{Version: 1}
-	rf.Stores = append(rf.Stores, entries...)
-	rf.Stores = append(rf.Stores, registryEntry{Path: project, Store: name})
-	out, err := yaml.Marshal(rf)
-	if err != nil {
-		return nil, err
-	}
-	if err := fs.WriteAtomic(filepath.Join(croot, registryFileName), out, 0o644); err != nil {
+	if err := saveRegistry(fs, croot, append(entries, registryEntry{Path: project, Store: name})); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// checkFree reports whether a new entry (name, project) can be added: both the
+// store name and the canonical project path must be unused (CONFIG-SPEC §3).
+func checkFree(entries []registryEntry, name, project, home, croot string) error {
+	projKey := lexCanon(project, home, croot)
+	for _, en := range entries {
+		if en.Store == name {
+			return ErrStoreExists
+		}
+		if lexCanon(en.Path, home, croot) == projKey {
+			return fmt.Errorf("a central store is already registered for %q", project)
+		}
+	}
+	return nil
+}
+
+// MoveToCentral promotes the local store at projectPath into the central root:
+// it registers name for projectPath and moves <projectPath>/.tasks to
+// <central_root>/stores/<name>, returning the opened central store
+// (CONFIG-SPEC §5).
+//
+// The registry entry is written *before* the files move. An interrupted promote
+// therefore leaves a dangling entry — which resolution ignores (CONFIG-SPEC §3)
+// — while the local store is still in place and still wins resolution, so the
+// project keeps working. The reverse order would leave the store unreachable.
+// The move itself is not rolled back on failure: a partial cross-filesystem copy
+// stays at the destination for inspection.
+func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) {
+	return moveToCentralWith(projectPath, name, vfs.NewOS(), env.NewOS(), opts)
+}
+
+func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, opts []Option) (*Store, error) {
+	if !validStoreName(name) {
+		return nil, fmt.Errorf("invalid store name %q: must match the store-name grammar (CONFIG-SPEC §3)", name)
+	}
+	home, croot, err := centralPaths(fs, e)
+	if err != nil {
+		return nil, err
+	}
+	project := canonicalize(fs, projectPath, home, croot)
+	src := filepath.Join(project, DataDirName)
+	if fi, err := fs.Stat(src); err != nil || !fi.IsDir() {
+		return nil, fmt.Errorf("%w: %s", ErrNoStore, src)
+	}
+
+	unlock, err := lockCentral(fs, croot)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = unlock() }()
+
+	entries, err := loadRegistry(fs, croot, home)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkFree(entries, name, project, home, croot); err != nil {
+		return nil, err
+	}
+	dst := filepath.Join(croot, storesSubdir, name)
+	if _, err := fs.Stat(dst); err == nil {
+		return nil, ErrStoreExists
+	}
+	if err := fs.MkdirAll(filepath.Join(croot, storesSubdir), 0o755); err != nil {
+		return nil, err
+	}
+
+	if err := saveRegistry(fs, croot, append(entries, registryEntry{Path: project, Store: name})); err != nil {
+		return nil, err
+	}
+	if err := moveStoreDir(fs, src, dst); err != nil {
+		return nil, err
+	}
+	return openData(project, dst, fs, opts)
+}
+
+// RenameCentral renames the central store oldName to newName: the subfolder
+// under <central_root>/stores is renamed and the registry entry updated
+// (CONFIG-SPEC §5). It returns the new store directory.
+//
+// The folder moves before the registry is rewritten. Both orders leave the same
+// state if interrupted — an entry naming a subfolder that is not there, which
+// resolution ignores as dangling — and both steps are individually atomic, so
+// the window is a single rename wide.
+func RenameCentral(oldName, newName string) (string, error) {
+	return renameCentralWith(oldName, newName, vfs.NewOS(), env.NewOS())
+}
+
+func renameCentralWith(oldName, newName string, fs vfs.FS, e env.Environment) (string, error) {
+	if !validStoreName(newName) {
+		return "", fmt.Errorf("invalid store name %q: must match the store-name grammar (CONFIG-SPEC §3)", newName)
+	}
+	home, croot, err := centralPaths(fs, e)
+	if err != nil {
+		return "", err
+	}
+
+	unlock, err := lockCentral(fs, croot)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = unlock() }()
+
+	entries, err := loadRegistry(fs, croot, home)
+	if err != nil {
+		return "", err
+	}
+	idx := -1
+	for i, en := range entries {
+		if en.Store == newName {
+			return "", ErrStoreExists
+		}
+		if en.Store == oldName {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return "", fmt.Errorf("%w: %s", ErrStoreNotRegistered, oldName)
+	}
+
+	src := filepath.Join(croot, storesSubdir, oldName)
+	dst := filepath.Join(croot, storesSubdir, newName)
+	if fi, err := fs.Stat(src); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%w: %s", ErrNoStore, src)
+	}
+	if _, err := fs.Stat(dst); err == nil {
+		return "", ErrStoreExists
+	}
+	if err := moveStoreDir(fs, src, dst); err != nil {
+		return "", err
+	}
+
+	entries[idx].Store = newName
+	if err := saveRegistry(fs, croot, entries); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+// RelinkCentral re-points the registry entry name at projectPath, for a project
+// that moved on disk (CONFIG-SPEC §5). It touches no files and returns the
+// canonical project path now recorded.
+//
+// It refuses when the store subfolder is missing, rather than writing an entry
+// that resolution would ignore as dangling.
+func RelinkCentral(name, projectPath string) (string, error) {
+	return relinkCentralWith(name, projectPath, vfs.NewOS(), env.NewOS())
+}
+
+func relinkCentralWith(name, projectPath string, fs vfs.FS, e env.Environment) (string, error) {
+	home, croot, err := centralPaths(fs, e)
+	if err != nil {
+		return "", err
+	}
+	project := canonicalize(fs, projectPath, home, croot)
+
+	unlock, err := lockCentral(fs, croot)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = unlock() }()
+
+	entries, err := loadRegistry(fs, croot, home)
+	if err != nil {
+		return "", err
+	}
+	idx := -1
+	for i, en := range entries {
+		if en.Store == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return "", fmt.Errorf("%w: %s", ErrStoreNotRegistered, name)
+	}
+	dir := filepath.Join(croot, storesSubdir, name)
+	if fi, err := fs.Stat(dir); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%w: %s", ErrNoStore, dir)
+	}
+	projKey := lexCanon(project, home, croot)
+	for i, en := range entries {
+		if i != idx && lexCanon(en.Path, home, croot) == projKey {
+			return "", fmt.Errorf("a central store is already registered for %q", project)
+		}
+	}
+
+	entries[idx].Path = project
+	if err := saveRegistry(fs, croot, entries); err != nil {
+		return "", err
+	}
+	return project, nil
 }
 
 // resolutionOrigin returns the absolute, cleaned resolution origin W: workDir if

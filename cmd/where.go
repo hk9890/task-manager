@@ -37,9 +37,9 @@ var whereCmd = &cobra.Command{
 	Use:   "where",
 	Short: "Show which store resolves for the current directory, and why",
 	Long: `Report the store the current context resolves to (CONFIG-SPEC §4): its kind
-(local, central, override_path, override_name, or none), the store path, and the
-project path. Unlike other commands, 'where' never fails on "no store" — it
-reports the outcome and exits 0.`,
+(local, central, override_name, or none), the store path, and the project path.
+Unlike other commands, 'where' never fails on "no store" — it reports the
+outcome and exits 0.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		_, info, err := tasks.Resolve(resolveOptions(), logOption())

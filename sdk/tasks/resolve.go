@@ -35,11 +35,8 @@ type ResolveOptions struct {
 	// matched against the central registry. Empty means the process working
 	// directory.
 	WorkDir string
-	// StorePath is an explicit store-path override (--store-path / TASKMGR_DIR):
-	// the store at this path is opened directly, with no walk-up or registry.
-	StorePath string
 	// StoreName is an explicit central store-name override (--store-name): the
-	// registered store with this name is opened. Mutually exclusive with StorePath.
+	// registered store with this name is opened.
 	StoreName string
 }
 
@@ -51,8 +48,6 @@ const (
 	ResolvedLocal ResolveKind = iota
 	// ResolvedCentral: matched the central registry by project path.
 	ResolvedCentral
-	// ResolvedOverridePath: an explicit StorePath / TASKMGR_DIR override.
-	ResolvedOverridePath
 	// ResolvedOverrideName: an explicit StoreName override.
 	ResolvedOverrideName
 )
@@ -66,8 +61,6 @@ func (k ResolveKind) String() string {
 		return "local"
 	case ResolvedCentral:
 		return "central"
-	case ResolvedOverridePath:
-		return "override_path"
 	case ResolvedOverrideName:
 		return "override_name"
 	default:

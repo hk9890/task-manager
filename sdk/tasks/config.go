@@ -43,9 +43,8 @@ const (
 	// centralLockName is the advisory lock for registry writes (CONFIG-SPEC §3).
 	centralLockName = ".lock"
 
-	// envTaskmgrHome overrides the home; envTaskmgrDir is a store-path override.
+	// envTaskmgrHome overrides the per-user home (CONFIG-SPEC §1).
 	envTaskmgrHome = "TASKMGR_HOME"
-	envTaskmgrDir  = "TASKMGR_DIR"
 )
 
 // globalConfig is the per-user configuration (CONFIG-SPEC §2). Every field is

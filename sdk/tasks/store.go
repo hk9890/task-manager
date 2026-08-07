@@ -51,12 +51,10 @@ var (
 	ErrAlreadyExists = errors.New("issue already exists")
 	ErrNoStore       = errors.New("no .tasks directory found")
 	ErrStoreExists   = errors.New(".tasks directory already exists")
-	// ErrStoreNotRegistered is returned by Resolve when an explicit StoreName
-	// override names a store with no registry entry (CONFIG-SPEC §4).
+	// ErrStoreNotRegistered is returned when a store name has no registry entry:
+	// by Resolve for an explicit StoreName override (CONFIG-SPEC §4), and by
+	// RenameCentral / RelinkCentral for the store they were asked to edit.
 	ErrStoreNotRegistered = errors.New("no central store registered under that name")
-	// ErrAmbiguousOverride is returned by Resolve when both a store-path and a
-	// store-name override are supplied (CONFIG-SPEC §4); they are mutually exclusive.
-	ErrAmbiguousOverride = errors.New("store-path and store-name overrides are mutually exclusive")
 	// ErrImmutable is returned when a caller attempts an in-place write to a
 	// closed issue (which lives in closed/ and is immutable per TASK-STORAGE-SPEC §5).
 	// Reopen is the only permitted mutation for a closed issue; comment appends

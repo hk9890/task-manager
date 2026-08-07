@@ -51,6 +51,15 @@ type FS interface {
 	// Rename atomically renames (moves) oldpath to newpath.
 	Rename(oldpath, newpath string) error
 
+	// MoveTree moves the directory tree at src to dst. dst must not exist and
+	// its parent must. It renames when src and dst share a filesystem — atomic,
+	// nothing observable in between — and falls back to a recursive copy plus
+	// removal of src when they do not (EXDEV). The fallback is NOT atomic: on
+	// failure the partial copy is left at dst and src is untouched, so the
+	// caller can inspect and retry. Only directories and regular files are
+	// copied; any other file type is an error rather than a silent omission.
+	MoveTree(src, dst string) error
+
 	// MkdirAll creates dir and any necessary parents with the given perm.
 	MkdirAll(dir string, perm os.FileMode) error
 

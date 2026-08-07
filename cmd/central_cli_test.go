@@ -34,9 +34,16 @@ import (
 // per-user central root is an isolated temp dir (no real ~/.taskmgr touched).
 func taskmgrCentral(t *testing.T, workDir, home string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return taskmgrCentralEnv(t, workDir, home, nil, args...)
+}
+
+// taskmgrCentralEnv is taskmgrCentral with extra environment entries appended
+// after TASKMGR_HOME, for tests that need to set a variable themselves.
+func taskmgrCentralEnv(t *testing.T, workDir, home string, extraEnv []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	bin := taskmgrBin(t)
 	cmd := exec.Command(bin, append([]string{"--dir", workDir}, args...)...)
-	cmd.Env = append(os.Environ(), "TASKMGR_HOME="+home, "TASKMGR_DIR=")
+	cmd.Env = append(append(os.Environ(), "TASKMGR_HOME="+home), extraEnv...)
 	var o, e strings.Builder
 	cmd.Stdout = &o
 	cmd.Stderr = &e

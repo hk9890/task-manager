@@ -117,9 +117,10 @@ Map a working directory `W` (plus optional override) to one store, in order. `W`
 caller-provided resolution origin — for the CLI, `--dir`/`-C` if given, else the cwd
 (SDK: `ResolveOptions.WorkDir`) — and the **same** `W` drives every step below:
 
-1. **Explicit override** — `--store-path` / `TASKMGR_DIR` opens that path directly;
-   `--store-name` opens `<central_root>/stores/<name>` via the registry (error if it has
-   no entry). Path and name are mutually exclusive; a flag beats the environment variable.
+1. **Explicit override** — `--store-name` opens `<central_root>/stores/<name>` via the
+   registry (error if it has no entry). There is no path-based override: every store is
+   reached through walk-up or the registry, so the project a store tracks is always
+   known.
 2. **Local walk-up** (unchanged) — from `W` upward, the first `.tasks/` found wins and
    resolution stops. This is why a local store always beats a central one.
 3. **Central fallback** — no local store: canonicalize `W` and pick the registry entry
@@ -140,11 +141,28 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
 - **Create local** (unchanged) — a `.tasks/` store in the project tree; no registry.
 - **Create central** — create `<central_root>/stores/<store>` as an ordinary store
   **and** add its registry entry in one step (the `init --central` command, CLI-SPEC §2).
-- **Relocate / re-link** — there are deliberately **no** dedicated verbs yet (a registry
-  with no users does not earn management tooling). Because a central store is an ordinary
-  store and the registry is one short YAML file, relocating one is a manual two-step:
-  move the folder, then edit its `mapping.yaml` entry. Dedicated `store move` / `link` /
-  `unlink` verbs are a use-gated follow-up.
+- **Promote local → central** — move an existing `<project>/.tasks` to
+  `<central_root>/stores/<store>` and register it (`store move --central`, CLI-SPEC §2.1).
+  The store moves whole, `config.yaml` included, so its prefix and hooks survive and
+  existing IDs stay valid. The **registry entry is written before the files move**: an
+  interrupted promote leaves a dangling entry (ignored by resolution, §3) plus the local
+  store, which still exists and still wins step 2 — so the project keeps working. The
+  reverse order would leave a store nothing points at.
+- **Rename a central store** — rename the subfolder under `stores/` and update the
+  entry's `store` field (`store move --rename`). Always within one filesystem, so the
+  folder move is a plain rename.
+- **Re-link a moved project** — update an entry's `path` to the project's new location
+  (`store move --relink`). A pure registry edit; it refuses when the store subfolder is
+  missing rather than writing an entry resolution would skip.
+- **Unlink** — dropping an entry has no dedicated verb; the registry is one short YAML
+  file the user can hand-edit.
+
+**Cross-filesystem moves.** A store folder is moved by rename where possible and by
+recursive copy plus removal of the source when the project and the central root sit on
+different filesystems. The copy path is **not** atomic and is not rolled back: a failure
+leaves the partial copy in place for inspection, with the source untouched, and reports
+what to remove. The copy is strict — an entry that is neither a directory nor a regular
+file aborts it — so the source is only ever removed after a complete copy.
 
 **Prefix.** A store's ID prefix is `--prefix` if given, else derived from the project
 directory name (lowercased, non-alphanumerics stripped, leading digits removed,
