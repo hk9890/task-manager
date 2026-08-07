@@ -123,6 +123,11 @@ hooks:
 A single, **global** wall-clock limit applied to **every** hook process; there is no
 per-hook timeout. Go duration string (`"2s"`, `"5m"`); default **`2s`**; `0` disables it.
 
+`hook_timeout` bounds when the hook is **signalled**, not when it is guaranteed
+gone: a hook that does not exit on SIGTERM is SIGKILLed after a fixed 2-second
+grace (§7). The worst case is therefore **`hook_timeout` + 2s** — with the default,
+~4s, not 2s. For a pre-hook that is lock-hold time (§8).
+
 The 2-second default suits fast structural validators. **A project that runs a test
 suite on close must raise it** (e.g. `hook_timeout: 5m`) — and should weigh the lock
 cost in §8. Exceeding the limit is a hook error (§7): a deny for pre-hooks, a warning
@@ -212,8 +217,10 @@ Notes:
   the outcome. With the 2-second default the added wait is small.
 - **Observability.** Every hook invocation is logged with its event, `id`, issue id,
   decision, and **wall-clock duration**; a hook that exceeds `hook_timeout` or errors is
-  logged at a higher level. Hook timing is the main signal for the in-lock cost of §8 — see
-  [MONITORING.md](../MONITORING.md).
+  logged at a higher level. The logged decision distinguishes the phases, because only a
+  pre-hook can block a write: a pre-hook refusal is `deny`, a post-hook failure is `warn`,
+  and a hook that misbehaved is `error` in either phase (§7). Hook timing is the main
+  signal for the in-lock cost of §8 — see [MONITORING.md](../MONITORING.md).
 - **Environment.** Each hook process inherits the parent environment plus:
 
   | Variable | Value |
@@ -369,8 +376,24 @@ reported category, for diagnosis.
 | Condition | Pre-hook | Post-hook |
 |---|---|---|
 | Binary missing / not executable (`126`/`127`, spawn failure) | Deny, category `hook_error` | Warning |
-| `hook_timeout` exceeded (§3.1) | `SIGTERM`, then `SIGKILL` after a grace period → Deny, `hook_error` | Warning |
+| `hook_timeout` exceeded (§3.1) | `SIGTERM`, then `SIGKILL` after a 2s grace → Deny, `hook_error` | Warning |
 | Killed by a signal | Deny, `hook_error` | Warning |
+
+### 7.1 Timeout kill and the process group
+
+A hook runs in **its own process group**, and the timeout signals the whole group,
+not just the process taskmgr spawned. This matters because §3.2 points at
+`["sh", "-c", ...]` for shell features: the shell exits on SIGTERM but its
+children do not receive it, keep running, keep the captured stdout/stderr open —
+which stalls the engine for the full grace on top of `hook_timeout` (§3.1, §8) —
+and are orphaned once it gives up. Signalling the group ends the whole tree.
+
+Two consequences:
+
+- The **2-second SIGKILL grace is fixed and additive** to `hook_timeout` (§3.1).
+  It is only reached by a hook that ignores SIGTERM.
+- A hook is **detached from the terminal's foreground group**, so a `Ctrl-C` aimed
+  at `taskmgr` no longer reaches it. `hook_timeout` is what bounds a hook.
 
 A hook **must not** invoke `taskmgr` *mutations*: a pre-hook runs while the store lock is
 held and would deadlock; a post-hook could trigger further hooks. Read-only queries are
@@ -396,8 +419,9 @@ state being written. The in-lock model is the price of a correct gate, and it is
 model.
 
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
-block until it returns. With the 2-second default this is negligible; **if you raise
-`hook_timeout` to run a test suite on close, you serialize all writes for that duration.**
+block until it returns. The worst case is `hook_timeout` + the 2-second SIGKILL grace
+(§3.1, §7.1) — ~4s at the default. **If you raise `hook_timeout` to run a test suite on
+close, you serialize all writes for that duration.**
 Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
 wall-clock duration is logged (§4, [MONITORING.md](../MONITORING.md)), so a
 project can see exactly how long its gates hold the lock and decide whether to raise

@@ -181,19 +181,27 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 		// Write the issue into the correct partition: closeMove lands a closed
 		// issue directly in closed/ (preserving the git-rename history anchor);
 		// otherwise it goes to the hot dir.
+		//
+		// An import is a create transition, so it logs `write op=create` like
+		// every other create (MONITORING.md) — the landing partition is an
+		// implementation detail of the same transition.
 		if status == StatusClosed {
 			if err := s.closeMove(iss); err != nil {
+				s.logIOError(string(transCreate), iss.ID, err)
 				return err
 			}
 		} else {
 			if err := s.writeIssue(iss); err != nil {
+				s.logIOError(string(transCreate), iss.ID, err)
 				return err
 			}
 		}
+		s.logWrite(transCreate, iss.ID)
 
 		// Append the already-validated comment log.
 		for _, doc := range docs {
 			if err := appendCommentDoc(s.fs, s.commentsPath(id), doc); err != nil {
+				s.logIOError(opCommentAdd, iss.ID, err)
 				return err
 			}
 		}

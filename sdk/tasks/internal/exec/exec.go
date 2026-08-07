@@ -54,7 +54,7 @@ type Spec struct {
 	// Stdin is written to the process's standard input, which is then closed.
 	Stdin []byte
 	// Timeout bounds the process wall-clock time. Zero disables the limit. On
-	// expiry the process is sent SIGTERM, then SIGKILL after KillGrace.
+	// expiry the process group is sent SIGTERM, then SIGKILL after KillGrace.
 	Timeout time.Duration
 }
 
@@ -93,6 +93,9 @@ type Result struct {
 // promptly on SIGTERM, and a longer wait only extends the lock hold (HOOK-SPEC
 // §7/§8). HOOK-SPEC has a single global hook_timeout and no per-hook policy, so
 // this grace is not configurable.
+//
+// It is additive to hook_timeout, not included in it: a pre-hook that ignores
+// SIGTERM holds the store lock for hook_timeout + KillGrace (HOOK-SPEC §8).
 const KillGrace = 2 * time.Second
 
 // NewOS returns a Runner that spawns real processes.

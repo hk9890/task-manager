@@ -20,11 +20,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // records parses the captured JSON log lines into maps.
@@ -109,6 +111,163 @@ func TestLogHook_DenyLogsAtInfo(t *testing.T) {
 	hook := find(records(t, &buf), "hook")
 	if hook == nil || hook["decision"] != "deny" {
 		t.Fatalf("expected a deny hook record at info level, got %v", hook)
+	}
+}
+
+// A post-hook cannot deny: it runs after the write committed (HOOK-SPEC §7), so
+// a non-zero exit is logged as `warn`. Logging it as `deny` would make the
+// deny-rate query in MONITORING.md count writes that were never blocked.
+func TestLogHook_PostHookFailureLogsWarnNotDeny(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Deny(1, "notify failed") }}
+	s, err := Init(t.TempDir(), "x", WithLogger(lg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.runner = fake
+	s.cfg.Hooks = []Hook{{ID: "notify", Event: "post-create", Run: []string{"n"}}}
+
+	res, err := s.Create(CreateInput{Title: "t"})
+	if err != nil {
+		t.Fatalf("a failing post-hook must not fail the write: %v", err)
+	}
+	if len(res.Warnings) != 1 {
+		t.Fatalf("warnings = %v, want one", res.Warnings)
+	}
+
+	hook := find(records(t, &buf), "hook")
+	if hook == nil {
+		t.Fatal("expected a hook record")
+	}
+	if hook["decision"] != "warn" {
+		t.Errorf("decision = %v, want warn (a post-hook denies nothing)", hook["decision"])
+	}
+	if hook["event"] != "post-create" {
+		t.Errorf("event = %v, want post-create", hook["event"])
+	}
+}
+
+// A pre-hook error and a post-hook error both stay `error`: the hook itself
+// misbehaved, which is the same fact in either phase (HOOK-SPEC §7).
+func TestLogHook_ErrorDecisionIsPhaseIndependent(t *testing.T) {
+	for _, event := range []string{"pre-create", "post-create"} {
+		t.Run(event, func(t *testing.T) {
+			var buf bytes.Buffer
+			lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			fake := &exec.Fake{Func: func(exec.Spec) exec.Result {
+				return exec.Result{Category: exec.Timeout}
+			}}
+			s, err := Init(t.TempDir(), "x", WithLogger(lg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.runner = fake
+			s.cfg.Hooks = []Hook{{ID: "h", Event: event, Run: []string{"h"}}}
+
+			_, _ = s.Create(CreateInput{Title: "t"})
+
+			hook := find(records(t, &buf), "hook")
+			if hook == nil || hook["decision"] != "error" {
+				t.Fatalf("decision = %v, want error", hook)
+			}
+		})
+	}
+}
+
+// The writes that are not lifecycle transitions emit no `write` record, but a
+// failure must still surface as io_error — otherwise a failed comment or dep
+// write is invisible at every log level (MONITORING.md).
+func TestLogIOError_NonTransitionWrites(t *testing.T) {
+	// The faulted vfs call differs by write shape: comments append to the
+	// sidecar, dep/rel edits rewrite the issue file.
+	sidecar := func(s *Store, target *Issue) string { return s.commentsPath(target.ID) }
+	issueFile := func(s *Store, target *Issue) string {
+		p, err := s.issueFilePath(target.ID)
+		if err != nil {
+			panic(err)
+		}
+		return p
+	}
+
+	cases := []struct {
+		name   string
+		op     string
+		vfsOp  string
+		path   func(s *Store, target *Issue) string
+		mutate func(s *Store, target, other *Issue) error
+	}{
+		{"comment add", "comment_add", "Append", sidecar, func(s *Store, target, _ *Issue) error {
+			_, err := s.AddComment(target.ID, "a", "body")
+			return err
+		}},
+		{"comment edit", "comment_edit", "Append", sidecar, nil}, // set below; needs an existing comment
+		{"dep add", "dep_add", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
+			return s.AddDep(target.ID, other.ID)
+		}},
+		{"dep remove", "dep_remove", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
+			return s.RemoveDep(target.ID, other.ID)
+		}},
+		{"rel add", "rel_add", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
+			return s.AddRelated(target.ID, other.ID)
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			m := vfs.NewMem()
+			s, err := InitWithVFS("/", "x", m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.logger = lg
+
+			target, err := unwrap(s.Create(CreateInput{Title: "target"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := unwrap(s.Create(CreateInput{Title: "other"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// EditComment needs an existing comment to replace.
+			existing, err := s.AddComment(target.ID, "a", "first")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.op == "comment_edit" {
+				c.mutate = func(s *Store, target, _ *Issue) error {
+					_, err := s.EditComment(target.ID, existing.ID, "a", "revised")
+					return err
+				}
+			}
+			buf.Reset()
+
+			m.FailOn(c.vfsOp, c.path(s, target), errors.New("simulated disk full"))
+			if err := c.mutate(s, target, other); err == nil {
+				t.Fatal("expected the injected fault to fail the mutation")
+			}
+
+			recs := records(t, &buf)
+			rec := find(recs, "io_error")
+			if rec == nil {
+				t.Fatal("a failed write must emit an io_error record")
+			}
+			if rec["op"] != c.op {
+				t.Errorf("op = %v, want %v", rec["op"], c.op)
+			}
+			if rec["issue"] != target.ID {
+				t.Errorf("issue = %v, want %v", rec["issue"], target.ID)
+			}
+			if find(recs, "write") != nil {
+				t.Error("a non-transition write must not emit a write record")
+			}
+		})
 	}
 }
 
