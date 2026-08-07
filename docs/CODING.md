@@ -43,7 +43,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 | Reading the environment (home, any `TASKMGR_*`) | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
 | Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
 | Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
-| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
+| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import **and no `*Store` method** → unit-tests at L1 |
 
 ## How to test
 
