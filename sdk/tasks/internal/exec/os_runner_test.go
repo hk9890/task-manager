@@ -29,9 +29,12 @@ import (
 )
 
 // These tests exercise the real OS runner by spawning tiny, deterministic
-// processes (sh, true, sleep). They are fast (each process is sub-10ms) and
-// prove the seam's exit-code, stdin, env, timeout, and spawn-failure mechanics
-// that the Fake cannot. HOOK-SPEC §6.1/§7.
+// processes (sh, true, sleep) and prove the seam's exit-code, stdin, env,
+// timeout, and spawn-failure mechanics that the Fake cannot. HOOK-SPEC §6.1/§7.
+//
+// Every process here exits within milliseconds. The two that wait out a real
+// SIGTERM→SIGKILL escalation on a process tree are seconds each, and live in
+// os_runner_kill_test.go behind the integration tag.
 
 func TestOSRunner_AllowExitZero(t *testing.T) {
 	r := NewOS()
@@ -130,88 +133,6 @@ func TestOSRunner_Timeout(t *testing.T) {
 	// for the SIGTERM->SIGKILL grace).
 	if elapsed > KillGrace+5*time.Second {
 		t.Fatalf("timeout took %v, expected prompt kill", elapsed)
-	}
-}
-
-// A timed-out hook must take its children with it. HOOK-SPEC §3.2 points
-// projects at ["sh", "-c", ...], so the process taskmgr spawns is usually a
-// shell whose real work happens in children. Signalling only that shell leaves
-// the children running and holding the captured pipes, which (a) stalls Wait for
-// the full KillGrace on top of hook_timeout, doubling the lock hold, and (b)
-// orphans them afterwards.
-func TestOSRunner_TimeoutKillsChildren(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "survived")
-	// A backgrounded grandchild that would touch the marker shortly after the
-	// timeout, and a foreground sleep that holds the shell (and the pipes) open.
-	// Job control is off in a non-interactive shell, so the background job stays
-	// in the shell's process group and a group signal reaches it.
-	script := "(sleep 1; touch " + marker + ") & sleep 30"
-
-	r := NewOS()
-	start := time.Now()
-	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 100 * time.Millisecond})
-	elapsed := time.Since(start)
-
-	if res.Category != Timeout {
-		t.Fatalf("got category=%v, want Timeout", res.Category)
-	}
-	// The pipes must close as soon as the group dies. Waiting out KillGrace here
-	// is the regression: it means a child outlived the signal.
-	if elapsed >= KillGrace {
-		t.Errorf("Run took %v (>= KillGrace %v): a child survived the timeout signal and held the pipes", elapsed, KillGrace)
-	}
-
-	// Give the grandchild more than its sleep to prove it is gone, not just slow.
-	time.Sleep(1500 * time.Millisecond)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("grandchild survived the timeout and kept running (orphaned)")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat marker: %v", err)
-	}
-}
-
-// A child that IGNORES SIGTERM must still not outlive the run.
-//
-// os/exec's own escalation after WaitDelay is Process.Kill(), a SIGKILL to the
-// spawned process alone. The group gets the SIGTERM but only the shell gets the
-// SIGKILL, so a child that traps TERM — or re-execs under setsid — survives the
-// command as an orphan holding whatever it holds. That is the exact leak the
-// process group exists to prevent, so the escalation has to reach the group too.
-func TestOSRunner_TimeoutSIGKILLsChildrenThatIgnoreSIGTERM(t *testing.T) {
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	// Both the shell and its child ignore SIGTERM, so nothing exits until a
-	// SIGKILL arrives. The parent records the child's pid via $! — inside the
-	// subshell $$ would still be the parent's, which is the process os/exec
-	// kills anyway, and the test would prove nothing.
-	script := "(trap '' TERM; sleep 30) & echo $! > " + pidFile + "; trap '' TERM; sleep 30"
-
-	r := NewOS()
-	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 100 * time.Millisecond})
-	if res.Category != Timeout {
-		t.Fatalf("got category=%v, want Timeout", res.Category)
-	}
-
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("read child pid: %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil {
-		t.Fatalf("parse child pid %q: %v", raw, err)
-	}
-
-	// Signal 0 probes for existence. Poll briefly: the SIGKILL is delivered as
-	// Run returns, and reaping is not instantaneous.
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return // gone
-		}
-		if time.Now().After(deadline) {
-			_ = syscall.Kill(pid, syscall.SIGKILL) // don't leak it out of the test
-			t.Fatalf("child %d ignored SIGTERM and survived the timeout as an orphan", pid)
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 

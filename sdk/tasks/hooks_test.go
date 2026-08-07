@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // L1: buildHookSet is pure (no filesystem), so config validation is unit-tested
@@ -159,7 +161,7 @@ func TestHookSet_ForEventPreservesConfigOrder(t *testing.T) {
 // never call hooks(), so a malformed block does not break queries — the
 // end-to-end fail-closed wiring lands with the write path (Phase 6).
 func TestStoreHooks_LazyBuildAndCache(t *testing.T) {
-	s, err := Init(t.TempDir(), "x")
+	s, err := InitWithVFS("/", "x", vfs.NewMem())
 	if err != nil {
 		t.Fatal(err)
 	}

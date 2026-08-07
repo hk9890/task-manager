@@ -22,7 +22,7 @@ import (
 )
 
 func TestReadyAndBlocked(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
 	dependent := mustCreate(t, s, CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
 	free := mustCreate(t, s, CreateInput{Title: "free"})
@@ -60,7 +60,7 @@ func TestReadyAndBlocked(t *testing.T) {
 }
 
 func TestReadyExcludesNonOpen(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	ip := StatusInProgress
 	if _, err := s.Update(iss.ID, UpdateInput{Status: &ip}); err != nil {
@@ -73,7 +73,7 @@ func TestReadyExcludesNonOpen(t *testing.T) {
 }
 
 func TestReadyOrderingByPriority(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	p3 := 3
 	p0 := 0
 	low := mustCreate(t, s, CreateInput{Title: "low", Priority: &p3})
@@ -86,7 +86,7 @@ func TestReadyOrderingByPriority(t *testing.T) {
 }
 
 func TestDetailDerivesInverseEdges(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	epic := mustCreate(t, s, CreateInput{Title: "epic", Type: TypeEpic})
 	child := mustCreate(t, s, CreateInput{Title: "child", Parent: epic.ID})
 	blocked := mustCreate(t, s, CreateInput{Title: "blocked", BlockedBy: []string{epic.ID}})
@@ -112,7 +112,7 @@ func TestDetailDerivesInverseEdges(t *testing.T) {
 }
 
 func TestListFilters(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	p1 := 1
 	bug := mustCreate(t, s, CreateInput{Title: "a bug", Type: TypeBug, Priority: &p1, Labels: []string{"x"}})
 	mustCreate(t, s, CreateInput{Title: "a task", Type: TypeTask, Labels: []string{"y"}})

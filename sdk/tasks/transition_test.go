@@ -124,7 +124,7 @@ func TestIssuesEqualIgnoringUpdated(t *testing.T) {
 // L2: a redundant Update (fields set to their current values) writes nothing and
 // does not advance Updated — the engine-level no-op (HOOK-SPEC §2.1).
 func TestUpdate_NoOpWritesNothing(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "orig", Description: "body"})
 
 	// Advance the clock so a write, if it happened, would visibly bump Updated.

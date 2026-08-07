@@ -39,7 +39,7 @@ func TestDeferredIsValidStatus(t *testing.T) {
 }
 
 func TestDeferredExcludedFromReady(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "postpone me"})
 	// Open with no blockers → ready.
 	ready, _ := s.Ready()
@@ -56,7 +56,7 @@ func TestDeferredExcludedFromReady(t *testing.T) {
 }
 
 func TestDeferredStaysInActivePartition(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	if _, err := s.Update(iss.ID, UpdateInput{Status: ptrStatus(StatusDeferred)}); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestDeferredStaysInActivePartition(t *testing.T) {
 }
 
 func TestImportDeferredStatusPassesThrough(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Import(ImportInput{Title: "imported deferred", Status: StatusDeferred, Created: tCreated}))
 	if err != nil {
 		t.Fatalf("Import deferred: %v", err)
