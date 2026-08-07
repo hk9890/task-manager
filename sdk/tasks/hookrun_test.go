@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // ---- L1: pure interpretation of an exec.Result (HOOK-SPEC §6.1/§7) ----
@@ -72,7 +73,7 @@ func TestHookMessage_StdoutThenStderr(t *testing.T) {
 // hookTestStore builds a real-temp store with the given hooks and a fake runner.
 func hookTestStore(t *testing.T, fake *exec.Fake, hooks []Hook) (*Store, *hookSet) {
 	t.Helper()
-	s, err := Init(t.TempDir(), "x")
+	s, err := InitWithVFS("/", "x", vfs.NewMem())
 	if err != nil {
 		t.Fatal(err)
 	}

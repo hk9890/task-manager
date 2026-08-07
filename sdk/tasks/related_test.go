@@ -41,7 +41,7 @@ func relDetail(t *testing.T, s *Store, id string) *Detail {
 }
 
 func TestAddRelatedIsSymmetricInView(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 
@@ -59,7 +59,7 @@ func TestAddRelatedIsSymmetricInView(t *testing.T) {
 }
 
 func TestAddRelatedNoDuplicateWhenStoredBothWays(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	if err := s.AddRelated(a.ID, b.ID); err != nil {
@@ -82,7 +82,7 @@ func TestAddRelatedNoDuplicateWhenStoredBothWays(t *testing.T) {
 }
 
 func TestAddRelatedIdempotentAndRejectsSelf(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	if err := s.AddRelated(a.ID, b.ID); err != nil {
@@ -101,7 +101,7 @@ func TestAddRelatedIdempotentAndRejectsSelf(t *testing.T) {
 }
 
 func TestAddRelatedRejectsDangling(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	err := s.AddRelated(a.ID, "agt-nope")
 	var ve *ValidationError
@@ -111,7 +111,7 @@ func TestAddRelatedRejectsDangling(t *testing.T) {
 }
 
 func TestRemoveRelatedClearsBothSides(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	// Edge stored on BOTH sides.
@@ -135,7 +135,7 @@ func TestRemoveRelatedClearsBothSides(t *testing.T) {
 }
 
 func TestRelatedWriteToClosedIsImmutable(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	if _, err := s.Close(a.ID, "done"); err != nil {

@@ -429,3 +429,96 @@ func TestRelinkCentral_RefusesDanglingEntry(t *testing.T) {
 		t.Errorf("entries = %+v, want the original entry untouched", entries)
 	}
 }
+
+// TestMoveStoreDir_NeverPublishesAHalfBuiltStore pins that the destination is
+// created by one atomic rename.
+//
+// The registry entry is live before the files move, so anything visible at the
+// destination is resolvable. Copying into place publishes it a file at a time,
+// and the moment config.yaml lands another process opens the half-copied folder
+// as a finished store and writes into it — under a lock file that is not the one
+// the promote holds.
+func TestMoveStoreDir_NeverPublishesAHalfBuiltStore(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/proj", "/dev/proj/.tasks", "prj")
+	dst := storeDirFor("demo")
+	staging := filepath.Join(filepath.Dir(dst), stagingPrefix+"demo")
+
+	// Fail the publishing rename: the tree is fully staged, nothing is at dst.
+	m.FailOn("MoveTree", staging, errors.New("simulated crash"))
+	if _, err := moveToCentralWith("/dev/proj", "demo", m, fakeEnv(nil), nil); err == nil {
+		t.Fatal("expected the injected fault to fail the promote")
+	}
+	if _, err := m.Stat(filepath.Join(dst, ConfigFileName)); !vfs.IsNotExist(err) {
+		t.Errorf("a half-built store was published at %s", dst)
+	}
+
+	// The entry is rolled back, so the project does not resolve to a store that
+	// is not there.
+	if _, _, err := resolveWith(ResolveOptions{WorkDir: "/dev/proj"}, m, fakeEnv(nil), nil); !errors.Is(err, ErrNoStore) {
+		t.Errorf("err = %v, want the entry rolled back", err)
+	}
+}
+
+// TestMoveToCentral_RetryAfterAPartialCopy pins that a leftover from a failed
+// promote does not wedge the command.
+//
+// A partial copy left at the destination fails every retry with ErrStoreExists —
+// under the same name (taken) and under any other (the project path is taken) —
+// until the user works out that they have to delete it by hand. Staging keeps
+// the leftover out of the destination's way, and the next attempt clears it.
+func TestMoveToCentral_RetryAfterAPartialCopy(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/proj", "/dev/proj/.tasks", "prj")
+	staging := filepath.Join(testCentral, storesSubdir, stagingPrefix+"demo")
+
+	// Seed the debris a died-part-way copy leaves behind.
+	if err := m.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.WriteAtomic(filepath.Join(staging, "prj-old111.md"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := moveToCentralWith("/dev/proj", "demo", m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("a leftover staging directory must not block a retry: %v", err)
+	}
+	if s.Dir() != storeDirFor("demo") {
+		t.Errorf("store dir = %q, want %q", s.Dir(), storeDirFor("demo"))
+	}
+	if _, err := m.Stat(filepath.Join(staging, "prj-old111.md")); !vfs.IsNotExist(err) {
+		t.Error("the stale staging tree should have been cleared, not carried into the new store")
+	}
+	if _, err := m.Stat(filepath.Join(storeDirFor("demo"), "prj-old111.md")); !vfs.IsNotExist(err) {
+		t.Error("stale debris was published into the promoted store")
+	}
+}
+
+// TestRelinkCentral_RefusesAnUnfinishedStore pins that relink applies the same
+// completeness test resolution does.
+//
+// Checking only that the folder is a directory lets relink report success on an
+// entry the very next command skips: CLI-SPEC promises relink "will not create a
+// dangling entry", and that is exactly what it created.
+func TestRelinkCentral_RefusesAnUnfinishedStore(t *testing.T) {
+	m := vfs.NewMem()
+	writeRegistry(t, m, testCentral, registryEntry{Path: "/dev/old", Store: "half"})
+	if err := m.MkdirAll(storeDirFor("half"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.MkdirAll("/dev/new", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := relinkCentralWith("half", "/dev/new", m, fakeEnv(nil))
+	if err == nil {
+		t.Fatal("relink onto a folder with no config.yaml should fail")
+	}
+	if !errors.Is(err, ErrNoStore) {
+		t.Errorf("err = %v, want ErrNoStore", err)
+	}
+	if !strings.Contains(err.Error(), "not a finished store") {
+		t.Errorf("err = %v, want it to say the store is unfinished", err)
+	}
+}

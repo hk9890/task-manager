@@ -454,8 +454,8 @@ project can see exactly how long its gates hold the lock and decide whether to r
   (`Create` / `Update` / `Close` / `Reopen`) always run hooks — there is no
   `WithHooks(false)` on them, so the no-bypass guarantee (§7) is a property of those
   methods. Bulk loading is instead a **distinct call** — `Store.Import` (SDK-SPEC.md §4),
-  the direct write of a complete end-state used for import, migration, and `bench/`
-  tooling — which takes an explicit option to run hooks or omit them, defaulting to
+  the direct write of a complete end-state used for import and migration tooling —
+  which takes an explicit option to run hooks or omit them, defaulting to
   **omit** (re-importing N issues should not fire N create/close gates). The only ungated
   path is therefore an import a caller opts into deliberately; the `taskmgr` CLI's ordinary
   commands always run with hooks **enabled**.

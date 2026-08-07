@@ -17,10 +17,13 @@
 package tasks
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 func TestMarshalUnmarshalRoundTrip(t *testing.T) {
@@ -178,5 +181,45 @@ func TestUnmarshalErrors(t *testing.T) {
 		if _, err := Unmarshal([]byte(in)); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
 		}
+	}
+}
+
+// TestUnmarshal_RejectsIDThatEscapesTheStore pins that an issue ID is checked
+// against the grammar at the parse boundary.
+//
+// The sidecar path is built by joining the frontmatter id onto the store's
+// content dir, so an id of "../../../../etc/passwd" reads and writes that path.
+// The .tasks directory is git-tracked, which makes the frontmatter reachable by
+// a pull request, not just by the store's owner.
+func TestUnmarshal_RejectsIDThatEscapesTheStore(t *testing.T) {
+	for _, id := range []string{
+		"../../../../etc/passwd",
+		"../sibling",
+		"a/b",
+		"tst-0001/../../x",
+		"",
+		".",
+	} {
+		if _, err := Unmarshal([]byte("---\nid: " + id + "\ntitle: t\n---\n")); err == nil {
+			t.Errorf("Unmarshal accepted id %q", id)
+		}
+	}
+
+	// And the read paths inherit it: a hand-planted file cannot make the store
+	// key anything on such an id.
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/p", "tst", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evil := "---\nid: ../../../../etc/passwd\ntitle: pwn\nbody_external: true\n---\n"
+	if err := m.WriteAtomic(filepath.Join(s.dir, "notes.md"), []byte(evil), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.All(); err == nil {
+		t.Error("All() accepted a file whose frontmatter id escapes the store")
+	}
+	if _, err := s.Get("../../../../etc/passwd"); err == nil {
+		t.Error("Get() resolved an id that escapes the store")
 	}
 }

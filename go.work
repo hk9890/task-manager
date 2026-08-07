@@ -1,6 +1,6 @@
-// Local development workspace. This wires the CLI, SDK, and bench modules
-// together so `go build`/`go test` use the in-tree SDK without a `replace`
-// directive in go.mod.
+// Local development workspace. This wires the CLI and SDK modules together so
+// `go build`/`go test` use the in-tree SDK without a `replace` directive in
+// go.mod.
 //
 // go.work is intentionally committed but only affects local development:
 // `go install <module>@<version>` and downstream consumers ignore it entirely,
@@ -10,5 +10,4 @@ go 1.26
 use (
 	.
 	./sdk
-	./bench
 )

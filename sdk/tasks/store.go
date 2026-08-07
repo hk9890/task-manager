@@ -182,21 +182,13 @@ func openWithFS(root string, fs vfs.FS) *Store {
 // The FS must already have root visible (MkdirAll is called internally).
 // Only packages under sdk/tasks/internal can call this because vfs.FS is
 // itself internal; outside callers use Init or Open.
-func InitWithVFS(root, prefix string, fs vfs.FS) (*Store, error) {
-	prefix = strings.TrimSpace(prefix)
-	if err := validatePrefix(prefix); err != nil {
-		return nil, err
-	}
-	dir := filepath.Join(root, DataDirName)
-	if err := fs.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	cfg := Config{Prefix: prefix}
-	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
-	if err := s.writeConfig(cfg); err != nil {
-		return nil, err
-	}
-	return s, nil
+//
+// It routes through the same initData as Init, so a store created on a test
+// seam has the same invariants as one created in production — in particular
+// the ErrStoreExists guard. A fixture that skipped that guard let a regression
+// in it survive the whole fast suite.
+func InitWithVFS(root, prefix string, fs vfs.FS, opts ...Option) (*Store, error) {
+	return initData(root, filepath.Join(root, DataDirName), prefix, fs, opts)
 }
 
 // Init creates a new data directory under root with the given ID prefix and
@@ -1184,9 +1176,19 @@ func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
 	return iss, s.commentsPath(iss.ID), nil
 }
 
-// requireReplaceTarget verifies commentID exists as an earlier comment in the
+// requireReplaceTarget verifies commentID names an earlier comment in the
 // sidecar stream at sidecarPath. Caller must hold the store lock.
+//
+// The empty check is not redundant with validateReplaces: that helper answers
+// "is this document's optional replaces field valid?", for which empty means
+// "this is not a revision" and is correct. Edit and Delete are the opposite
+// case — the id is the whole point of the call — so an empty one has to be
+// rejected here, or `EditComment(id, "", …)` silently appends a fresh comment
+// instead of revising anything.
 func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
+	if commentID == "" {
+		return invalid("comment_id", "comment id is required")
+	}
 	stream, err := readCommentStream(s.fs, sidecarPath)
 	if err != nil {
 		return err

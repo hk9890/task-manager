@@ -137,11 +137,10 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 			iss.CloseReason = in.CloseReason
 		}
 
-		// Validate the end-state and its references before any write.
-		if err := validateFields(iss); err != nil {
-			return err
-		}
-		if err := s.checkRefs(iss); err != nil {
+		// Validate the end-state and its references before any write, keeping the
+		// hot index so the hook `when` row does not rescan the whole store.
+		idx, err := s.validateAndIndex(iss)
+		if err != nil {
 			return err
 		}
 
@@ -166,37 +165,32 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 		}
 
 		// An import is a create transition (no prior issue), even when it lands
-		// closed (HOOK-SPEC §2.1). Gate it through pre-create when requested.
-		if in.RunHooks {
-			hints, denial, herr := s.runPre(hs, transCreate.preEvent(), nil, iss, nil)
-			if herr != nil {
-				return herr
-			}
-			if denial != nil {
-				return denial
-			}
-			preHints = hints
-		}
-
-		// Write the issue into the correct partition: closeMove lands a closed
-		// issue directly in closed/ (preserving the git-rename history anchor);
-		// otherwise it goes to the hot dir.
+		// closed (HOOK-SPEC §2.1), so it runs through the same gateWrite as every
+		// other write: pre-hooks, then the write, then the write/IO-error log.
 		//
-		// An import is a create transition, so it logs `write op=create` like
-		// every other create (MONITORING.md) — the landing partition is an
+		// Suppressing hooks is expressed as an empty hook set rather than a flag
+		// on gateWrite: the four everyday mutations depend on that helper, and a
+		// conditional inside it would be one more thing they could trip over.
+		//
+		// The write itself picks the partition — closeMove lands a closed issue
+		// directly in closed/ (preserving the git-rename history anchor), anything
+		// else goes to the hot dir. Either way it logs `write op=create` like
+		// every other create (MONITORING.md); the landing partition is an
 		// implementation detail of the same transition.
-		if status == StatusClosed {
-			if err := s.closeMove(iss); err != nil {
-				s.logIOError(string(transCreate), iss.ID, err)
-				return err
-			}
-		} else {
-			if err := s.writeIssue(iss); err != nil {
-				s.logIOError(string(transCreate), iss.ID, err)
-				return err
-			}
+		gate := hs
+		if !in.RunHooks {
+			gate = &hookSet{}
 		}
-		s.logWrite(transCreate, iss.ID)
+		hints, err := s.gateWrite(gate, transCreate, nil, iss, idx, func() error {
+			if status == StatusClosed {
+				return s.closeMove(iss)
+			}
+			return s.writeIssue(iss)
+		})
+		if err != nil {
+			return err
+		}
+		preHints = hints
 
 		// Append the already-validated comment log.
 		for _, doc := range docs {

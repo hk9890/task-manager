@@ -30,7 +30,7 @@ import (
 // dependent issue returns ErrImmutable and does not resurrect the issue in the
 // hot directory (at-z6z / finding C1).
 func TestAddDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -70,7 +70,7 @@ func TestAddDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 // closed dependent issue returns ErrImmutable and does not resurrect the issue
 // in the hot directory (at-z6z / finding C1).
 func TestRemoveDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -114,7 +114,7 @@ func TestRemoveDep_ClosedIssue_ReturnsErrImmutable(t *testing.T) {
 // TestDep_AfterReopen_Succeeds verifies that after Reopen, AddDep and
 // RemoveDep work normally — the immutability guard must not block them.
 func TestDep_AfterReopen_Succeeds(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -154,7 +154,7 @@ func TestDep_AfterReopen_Succeeds(t *testing.T) {
 // AddDep. The early guard in AddDep fires first, and the defense-in-depth
 // guard in writeIssue backs it up. We verify neither write ends up in hot.
 func TestWriteIssue_DefenseInDepth_ClosedIssueNotResurrected(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "b"}))
 	if err != nil {

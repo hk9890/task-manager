@@ -19,10 +19,13 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
+	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
@@ -94,33 +97,109 @@ type silentError struct{ err error }
 func (e silentError) Error() string { return e.err.Error() }
 func (e silentError) Unwrap() error { return e.err }
 
-// Execute runs the root command.
+// Execute runs taskmgr as a process: one invocation, then exit.
+//
+// It is a wrapper over Run so that owning os.Exit and owning the command logic
+// are two different things. Everything worth testing is in Run.
 func Execute() {
-	installUsageErrors(rootCmd)
+	os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// Run executes one taskmgr invocation with the given arguments, writing
+// everything the command emits to stdoutW and stderrW, and returns the exit code
+// the process would use: 0 on success, 1 on any failure.
+//
+// This is the entry point tests use. Asserting on output previously meant
+// `go build` plus a fork, which is why 120 of the CLI's 121 tests sat behind the
+// integration tag and its pure helpers had no tests at all.
+//
+// Run is NOT safe for concurrent use within one process: the command tree and
+// the output writers are package-level state, reset per invocation rather than
+// rebuilt. Sequential calls are independent — every flag returns to its default
+// and the writers are restored — but two Runs at once would interleave. Do not
+// call t.Parallel in a test that uses it.
+func Run(args []string, stdoutW, stderrW io.Writer) int {
+	restore := setOutput(stdoutW, stderrW)
+	defer restore()
+
+	resetFlags(rootCmd)
+	// Once, not per call: it wraps each command's Args validator, so calling it
+	// again would nest the wrapper one layer deeper on every invocation.
+	installUsageErrorsOnce()
+	rootCmd.SetArgs(args)
+	// Cobra's own writers matter for --help and completion, which it prints
+	// itself rather than through a RunE.
+	rootCmd.SetOut(stdoutW)
+	rootCmd.SetErr(stderrW)
+
 	// ExecuteC returns the command that ran, so a required-flag failure (which cobra
 	// reports outside the args/flag hooks) can still be rendered as misuse-help.
 	cmd, err := rootCmd.ExecuteC()
-	if err != nil {
-		var ue *usageError
-		var se silentError
-		switch {
-		case errors.As(err, &ue):
-			// Misinvocation: render the compact help block (purpose, usage, example,
-			// flags/subcommands, --help pointer) instead of the bare one-liner.
-			renderUsageError(ue)
-		case errors.As(err, &se):
-			// Output already emitted to stdout (e.g. a hook_denied JSON object).
-		default:
-			// Cobra reports missing required flags outside the args/flag hooks as a
-			// plain error; detect them structurally and render as misuse-help too,
-			// naming the flags. Anything else is a genuine runtime error: stay terse.
-			if missing := missingRequiredFlags(cmd); len(missing) > 0 {
-				renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)})
-			} else {
-				fmt.Fprintln(os.Stderr, "taskmgr: "+err.Error())
-			}
+	if err == nil {
+		return 0
+	}
+
+	var ue *usageError
+	var se silentError
+	switch {
+	case errors.As(err, &ue):
+		// Misinvocation: render the compact help block (purpose, usage, example,
+		// flags/subcommands, --help pointer) instead of the bare one-liner.
+		renderUsageError(ue)
+	case errors.As(err, &se):
+		// Output already emitted to stdout (e.g. a hook_denied JSON object).
+	default:
+		// Cobra reports missing required flags outside the args/flag hooks as a
+		// plain error; detect them structurally and render as misuse-help too,
+		// naming the flags. Anything else is a genuine runtime error: stay terse.
+		if missing := missingRequiredFlags(cmd); len(missing) > 0 {
+			renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)})
+		} else {
+			_, _ = fmt.Fprintln(stderr, "taskmgr: "+err.Error())
 		}
-		os.Exit(1)
+	}
+	return 1
+}
+
+// installUsageErrorsOnce wires the misuse handling into the shared command tree
+// the first time it is needed.
+var installUsageErrorsOnce = sync.OnceFunc(func() { installUsageErrors(rootCmd) })
+
+// setOutput points the package's writers at w/e for one invocation and returns
+// the function that puts them back. Restoring matters for the in-process case:
+// a test's buffer must not stay installed after its Run returns.
+func setOutput(w, e io.Writer) func() {
+	prevOut, prevErr := stdout, stderr
+	stdout, stderr = w, e
+	return func() { stdout, stderr = prevOut, prevErr }
+}
+
+// resetFlags returns every flag in the tree to its default and clears its
+// Changed marker, so one invocation cannot see what a previous one parsed.
+//
+// This is what stands in for building a fresh command tree. The tree is package
+// state assembled by init functions, and rebuilding it per call would mean a
+// constructor for each of ~30 commands; resetting the flags clears the state
+// that actually carries between invocations, since every value a command reads
+// from its arguments is bound to one.
+func resetFlags(cmd *cobra.Command) {
+	reset := func(fs *pflag.FlagSet) {
+		fs.VisitAll(func(f *pflag.Flag) {
+			// A slice flag appends on Set once it has been marked changed, so
+			// setting it back to its default would grow it instead of clearing
+			// it. Replace is the only way to empty one.
+			if sv, ok := f.Value.(pflag.SliceValue); ok {
+				_ = sv.Replace(nil)
+			} else {
+				_ = f.Value.Set(f.DefValue)
+			}
+			f.Changed = false
+		})
+	}
+	reset(cmd.Flags())
+	reset(cmd.PersistentFlags())
+	for _, sub := range cmd.Commands() {
+		resetFlags(sub)
 	}
 }
 
@@ -162,7 +241,7 @@ var versionCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"version": version, "commit": commit, "date": date})
 		}
-		fmt.Printf("taskmgr %s (commit %s, built %s)\n", version, commit, date)
+		_, _ = fmt.Fprintf(stdout, "taskmgr %s (commit %s, built %s)\n", version, commit, date)
 		return nil
 	},
 }

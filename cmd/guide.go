@@ -178,7 +178,7 @@ Plain text to stdout; pass --json to wrap it as {"guide": "..."}.`,
 		if flagJSON {
 			return printJSON(map[string]string{"guide": guideText})
 		}
-		fmt.Print(guideText)
+		_, _ = fmt.Fprint(stdout, guideText)
 		return nil
 	},
 }

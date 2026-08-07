@@ -5,11 +5,10 @@ human-readable on-ramp; the deeper engineering rules live in [`docs/`](docs/).
 
 ## Project layout
 
-Three Go modules over one storage engine (see [docs/OVERVIEW.md](docs/OVERVIEW.md)):
+Two Go modules over one storage engine (see [docs/OVERVIEW.md](docs/OVERVIEW.md)):
 
 - root (`.`) — the `taskmgr` CLI (cobra).
 - `sdk/` — the dependency-light storage engine and SDK (`sdk/tasks`).
-- `bench/` — a standalone benchmark harness.
 
 Local development uses a committed `go.work` workspace, so the CLI builds against
 the in-tree SDK without a `replace` directive. You do not need to do anything to

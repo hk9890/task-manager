@@ -21,15 +21,14 @@ github.com/hk9890/task-manager   root module — the taskmgr CLI (cobra)
 │   └── taskmgr/                package main — entrypoint; `go install …/cmd/taskmgr`
 │                               yields a binary named `taskmgr`
 ├── sdk/tasks/                  separate module — the storage engine + public SDK
-└── bench/                      separate module — scaling harness (out of build/test)
+└── docs/                       this guide + the contract
+    ├── specs/                  the authoritative specs listed above
+    └── implementation/         package map and the test-layer model
 ```
 
 `sdk` is its own module so consumers can import
 `github.com/hk9890/task-manager/sdk/tasks` without the CLI's dependencies. The root
 `go.mod` **has no `replace`**: it pins the published `sdk vX.Y.Z`, which consumers
-and release builds resolve. The committed `go.work` (`use . ./sdk ./bench`) is what
-points local builds at the in-tree copy; consumers ignore it. The repository's only
-`replace` is in `bench/go.mod`.
-
-`bench/` is outside `go build ./...` and `make test`, but as a workspace member it
-is built and vetted by `mise run quality`.
+and release builds resolve. The committed `go.work` (`use . ./sdk`) is what points
+local builds at the in-tree copy; consumers ignore it. The repository uses no
+`replace` directive anywhere.

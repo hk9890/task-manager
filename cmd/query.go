@@ -85,7 +85,7 @@ func (ff *filterFlags) build() tasks.Filter {
 	}
 }
 
-func runList(cmd *cobra.Command, ff *filterFlags) error {
+func runList(ff *filterFlags) error {
 	if err := validateSort(ff.sort); err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ var listCmd = &cobra.Command{
 	Short: "List issues (open by default)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList(cmd, &listFilter)
+		return runList(&listFilter)
 	},
 }
 
@@ -147,11 +147,13 @@ var searchCmd = &cobra.Command{
 		default:
 			searchFilter.query = textExpr
 		}
-		return runList(cmd, &searchFilter)
+		return runList(&searchFilter)
 	},
 }
 
-var readyLimit int
+var readyFlags struct {
+	limit int
+}
 
 var readyCmd = &cobra.Command{
 	Use:   "ready",
@@ -166,8 +168,8 @@ var readyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if readyLimit > 0 && len(issues) > readyLimit {
-			issues = issues[:readyLimit]
+		if readyFlags.limit > 0 && len(issues) > readyFlags.limit {
+			issues = issues[:readyFlags.limit]
 		}
 		return emitIssues(issues)
 	},
@@ -199,13 +201,13 @@ var blockedCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		if len(blocked) == 0 {
-			fmt.Println("(none)")
+			_, _ = fmt.Fprintln(stdout, "(none)")
 			return nil
 		}
 		for _, b := range blocked {
-			fmt.Printf("%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
+			_, _ = fmt.Fprintf(stdout, "%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
 			for _, r := range b.BlockedBy {
-				fmt.Printf("  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
+				_, _ = fmt.Fprintf(stdout, "  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
 			}
 		}
 		return nil
@@ -229,7 +231,7 @@ var labelsCmd = &cobra.Command{
 			return printJSON(labels)
 		}
 		for _, l := range labels {
-			fmt.Println(l)
+			_, _ = fmt.Fprintln(stdout, l)
 		}
 		return nil
 	},
@@ -248,7 +250,7 @@ var statusesCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		for _, s := range out {
-			fmt.Println(s)
+			_, _ = fmt.Fprintln(stdout, s)
 		}
 		return nil
 	},
@@ -267,7 +269,7 @@ var typesCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		for _, t := range out {
-			fmt.Println(t)
+			_, _ = fmt.Fprintln(stdout, t)
 		}
 		return nil
 	},
@@ -276,6 +278,6 @@ var typesCmd = &cobra.Command{
 func init() {
 	addFilterFlags(listCmd, &listFilter)
 	addFilterFlags(searchCmd, &searchFilter)
-	readyCmd.Flags().IntVar(&readyLimit, "limit", 0, "maximum number of results (0 = all)")
+	readyCmd.Flags().IntVar(&readyFlags.limit, "limit", 0, "maximum number of results (0 = all)")
 	rootCmd.AddCommand(listCmd, searchCmd, readyCmd, blockedCmd, labelsCmd, statusesCmd, typesCmd)
 }

@@ -28,8 +28,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // ── L1: sanitizeCommentBody ────────────────────────────────────────────────
@@ -324,24 +322,8 @@ func TestNewCommentID_Unique(t *testing.T) {
 
 // ── L2 (Mem): appendCommentDoc + readCommentStream ─────────────────────────
 
-func newCommentMemStore(t *testing.T) (*Store, *vfs.Mem) {
-	t.Helper()
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s, m
-}
-
 func TestAppendAndReadCommentStream(t *testing.T) {
-	_, m := newCommentMemStore(t)
+	_, m := newMemStore(t)
 
 	path := "/.tasks/comments/agt-0001.yml"
 	ts := time.Date(2026, 6, 4, 15, 22, 37, 0, time.UTC)
@@ -372,7 +354,7 @@ func TestAppendAndReadCommentStream(t *testing.T) {
 }
 
 func TestReadCommentStream_AbsentFile(t *testing.T) {
-	_, m := newCommentMemStore(t)
+	_, m := newMemStore(t)
 	// File does not exist: should return empty slice, not an error.
 	got, err := readCommentStream(m, "/.tasks/comments/agt-9999.yml")
 	if err != nil {
@@ -384,7 +366,7 @@ func TestReadCommentStream_AbsentFile(t *testing.T) {
 }
 
 func TestAppendCommentDoc_BodyRoundTrip(t *testing.T) {
-	_, m := newCommentMemStore(t)
+	_, m := newMemStore(t)
 
 	path := "/.tasks/comments/agt-0002.yml"
 	ts := time.Date(2026, 6, 4, 15, 22, 37, 0, time.UTC)
@@ -407,7 +389,7 @@ func TestAppendCommentDoc_BodyRoundTrip(t *testing.T) {
 }
 
 func TestAppendCommentDoc_TombstoneRoundTrip(t *testing.T) {
-	_, m := newCommentMemStore(t)
+	_, m := newMemStore(t)
 
 	path := "/.tasks/comments/agt-0003.yml"
 	ts := time.Date(2026, 6, 4, 15, 22, 37, 0, time.UTC)
@@ -447,7 +429,7 @@ func TestAppendCommentDoc_TombstoneRoundTrip(t *testing.T) {
 var errSidecarPoisoned = errors.New("sidecar was opened by All() — violation of the no-sidecar rule")
 
 func TestStoreAll_NeverOpensSidecar(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 
 	// Create an issue.
 	iss, err := unwrap(s.Create(CreateInput{Title: "test issue"}))
@@ -481,7 +463,7 @@ func TestStoreAll_NeverOpensSidecar(t *testing.T) {
 // ── L2 (Mem): commentsPath ─────────────────────────────────────────────────
 
 func TestCommentsPath(t *testing.T) {
-	s, _ := newCommentMemStore(t)
+	s, _ := newMemStore(t)
 	got := s.commentsPath("agt-0001")
 	want := "/.tasks/comments/agt-0001.yml"
 	if got != want {

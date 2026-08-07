@@ -49,19 +49,10 @@ go vet ./...
 """
 
 [tasks."build:all"]
-description = "Compile every module (root, sdk, bench) — catches excluded-module rot"
+description = "Compile every module (root, sdk)"
 run = """
 go build ./...
 (cd sdk && go build ./...)
-(cd bench && go build ./...)
-"""
-
-[tasks."vet:all"]
-description = "go vet every module (root, sdk, bench)"
-run = """
-go vet ./...
-(cd sdk && go vet ./...)
-(cd bench && go vet ./...)
 """
 
 [tasks."test:fuzz"]
@@ -167,9 +158,9 @@ GOWORK=off go build ./... || {
 """
 
 [tasks.quality]
-description = "Fast pre-commit gate: fmt + vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
-depends = ["fmt:check", "vet:all", "build:all", "lint", "test", "test:fuzz"]
+description = "Fast pre-commit gate: fmt + vet + lint + L1/L2 tests + build all modules + fuzz seeds"
+depends = ["fmt:check", "vet", "build:all", "lint", "test", "test:fuzz"]
 
 [tasks."quality:full"]
-description = "Pre-handoff gate: fmt + vet + lint + all layers + build/vet all modules + fuzz seeds"
-depends = ["fmt:check", "vet:all", "build:all", "lint", "test", "test:integration", "test:fuzz"]
+description = "Pre-handoff gate: fmt + vet + lint + all layers + build all modules + fuzz seeds"
+depends = ["fmt:check", "vet", "build:all", "lint", "test", "test:integration", "test:fuzz"]

@@ -20,18 +20,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-var (
-	initPrefix  string
-	initCentral bool
-)
+var initFlags struct {
+	prefix  string
+	central bool
+}
 
 var initCmd = &cobra.Command{
 	Use:   "init",
@@ -53,12 +51,14 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 			}
 			root = wd
 		}
-		prefix := initPrefix
+		prefix := initFlags.prefix
 		if prefix == "" {
-			prefix = derivePrefix(root)
+			// The engine owns this rule (CONFIG-SPEC §5) — the CLI must not
+			// re-implement it, or `init` and `init --central` could drift apart.
+			prefix = tasks.DerivePrefix(root)
 		}
 
-		if initCentral {
+		if initFlags.central {
 			name := flagStoreName
 			if name == "" {
 				name = filepath.Base(root)
@@ -70,8 +70,8 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 			if flagJSON {
 				return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix(), "store": name})
 			}
-			fmt.Printf("Initialized central store %q at %s (prefix %q)\n", name, s.Dir(), s.Prefix())
-			fmt.Fprintln(os.Stderr, "next: run 'taskmgr guide' to learn the workflow")
+			_, _ = fmt.Fprintf(stdout, "Initialized central store %q at %s (prefix %q)\n", name, s.Dir(), s.Prefix())
+			_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")
 			return nil
 		}
 
@@ -82,30 +82,14 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 		if flagJSON {
 			return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix()})
 		}
-		fmt.Printf("Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
-		fmt.Fprintln(os.Stderr, "next: run 'taskmgr guide' to learn the workflow")
+		_, _ = fmt.Fprintf(stdout, "Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
+		_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")
 		return nil
 	},
 }
 
-var nonAlnum = regexp.MustCompile(`[^a-z0-9]`)
-
-// derivePrefix turns a directory name into a valid ID prefix.
-func derivePrefix(root string) string {
-	base := strings.ToLower(filepath.Base(root))
-	base = nonAlnum.ReplaceAllString(base, "")
-	base = strings.TrimLeft(base, "0123456789")
-	if base == "" {
-		return "task"
-	}
-	if len(base) > 8 {
-		base = base[:8]
-	}
-	return base
-}
-
 func init() {
-	initCmd.Flags().StringVar(&initPrefix, "prefix", "", "ID prefix for this project (default: derived from directory name)")
-	initCmd.Flags().BoolVar(&initCentral, "central", false, "create the store under the central root and register it (instead of a local .tasks)")
+	initCmd.Flags().StringVar(&initFlags.prefix, "prefix", "", "ID prefix for this project (default: derived from directory name)")
+	initCmd.Flags().BoolVar(&initFlags.central, "central", false, "create the store under the central root and register it (instead of a local .tasks)")
 	rootCmd.AddCommand(initCmd)
 }

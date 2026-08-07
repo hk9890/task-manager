@@ -48,18 +48,6 @@ func initStoreWithConfig(t *testing.T, prefix, configYAML string) string {
 	return root
 }
 
-// createIssue creates an issue via the CLI and returns its id (last token of
-// "Created <id>" on stdout).
-func createIssue(t *testing.T, root, title string) string {
-	t.Helper()
-	out, _, code := taskmgr(t, root, "create", "--title", title)
-	if code != 0 {
-		t.Fatalf("create: exit %d, out %q", code, out)
-	}
-	fields := strings.Fields(out)
-	return fields[len(fields)-1]
-}
-
 func TestL4_PreCloseGate_DeniedJSON(t *testing.T) {
 	root := initStoreWithConfig(t, "hk", `prefix: hk
 hooks:
@@ -67,7 +55,7 @@ hooks:
     event: pre-close
     run: ["sh", "-c", "echo '3 tests failing' >&2; exit 1"]
 `)
-	id := createIssue(t, root, "to close")
+	id := mkIssue(t, root, "to close")
 
 	stdout, stderr, code := taskmgr(t, root, "--json", "close", id)
 	if code != 1 {
@@ -99,7 +87,7 @@ hooks:
     event: pre-close
     run: ["sh", "-c", "echo 'not green' >&2; exit 1"]
 `)
-	id := createIssue(t, root, "to close")
+	id := mkIssue(t, root, "to close")
 
 	stdout, stderr, code := taskmgr(t, root, "close", id)
 	if code != 1 {
@@ -146,7 +134,7 @@ hooks:
     event: post-close
     run: ["sh", "-c", "echo 'notify failed' >&2; exit 1"]
 `)
-	id := createIssue(t, root, "to close")
+	id := mkIssue(t, root, "to close")
 
 	stdout, _, code := taskmgr(t, root, "--json", "close", id)
 	if code != 0 {

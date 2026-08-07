@@ -17,6 +17,7 @@
 package tasks_test
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -80,10 +81,18 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 }
 
 // TestImportBoundary_PureCoreNoVfs verifies that pure-core files in the tasks
-// package (all non-test .go files except the imperative-shell files store.go
-// and comments.go) do not import internal/vfs. These files must remain pure:
-// they take in-memory inputs and return values/errors, enabling L1 unit tests
-// without any filesystem dependency.
+// package — every non-test .go file that is not listed as imperative shell —
+// stay pure: they take in-memory inputs and return values/errors, so they can be
+// unit-tested at L1 with no filesystem at all.
+//
+// A file breaks that rule two ways, and checking only the first is what let
+// ready.go read disk on every call while this test passed it:
+//
+//  1. It imports internal/vfs, the disk seam.
+//  2. It declares a method on *Store. A method needs no import to reach disk —
+//     it goes through the s.fs field, which no import list reveals — and it
+//     cannot be called without constructing a store, which is the property that
+//     actually makes L1 testing impossible.
 //
 // Pure-core files: ids.go, model.go, frontmatter.go, validate.go, ready.go,
 // doc.go, and any future file that is not explicitly the imperative shell.
@@ -93,14 +102,25 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		t.Skipf("cannot locate sdk/tasks dir: %v", err)
 	}
 
-	// imperativeShell lists the files that are allowed to import vfs because
-	// they form the imperative shell that connects pure logic to the disk seam.
+	// imperativeShell lists the files that are allowed to import vfs and to
+	// declare *Store methods, because they form the imperative shell that
+	// connects pure logic to the disk seam.
+	//
+	// Keep this list minimal: every entry is a file the guard stops checking, so
+	// adding one to make a build pass is how the boundary erodes. A file belongs
+	// here only if it genuinely cannot do its job over plain values.
 	imperativeShell := map[string]bool{
 		"store.go":    true,
 		"comments.go": true,
 		"config.go":   true, // global config loader (env/vfs seams)
 		"registry.go": true, // central registry + Resolve/Stores/InitCentral
 		"content.go":  true, // body-overflow sidecar I/O (rule itself is in overflow.go)
+		"list.go":     true, // Ready/Blocked/Detail/List over the rules in ready.go
+		"mutation.go": true, // the gated write path
+		"import.go":   true, // bulk import
+		"hookrun.go":  true, // hook execution against the exec seam
+		"log.go":      true, // observability records emitted from the write path
+		"criteria.go": true, // Criteria.Apply is a Store method over the listed set
 	}
 
 	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -118,7 +138,7 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 			continue
 		}
 		if imperativeShell[name] {
-			continue // shell files may import vfs
+			continue // shell files may import vfs and hang methods off *Store
 		}
 
 		path := filepath.Join(sdkTasksDir, name)
@@ -134,7 +154,42 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 				t.Errorf("pure-core file %s must not import vfs (got %q)", name, pkg)
 			}
 		}
+
+		// The receiver check needs the declarations, so re-parse in full.
+		full, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Errorf("parse %s: %v", path, err)
+			continue
+		}
+		for _, decl := range full.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
+				continue
+			}
+			if receiverTypeName(fn.Recv.List[0].Type) == "Store" {
+				t.Errorf("pure-core file %s declares %s on *Store: a method reaches the disk seam "+
+					"through s.fs without importing it, and cannot be called without a store. "+
+					"Move it to an imperative-shell file, or make it a function over values.",
+					name, fn.Name.Name)
+			}
+		}
 	}
+}
+
+// receiverTypeName returns the bare type name of a method receiver, unwrapping
+// a pointer and any generic instantiation.
+func receiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(t.X)
+	case *ast.IndexExpr:
+		return receiverTypeName(t.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(t.X)
+	case *ast.Ident:
+		return t.Name
+	}
+	return ""
 }
 
 // findSDKTasksDir walks up from the current working directory to find the

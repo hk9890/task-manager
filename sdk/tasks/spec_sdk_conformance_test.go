@@ -21,7 +21,7 @@ package tasks_test
 // Spec sections covered:
 //   §1  Opening a store — ErrNoStore (Open), ErrStoreExists (Init duplicate)
 //   §4  Store methods — ErrNotFound (Get, Reopen), ErrImmutable (Update on closed)
-//   §6  Errors & validation — all five sentinel errors exist and are returned by
+//   §6  Errors & validation — all six sentinel errors exist and are returned by
 //       the documented operations (errors.Is); ParseError carries Pos and Message.
 //
 // Already well-covered elsewhere (not duplicated here):
@@ -36,20 +36,35 @@ import (
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // ── §6 / §1: sentinel errors exist and are returned by documented operations ──
 
-// TestSpec_SDK_Sentinels_Declared verifies that all five sentinel error
+// newSpecStore returns an empty store on the in-memory seam. The sentinels and
+// semantics this suite pins are the engine's, not the filesystem's, so they
+// belong at L2; the one case that genuinely needs a real directory — Open's
+// walk-up finding nothing — lives in spec_sdk_conformance_l3_test.go.
+func newSpecStore(t *testing.T) *tasks.Store {
+	t.Helper()
+	s, err := tasks.InitWithVFS("/", "tst", vfs.NewMem())
+	if err != nil {
+		t.Fatalf("InitWithVFS: %v", err)
+	}
+	return s
+}
+
+// TestSpec_SDK_Sentinels_Declared verifies that all six sentinel error
 // variables are non-nil and distinct — they must be importable and addressable
 // by consumers (SDK-SPEC §6).
 func TestSpec_SDK_Sentinels_Declared(t *testing.T) {
 	sentinels := map[string]error{
-		"ErrNotFound":      tasks.ErrNotFound,
-		"ErrAlreadyExists": tasks.ErrAlreadyExists,
-		"ErrNoStore":       tasks.ErrNoStore,
-		"ErrStoreExists":   tasks.ErrStoreExists,
-		"ErrImmutable":     tasks.ErrImmutable,
+		"ErrNotFound":           tasks.ErrNotFound,
+		"ErrAlreadyExists":      tasks.ErrAlreadyExists,
+		"ErrNoStore":            tasks.ErrNoStore,
+		"ErrStoreExists":        tasks.ErrStoreExists,
+		"ErrStoreNotRegistered": tasks.ErrStoreNotRegistered,
+		"ErrImmutable":          tasks.ErrImmutable,
 	}
 	seen := map[string]struct{}{}
 	for name, err := range sentinels {
@@ -65,28 +80,14 @@ func TestSpec_SDK_Sentinels_Declared(t *testing.T) {
 	}
 }
 
-// TestSpec_SDK_ErrNoStore_FromOpen verifies that Open returns ErrNoStore when
-// there is no .tasks directory (SDK-SPEC §1, §6).
-func TestSpec_SDK_ErrNoStore_FromOpen(t *testing.T) {
-	// t.TempDir() is a real empty directory with no .tasks child.
-	empty := t.TempDir()
-	_, err := tasks.Open(empty)
-	if err == nil {
-		t.Fatal("Open on empty dir: expected ErrNoStore, got nil")
-	}
-	if !errors.Is(err, tasks.ErrNoStore) {
-		t.Errorf("Open on empty dir: got %v, want errors.Is(ErrNoStore)", err)
-	}
-}
-
 // TestSpec_SDK_ErrStoreExists_FromInit verifies that Init returns ErrStoreExists
 // when a store already exists at that root (SDK-SPEC §1, §6).
 func TestSpec_SDK_ErrStoreExists_FromInit(t *testing.T) {
-	root := t.TempDir()
-	if _, err := tasks.Init(root, "tst"); err != nil {
+	m := vfs.NewMem()
+	if _, err := tasks.InitWithVFS("/", "tst", m); err != nil {
 		t.Fatalf("first Init: %v", err)
 	}
-	_, err := tasks.Init(root, "tst")
+	_, err := tasks.InitWithVFS("/", "tst", m)
 	if err == nil {
 		t.Fatal("second Init: expected ErrStoreExists, got nil")
 	}
@@ -98,12 +99,8 @@ func TestSpec_SDK_ErrStoreExists_FromInit(t *testing.T) {
 // TestSpec_SDK_ErrNotFound_FromGet verifies that Get returns ErrNotFound for an
 // unknown ID (SDK-SPEC §4, §6).
 func TestSpec_SDK_ErrNotFound_FromGet(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	_, err = s.Get("tst-9999")
+	s := newSpecStore(t)
+	_, err := s.Get("tst-9999")
 	if err == nil {
 		t.Fatal("Get unknown ID: expected ErrNotFound, got nil")
 	}
@@ -116,11 +113,7 @@ func TestSpec_SDK_ErrNotFound_FromGet(t *testing.T) {
 // when the target issue is closed (SDK-SPEC §6: "ErrImmutable is returned by
 // Update … when the target issue lives in closed/").
 func TestSpec_SDK_ErrImmutable_FromUpdate(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "immutable test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -143,11 +136,7 @@ func TestSpec_SDK_ErrImmutable_FromUpdate(t *testing.T) {
 // expression returns *ParseError carrying a non-negative Pos and a non-empty
 // Message (SDK-SPEC §6; QUERY-SPEC §4).
 func TestSpec_SDK_ParseError_HasPosAndMessage(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	if _, err := s.Create(tasks.CreateInput{Title: "seed"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -171,14 +160,10 @@ func TestSpec_SDK_ParseError_HasPosAndMessage(t *testing.T) {
 // TestSpec_SDK_ValidationError_HasField verifies that a field-constraint
 // violation returns *ValidationError carrying a non-empty Field (SDK-SPEC §6).
 func TestSpec_SDK_ValidationError_HasField(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 
 	// Empty title violates the §4 constraint — ValidationError must be returned.
-	_, err = s.Create(tasks.CreateInput{Title: ""})
+	_, err := s.Create(tasks.CreateInput{Title: ""})
 	if err == nil {
 		t.Fatal("Create with empty title: expected ValidationError, got nil")
 	}
@@ -199,11 +184,7 @@ func TestSpec_SDK_ValidationError_HasField(t *testing.T) {
 // existing issue and nil (no-op; no in-place write to closed/ is attempted)."
 // (SDK-SPEC §6 / already tested at L2; this is the L3 traceability layer.)
 func TestSpec_SDK_Close_Idempotent(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "close twice"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -234,11 +215,7 @@ func TestSpec_SDK_Close_Idempotent(t *testing.T) {
 // calling it twice with the same pair returns nil on both calls
 // (SDK-SPEC §4: "AddDep … idempotent").
 func TestSpec_SDK_AddDep_Idempotent(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
@@ -269,11 +246,7 @@ func TestSpec_SDK_AddDep_Idempotent(t *testing.T) {
 // TestSpec_SDK_AddDep_RejectsSelfDependency verifies that adding a self-loop is
 // rejected (SDK-SPEC §4: "AddDep … rejects self-dependency").
 func TestSpec_SDK_AddDep_RejectsSelfDependency(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "self"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -287,11 +260,7 @@ func TestSpec_SDK_AddDep_RejectsSelfDependency(t *testing.T) {
 // would introduce a cycle (SDK-SPEC §4: "AddDep … any edge that would create a
 // cycle").
 func TestSpec_SDK_AddDep_RejectsCycle(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	a, err := unwrap(s.Create(tasks.CreateInput{Title: "A"}))
 	if err != nil {
 		t.Fatalf("Create A: %v", err)
@@ -314,11 +283,7 @@ func TestSpec_SDK_AddDep_RejectsCycle(t *testing.T) {
 // empty body is rejected (SDK-SPEC §4; TASK-STORAGE-SPEC §4.4 "Required unless
 // deleted: true").
 func TestSpec_SDK_AddComment_EmptyBodyRejected(t *testing.T) {
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
+	s := newSpecStore(t)
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "has comment"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)

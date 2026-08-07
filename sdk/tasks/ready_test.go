@@ -17,12 +17,15 @@
 package tasks
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 func TestReadyAndBlocked(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
 	dependent := mustCreate(t, s, CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
 	free := mustCreate(t, s, CreateInput{Title: "free"})
@@ -60,7 +63,7 @@ func TestReadyAndBlocked(t *testing.T) {
 }
 
 func TestReadyExcludesNonOpen(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	ip := StatusInProgress
 	if _, err := s.Update(iss.ID, UpdateInput{Status: &ip}); err != nil {
@@ -73,7 +76,7 @@ func TestReadyExcludesNonOpen(t *testing.T) {
 }
 
 func TestReadyOrderingByPriority(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	p3 := 3
 	p0 := 0
 	low := mustCreate(t, s, CreateInput{Title: "low", Priority: &p3})
@@ -86,7 +89,7 @@ func TestReadyOrderingByPriority(t *testing.T) {
 }
 
 func TestDetailDerivesInverseEdges(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	epic := mustCreate(t, s, CreateInput{Title: "epic", Type: TypeEpic})
 	child := mustCreate(t, s, CreateInput{Title: "child", Parent: epic.ID})
 	blocked := mustCreate(t, s, CreateInput{Title: "blocked", BlockedBy: []string{epic.ID}})
@@ -112,7 +115,7 @@ func TestDetailDerivesInverseEdges(t *testing.T) {
 }
 
 func TestListFilters(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	p1 := 1
 	bug := mustCreate(t, s, CreateInput{Title: "a bug", Type: TypeBug, Priority: &p1, Labels: []string{"x"}})
 	mustCreate(t, s, CreateInput{Title: "a task", Type: TypeTask, Labels: []string{"y"}})
@@ -234,4 +237,53 @@ func ids(issues []*Issue) []string {
 		out[i] = iss.ID
 	}
 	return out
+}
+
+// TestDetail_RefResolutionFailureIsNotSwallowed pins the two ends of a ref that
+// is not in the hot index: a dangling one is dropped, an unreadable one is an
+// error.
+//
+// Discarding every error there meant an I/O failure silently removed a blocker
+// from the rendered issue: a blocked issue printed with no Blocked-by line and
+// exit 0, which reads as "ready to work on".
+func TestDetail_RefResolutionFailureIsNotSwallowed(t *testing.T) {
+	newPair := func(t *testing.T) (*vfs.Mem, *Store, *Issue, *Issue) {
+		t.Helper()
+		m := vfs.NewMem()
+		s, err := InitWithVFS("/p", "tst", m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
+		dependent := mustCreate(t, s, CreateInput{Title: "dependent"})
+		if err := s.AddDep(dependent.ID, blocker.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unwrap(s.Close(blocker.ID, "done")); err != nil {
+			t.Fatal(err)
+		}
+		return m, s, dependent, blocker
+	}
+
+	t.Run("unreadable blocker is an error", func(t *testing.T) {
+		m, s, dependent, blocker := newPair(t)
+		m.FailOn("ReadFile", s.closedFilePath(blocker.ID), errors.New("disk error"))
+		if _, err := s.Detail(dependent.ID); err == nil {
+			t.Error("Detail must not report a blocked issue as unblocked when the blocker cannot be read")
+		}
+	})
+
+	t.Run("dangling blocker is dropped", func(t *testing.T) {
+		m, s, dependent, blocker := newPair(t)
+		if err := m.Remove(s.closedFilePath(blocker.ID)); err != nil {
+			t.Fatal(err)
+		}
+		d, err := s.Detail(dependent.ID)
+		if err != nil {
+			t.Fatalf("a hand-edited store must stay readable: %v", err)
+		}
+		if len(d.BlockedByRefs) != 0 {
+			t.Errorf("BlockedByRefs = %v, want the dangling ref dropped", d.BlockedByRefs)
+		}
+	})
 }

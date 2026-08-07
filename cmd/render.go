@@ -19,6 +19,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -28,9 +29,19 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-// printJSON writes v as indented JSON to stdout.
+// out and errOut are where command output goes. They are the process's own
+// streams for a real invocation and whatever Run was handed for an in-process
+// one; see setOutput in root.go. Command code writes through these rather than
+// naming os.Stdout directly, which is what makes output assertable without
+// building and forking the binary.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+)
+
+// printJSON writes v as indented JSON to the command's stdout.
 func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
@@ -175,10 +186,10 @@ func toDetailDTO(d *tasks.Detail) detailDTO {
 // printIssueTable renders a compact one-line-per-issue table.
 func printIssueTable(issues []*tasks.Issue) {
 	if len(issues) == 0 {
-		fmt.Println("(none)")
+		_, _ = fmt.Fprintln(stdout, "(none)")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "ID\tP\tTYPE\tSTATUS\tTITLE")
 	for _, i := range issues {
 		_, _ = fmt.Fprintf(w, "%s\tP%d\t%s\t%s\t%s\n", i.ID, i.Priority, i.Type, i.Status, i.Title)
@@ -188,40 +199,40 @@ func printIssueTable(issues []*tasks.Issue) {
 
 // printDetail renders a full issue for human reading.
 func printDetail(d *tasks.Detail) {
-	fmt.Printf("%s  %s\n", d.ID, d.Title)
-	fmt.Printf("  status:   %s\n", d.Status)
-	fmt.Printf("  type:     %s   priority: P%d\n", d.Type, d.Priority)
+	_, _ = fmt.Fprintf(stdout, "%s  %s\n", d.ID, d.Title)
+	_, _ = fmt.Fprintf(stdout, "  status:   %s\n", d.Status)
+	_, _ = fmt.Fprintf(stdout, "  type:     %s   priority: P%d\n", d.Type, d.Priority)
 	if d.Assignee != "" {
-		fmt.Printf("  assignee: %s\n", d.Assignee)
+		_, _ = fmt.Fprintf(stdout, "  assignee: %s\n", d.Assignee)
 	}
 	if len(d.Labels) > 0 {
-		fmt.Printf("  labels:   %s\n", strings.Join(d.Labels, ", "))
+		_, _ = fmt.Fprintf(stdout, "  labels:   %s\n", strings.Join(d.Labels, ", "))
 	}
 	if d.ParentRef != nil {
-		fmt.Printf("  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
+		_, _ = fmt.Fprintf(stdout, "  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
 	}
 	printRefLine("blocked by", d.BlockedByRefs)
 	printRefLine("blocks", d.Blocks)
 	printRefLine("related", d.RelatedRefs)
 	printRefLine("children", d.Children)
-	fmt.Printf("  created:  %s\n", d.Created.Format(time.RFC3339))
-	fmt.Printf("  updated:  %s\n", d.Updated.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(stdout, "  created:  %s\n", d.Created.Format(time.RFC3339))
+	_, _ = fmt.Fprintf(stdout, "  updated:  %s\n", d.Updated.Format(time.RFC3339))
 	if !d.Closed.IsZero() {
-		fmt.Printf("  closed:   %s", d.Closed.Format(time.RFC3339))
+		_, _ = fmt.Fprintf(stdout, "  closed:   %s", d.Closed.Format(time.RFC3339))
 		if d.CloseReason != "" {
-			fmt.Printf("  (%s)", d.CloseReason)
+			_, _ = fmt.Fprintf(stdout, "  (%s)", d.CloseReason)
 		}
-		fmt.Println()
+		_, _ = fmt.Fprintln(stdout)
 	}
 	printBody(d)
 	if len(d.Comments) > 0 {
-		fmt.Printf("\nComments (%d):\n", len(d.Comments))
+		_, _ = fmt.Fprintf(stdout, "\nComments (%d):\n", len(d.Comments))
 		for _, c := range d.Comments {
 			who := c.Author
 			if who == "" {
 				who = "?"
 			}
-			fmt.Printf("  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
+			_, _ = fmt.Fprintf(stdout, "  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
 		}
 	}
 }
@@ -241,15 +252,15 @@ func printBody(d *tasks.Detail) {
 		return
 	}
 	if len(body) <= showBodyLimit {
-		fmt.Printf("\n%s\n", body)
+		_, _ = fmt.Fprintf(stdout, "\n%s\n", body)
 		return
 	}
-	fmt.Printf("\n%s\n", truncateRunes(body, showBodyLimit))
+	_, _ = fmt.Fprintf(stdout, "\n%s\n", truncateRunes(body, showBodyLimit))
 	where := "--json for the full body"
 	if d.BodyExternal {
 		where = fmt.Sprintf("full content in %s/%s, or --json", "content", d.ID)
 	}
-	fmt.Printf("\n[body is %d bytes; showing the first %d — %s]\n", len(body), showBodyLimit, where)
+	_, _ = fmt.Fprintf(stdout, "\n[body is %d bytes; showing the first %d — %s]\n", len(body), showBodyLimit, where)
 }
 
 // truncateRunes cuts s to at most n bytes without splitting a UTF-8 rune.
@@ -271,7 +282,7 @@ func printRefLine(label string, refs []tasks.Ref) {
 	for i, r := range refs {
 		parts[i] = fmt.Sprintf("%s (%s)", r.ID, r.Status)
 	}
-	fmt.Printf("  %-9s %s\n", label+":", strings.Join(parts, ", "))
+	_, _ = fmt.Fprintf(stdout, "  %-9s %s\n", label+":", strings.Join(parts, ", "))
 }
 
 func indent(s string) string {

@@ -18,28 +18,9 @@ package tasks
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
-
-// newTestStore creates an initialized store in a temp dir with a fixed clock.
-func newTestStore(t *testing.T) *Store {
-	t.Helper()
-	root := t.TempDir()
-	s, err := Init(root, "agt")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s
-}
 
 func mustCreate(t *testing.T, s *Store, in CreateInput) *Issue {
 	t.Helper()
@@ -50,50 +31,8 @@ func mustCreate(t *testing.T, s *Store, in CreateInput) *Issue {
 	return iss
 }
 
-func TestInitRejectsDuplicate(t *testing.T) {
-	root := t.TempDir()
-	if _, err := Init(root, "agt"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Init(root, "agt"); !errors.Is(err, ErrStoreExists) {
-		t.Errorf("expected ErrStoreExists, got %v", err)
-	}
-}
-
-func TestInitRejectsBadPrefix(t *testing.T) {
-	for _, p := range []string{"", "A", "1x", "has-dash", "has space"} {
-		if _, err := Init(t.TempDir(), p); err == nil {
-			t.Errorf("prefix %q: expected error", p)
-		}
-	}
-}
-
-func TestOpenWalksUp(t *testing.T) {
-	root := t.TempDir()
-	if _, err := Init(root, "agt"); err != nil {
-		t.Fatal(err)
-	}
-	nested := filepath.Join(root, "a", "b", "c")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(nested)
-	if err != nil {
-		t.Fatalf("Open from nested: %v", err)
-	}
-	if s.Prefix() != "agt" {
-		t.Errorf("prefix = %q", s.Prefix())
-	}
-}
-
-func TestOpenNoStore(t *testing.T) {
-	if _, err := Open(t.TempDir()); !errors.Is(err, ErrNoStore) {
-		t.Errorf("expected ErrNoStore, got %v", err)
-	}
-}
-
 func TestCreateAllocatesUniqueIDs(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "first"})
 	b := mustCreate(t, s, CreateInput{Title: "second"})
 	for _, id := range []string{a.ID, b.ID} {
@@ -114,7 +53,7 @@ func TestCreateAllocatesUniqueIDs(t *testing.T) {
 // caller-supplied ID is honoured when valid, and rejected when malformed,
 // carrying the wrong prefix, or already in use.
 func TestCreateExplicitID(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 
 	// Valid explicit ID (incl. legacy numeric form) is used verbatim.
 	got := mustCreate(t, s, CreateInput{ID: "agt-0042", Title: "pinned"})
@@ -139,7 +78,7 @@ func TestCreateExplicitID(t *testing.T) {
 }
 
 func TestCreateValidates(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	if _, err := s.Create(CreateInput{Title: "  "}); err == nil {
 		t.Error("empty title should fail")
 	}
@@ -153,7 +92,7 @@ func TestCreateValidates(t *testing.T) {
 }
 
 func TestCreateRejectsMissingRefs(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	if _, err := s.Create(CreateInput{Title: "x", BlockedBy: []string{"agt-9999"}}); err == nil {
 		t.Error("missing blocker should fail")
 	}
@@ -163,14 +102,14 @@ func TestCreateRejectsMissingRefs(t *testing.T) {
 }
 
 func TestGetNotFound(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	if _, err := s.Get("agt-0001"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
 func TestUpdatePartial(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "orig"})
 
 	newTitle := "changed"
@@ -194,7 +133,7 @@ func TestUpdatePartial(t *testing.T) {
 }
 
 func TestUpdateLabels(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x", Labels: []string{"a", "b"}})
 
 	out, _ := unwrap(s.Update(iss.ID, UpdateInput{AddLabels: []string{"c"}, RemoveLabels: []string{"a"}}))
@@ -214,7 +153,7 @@ func TestUpdateLabels(t *testing.T) {
 }
 
 func TestStatusClosedStampsAndClears(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 
 	closedStatus := StatusClosed
@@ -230,7 +169,7 @@ func TestStatusClosedStampsAndClears(t *testing.T) {
 }
 
 func TestCloseIdempotent(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 
 	first, err := unwrap(s.Close(iss.ID, "done"))
@@ -256,7 +195,7 @@ func TestCloseIdempotent(t *testing.T) {
 }
 
 func TestAddComment(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	// sanitizeCommentBody strips trailing whitespace per line, not leading.
 	// "a note\n" is a clean body; use it directly.
@@ -281,7 +220,7 @@ func TestAddComment(t *testing.T) {
 }
 
 func TestAddDepAndCycle(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 
@@ -309,7 +248,7 @@ func TestAddDepAndCycle(t *testing.T) {
 // case in TestAddDepAndCycle never reaches: a -> b -> c -> a. Closing the loop
 // must exercise findCycle's gray back-edge / stack-slicing branch.
 func TestAddDep_TransitiveCycle(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	c := mustCreate(t, s, CreateInput{Title: "c"})
@@ -333,7 +272,7 @@ func TestAddDep_TransitiveCycle(t *testing.T) {
 }
 
 func TestRemoveDep(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
 	if err := s.AddDep(a.ID, b.ID); err != nil {
@@ -345,17 +284,6 @@ func TestRemoveDep(t *testing.T) {
 	reloaded, _ := s.Get(a.ID)
 	if len(reloaded.BlockedBy) != 0 {
 		t.Errorf("blocker not removed: %v", reloaded.BlockedBy)
-	}
-}
-
-func TestAtomicWriteLeavesNoTemp(t *testing.T) {
-	s := newTestStore(t)
-	mustCreate(t, s, CreateInput{Title: "x"})
-	entries, _ := os.ReadDir(s.Dir())
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) == "" && e.Name() != ConfigFileName && e.Name() != lockFileName {
-			t.Errorf("unexpected leftover file: %s", e.Name())
-		}
 	}
 }
 

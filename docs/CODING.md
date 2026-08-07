@@ -35,7 +35,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 | Change | Goes in |
 |---|---|
-| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS |
+| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. One flag struct per command, named `<command>Flags` — never shared between sibling subcommands. The only package-level flag variables are `flagJSON`/`flagDir`/`flagStoreName`, which are root *persistent* flags every command reads |
 | Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
@@ -43,13 +43,16 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 | Reading the environment (home, any `TASKMGR_*`) | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
 | Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
 | Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
-| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import → unit-tests at L1 |
+| Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import **and no `*Store` method** → unit-tests at L1 |
 
 ## How to test
 
 - Pure logic → **L1** (no FS). Store orchestration & error paths → **L2** on
   `vfs.Mem` (with fault injection). Durability, `flock`, round-trip → **L3** real
-  temp dir. CLI → **L4**.
+  temp dir. CLI → **L4**, in-process through `cmd.Run(args, stdout, stderr) int`
+  unless the process itself is the subject (exit codes as a shell sees them,
+  stdin, signals, two processes contending the lock) — those fork the binary
+  behind the `integration` tag.
 - Build fixtures with `sdk/tasks/internal/storetest`; never hand-roll a real
   `.tasks/`. Deterministic time via `Store.now` inside package `tasks`, via
   `Store.SetNow` from `cmd/` and external consumers. Details in
@@ -67,10 +70,9 @@ seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bu
 
 ## Modules
 
-Three modules: root (the CLI), `sdk/` (minimal-dep — only `yaml.v3`), and `bench/`.
-The committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has
-no `replace` and pins the published `sdk vX.Y.Z` for consumers. `bench/` is outside
-`go build ./...` and `make test`, but `mise run quality` builds and vets it — so a
-bench compile error fails the gate.
+Two modules: root (the CLI) and `sdk/` (minimal-dep — only `yaml.v3`). The
+committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has no
+`replace` and pins the published `sdk vX.Y.Z` for consumers. `mise run build:all`
+compiles both so a cross-module break fails the gate.
 Run `mise run tidy` after changing imports. Authoritative:
 [ARCHITECTURE-SPEC §4](specs/ARCHITECTURE-SPEC.md).

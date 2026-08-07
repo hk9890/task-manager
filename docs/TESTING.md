@@ -14,9 +14,11 @@ mise run quality:full      # + L3/L4                                           (
 `make` fallback: `make test` (both modules), `make test-sdk` / `make test-cli` for
 one, `make vet`, `make fmt`, `make fmt-check` (fails instead of rewriting).
 
-L3/L4 sit behind the `integration` build tag, so a plain `go test ./...` skips
-them — including the entire CLI suite. Raw equivalent:
-`go test -race -tags=integration ./...`, once per module.
+L3 and the subprocess half of L4 sit behind the `integration` build tag, so a
+plain `go test ./...` skips them. Raw equivalent:
+`go test -race -tags=integration ./...`, once per module. The CLI's in-process
+tests — anything asserting on what a command printed — run untagged through
+`cmd.Run`; see [implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
 A change is not green until `quality:full` passes; it covers everything
 `.github/workflows/ci.yml` checks, so a green gate should mean a green PR. There is

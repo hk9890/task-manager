@@ -30,7 +30,6 @@ package tasks
 
 import (
 	"testing"
-	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -88,17 +87,7 @@ func TestReferencesClosedWork(t *testing.T) {
 // closed issue (in closed/) plus a deterministic clock.
 func newScopedMemStore(t *testing.T) (*Store, *vfs.Mem, string, string, string) {
 	t.Helper()
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
+	s, m := newMemStore(t)
 
 	open1, err := unwrap(s.Create(CreateInput{Title: "open one", Labels: []string{"area:hot"}}))
 	if err != nil {

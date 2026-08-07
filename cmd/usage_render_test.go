@@ -14,28 +14,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration
-
-// L4 CLI tests for misuse-help — the compact help block shown when a command is
+// In-process CLI tests for misuse-help — the compact help block shown when a command is
 // invoked wrong, the unknown-subcommand error, and the "did you mean?" suggestion.
+//
+// They run in-process through Run, in the default suite: the whole subject is
+// what lands on stdout and stderr, which needs no forked binary.
 //
 // The defining property is the split: a *misuse* (bad args, bad/missing flag,
 // unknown subcommand) gets the helpful block; a *runtime* error (not found, etc.)
 // stays terse. Both go to stderr with the "taskmgr: " prefix and leave stdout empty.
-package cmd_test
+package cmd
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-// TestL4_Misuse_MissingArg_ShowsBlock: `show` with no id renders purpose, usage,
+// TestMisuse_MissingArg_ShowsBlock: `show` with no id renders purpose, usage,
 // example, and a --help pointer — not the bare cobra one-liner.
-func TestL4_Misuse_MissingArg_ShowsBlock(t *testing.T) {
+func TestMisuse_MissingArg_ShowsBlock(t *testing.T) {
 	root := t.TempDir()
-	stdout, stderr, code := taskmgr(t, root, "show")
+	stdout, stderr, code := run(t, "--dir", root, "show")
 	if code != 1 {
 		t.Fatalf("show (no id): expected exit 1, got %d", code)
 	}
@@ -52,14 +51,11 @@ func TestL4_Misuse_MissingArg_ShowsBlock(t *testing.T) {
 	}
 }
 
-// TestL4_Misuse_MissingRequiredFlag_ListsFlags: `create` with no --title lists the
+// TestMisuse_MissingRequiredFlag_ListsFlags: `create` with no --title lists the
 // command's flags (so the agent sees --title right there), via the required-flag path.
-func TestL4_Misuse_MissingRequiredFlag_ListsFlags(t *testing.T) {
-	root := t.TempDir()
-	if _, err := tasks.Init(root, "tst"); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	stdout, stderr, code := taskmgr(t, root, "create")
+func TestMisuse_MissingRequiredFlag_ListsFlags(t *testing.T) {
+	root := newStore(t)
+	stdout, stderr, code := run(t, "--dir", root, "create")
 	if code != 1 {
 		t.Fatalf("create (no --title): expected exit 1, got %d", code)
 	}
@@ -73,11 +69,11 @@ func TestL4_Misuse_MissingRequiredFlag_ListsFlags(t *testing.T) {
 	}
 }
 
-// TestL4_Misuse_UnknownSubcommand_Errors: an unknown subcommand exits 1 with a
+// TestMisuse_UnknownSubcommand_Errors: an unknown subcommand exits 1 with a
 // suggestion — not the silent exit-0 help that cobra prints by default.
-func TestL4_Misuse_UnknownSubcommand_Errors(t *testing.T) {
+func TestMisuse_UnknownSubcommand_Errors(t *testing.T) {
 	root := t.TempDir()
-	stdout, stderr, code := taskmgr(t, root, "dep", "addd", "a", "b")
+	stdout, stderr, code := run(t, "--dir", root, "dep", "addd", "a", "b")
 	if code != 1 {
 		t.Fatalf("dep addd: expected exit 1, got %d (stdout=%q)", code, stdout)
 	}
@@ -91,11 +87,11 @@ func TestL4_Misuse_UnknownSubcommand_Errors(t *testing.T) {
 	}
 }
 
-// TestL4_Misuse_UnknownCommand_Suggests: a top-level typo gets cobra's built-in
+// TestMisuse_UnknownCommand_Suggests: a top-level typo gets cobra's built-in
 // "did you mean?" (enabled, surfaced through our error path).
-func TestL4_Misuse_UnknownCommand_Suggests(t *testing.T) {
+func TestMisuse_UnknownCommand_Suggests(t *testing.T) {
 	root := t.TempDir()
-	_, stderr, code := taskmgr(t, root, "shw")
+	_, stderr, code := run(t, "--dir", root, "shw")
 	if code != 1 {
 		t.Fatalf("shw: expected exit 1, got %d", code)
 	}
@@ -106,11 +102,11 @@ func TestL4_Misuse_UnknownCommand_Suggests(t *testing.T) {
 	}
 }
 
-// TestL4_Misuse_SubcommandName_InMessage: a leaf subcommand names its full path in
+// TestMisuse_SubcommandName_InMessage: a leaf subcommand names its full path in
 // the "needs" message ("dep add needs …"), not just the leaf word.
-func TestL4_Misuse_SubcommandName_InMessage(t *testing.T) {
+func TestMisuse_SubcommandName_InMessage(t *testing.T) {
 	root := t.TempDir()
-	_, stderr, code := taskmgr(t, root, "dep", "add")
+	_, stderr, code := run(t, "--dir", root, "dep", "add")
 	if code != 1 {
 		t.Fatalf("dep add (no args): expected exit 1, got %d", code)
 	}
@@ -119,14 +115,11 @@ func TestL4_Misuse_SubcommandName_InMessage(t *testing.T) {
 	}
 }
 
-// TestL4_RuntimeError_StaysTerse is the guard for the central design property: a
+// TestRuntimeError_StaysTerse is the guard for the central design property: a
 // genuine runtime failure (unknown id) must NOT be dressed up with the usage block.
-func TestL4_RuntimeError_StaysTerse(t *testing.T) {
-	root := t.TempDir()
-	if _, err := tasks.Init(root, "tst"); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	_, stderr, code := taskmgr(t, root, "show", "tst-9999")
+func TestRuntimeError_StaysTerse(t *testing.T) {
+	root := newStore(t)
+	_, stderr, code := run(t, "--dir", root, "show", "tst-9999")
 	if code != 1 {
 		t.Fatalf("show unknown id: expected exit 1, got %d", code)
 	}

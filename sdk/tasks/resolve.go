@@ -93,11 +93,16 @@ func validStoreName(name string) bool { return storeNameRe.MatchString(name) }
 // nonAlnumRe matches characters not allowed in a derived ID prefix.
 var nonAlnumRe = regexp.MustCompile(`[^a-z0-9]`)
 
-// derivePrefix turns a project path's base name into a valid ID prefix
+// DerivePrefix turns a project path's base name into a valid ID prefix
 // (CONFIG-SPEC §5): lowercased, non-alphanumerics stripped, leading digits
-// removed, truncated to 8, falling back to "task". Mirrors the CLI's local-init
-// derivation so central and local stores derive identically.
-func derivePrefix(path string) string {
+// removed, truncated to 8, falling back to "task".
+//
+// It is exported because the prefix is stamped into every ID the store ever
+// allocates and cannot be corrected retroactively, so every front end has to
+// derive it identically. The CLI carried a byte-identical private copy; a
+// divergence between the two would have made `taskmgr init` and
+// `taskmgr init --central` disagree, silently and unrecoverably.
+func DerivePrefix(path string) string {
 	base := strings.ToLower(filepath.Base(path))
 	base = nonAlnumRe.ReplaceAllString(base, "")
 	base = strings.TrimLeft(base, "0123456789")

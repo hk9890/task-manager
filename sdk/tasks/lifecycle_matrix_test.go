@@ -53,9 +53,6 @@ import (
 func setupLifecycleStore(t *testing.T, prefix string) *tasks.Store {
 	t.Helper()
 	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
 	s, err := tasks.InitWithVFS("/", prefix, m)
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)

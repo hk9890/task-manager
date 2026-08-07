@@ -124,7 +124,9 @@ var updateCmd = &cobra.Command{
 	},
 }
 
-var closeReason string
+var closeFlags struct {
+	reason string
+}
 
 var closeCmd = &cobra.Command{
 	Use:   "close <id>",
@@ -135,7 +137,7 @@ var closeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		res, err := s.Close(args[0], closeReason)
+		res, err := s.Close(args[0], closeFlags.reason)
 		if err != nil {
 			return mutationError(err)
 		}
@@ -180,11 +182,10 @@ var depAddCmd = &cobra.Command{
 		if err := s.AddDep(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s now blocked by %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "add"})
 		}
+		_, _ = fmt.Fprintf(stdout, "%s now blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -201,11 +202,10 @@ var depRmCmd = &cobra.Command{
 		if err := s.RemoveDep(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s no longer blocked by %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "rm"})
 		}
+		_, _ = fmt.Fprintf(stdout, "%s no longer blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -227,11 +227,10 @@ var relAddCmd = &cobra.Command{
 		if err := s.AddRelated(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s related to %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "add"})
 		}
+		_, _ = fmt.Fprintf(stdout, "%s related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -248,11 +247,10 @@ var relRmCmd = &cobra.Command{
 		if err := s.RemoveRelated(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s no longer related to %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "rm"})
 		}
+		_, _ = fmt.Fprintf(stdout, "%s no longer related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -263,10 +261,22 @@ var commentCmd = &cobra.Command{
 	Short:   "Manage issue comments",
 }
 
-var commentFlags struct {
-	author string
-	file   string
-}
+// Each comment subcommand gets its own flag struct. They shared one, which made
+// per-subcommand defaults impossible and coupled three commands through a
+// variable none of their code mentions.
+var (
+	commentAddFlags struct {
+		author string
+		file   string
+	}
+	commentEditFlags struct {
+		author string
+		file   string
+	}
+	commentRmFlags struct {
+		author string
+	}
+)
 
 // defaultUser returns s, or $USER when s is empty.
 func defaultUser(s string) string {
@@ -315,13 +325,13 @@ var commentAddCmd = &cobra.Command{
 		if argGiven {
 			arg = args[1]
 		}
-		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+		body, err := resolveCommentBody(cmd, commentAddFlags.file, arg, argGiven,
 			"comment body is empty",
 			"provide a comment body as an argument or via --file")
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentAddFlags.author)
 		c, err := s.AddComment(args[0], author, body)
 		if err != nil {
 			return err
@@ -329,7 +339,7 @@ var commentAddCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(toCommentDTO(*c))
 		}
-		fmt.Printf("Commented on %s (comment %s)\n", args[0], c.ID)
+		_, _ = fmt.Fprintf(stdout, "Commented on %s (comment %s)\n", args[0], c.ID)
 		return nil
 	},
 }
@@ -348,13 +358,13 @@ var commentEditCmd = &cobra.Command{
 		if argGiven {
 			arg = args[2]
 		}
-		body, err := resolveCommentBody(cmd, commentFlags.file, arg, argGiven,
+		body, err := resolveCommentBody(cmd, commentEditFlags.file, arg, argGiven,
 			"comment body is empty; use comment rm to delete",
 			"provide a body as an argument or via --file")
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentEditFlags.author)
 		c, err := s.EditComment(args[0], args[1], author, body)
 		if err != nil {
 			return err
@@ -362,7 +372,7 @@ var commentEditCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(toCommentDTO(*c))
 		}
-		fmt.Printf("Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
+		_, _ = fmt.Fprintf(stdout, "Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
 		return nil
 	},
 }
@@ -376,19 +386,18 @@ var commentRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentFlags.author)
+		author := defaultUser(commentRmFlags.author)
 		if err := s.DeleteComment(args[0], args[1], author); err != nil {
 			return err
 		}
 		if flagJSON {
 			return printJSON(map[string]string{"op": "rm", "issue": args[0], "comment_id": args[1]})
 		}
-		fmt.Printf("Deleted comment %s from %s\n", args[1], args[0])
+		_, _ = fmt.Fprintf(stdout, "Deleted comment %s from %s\n", args[1], args[0])
 		return nil
 	},
 }
 
-// reportMutation prints a uniform success line (or the JSON detail).
 // reportResult prints a successful gated mutation, surfacing hook hints and
 // post-hook warnings (HOOK-SPEC §6.2). With --json the issue carries "hints" and
 // "warnings"; in text mode they print as notes on stderr so stdout stays clean.
@@ -400,7 +409,7 @@ func reportResult(res *tasks.MutationResult, verb string) error {
 			Warnings: res.Warnings,
 		})
 	}
-	fmt.Printf("%s %s\n", verb, res.Issue.ID)
+	_, _ = fmt.Fprintf(stdout, "%s %s\n", verb, res.Issue.ID)
 	printNotes(res.Hints, res.Warnings)
 	return nil
 }
@@ -408,10 +417,10 @@ func reportResult(res *tasks.MutationResult, verb string) error {
 // printNotes writes hook hints and warnings to stderr as advisory notes.
 func printNotes(hints, warnings []string) {
 	for _, h := range hints {
-		fmt.Fprintln(os.Stderr, "hint: "+h)
+		_, _ = fmt.Fprintln(stderr, "hint: "+h)
 	}
 	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "warning: "+w)
+		_, _ = fmt.Fprintln(stderr, "warning: "+w)
 	}
 }
 
@@ -451,20 +460,20 @@ func init() {
 	uf.StringSliceVar(&updateFlags.setLabels, "set-labels", nil, "replace the label set")
 	uf.BoolVar(&updateFlags.clearLabels, "clear-labels", false, "remove all labels")
 
-	closeCmd.Flags().StringVar(&closeReason, "reason", "", "reason for closing")
+	closeCmd.Flags().StringVar(&closeFlags.reason, "reason", "", "reason for closing")
 
 	rootCmd.AddCommand(reopenCmd)
 
 	depCmd.AddCommand(depAddCmd, depRmCmd)
 	relCmd.AddCommand(relAddCmd, relRmCmd)
 
-	commentAddCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
-	commentAddCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
+	commentAddCmd.Flags().StringVar(&commentAddFlags.author, "author", "", "comment author (default: $USER)")
+	commentAddCmd.Flags().StringVar(&commentAddFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
-	commentEditCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author (default: $USER)")
-	commentEditCmd.Flags().StringVar(&commentFlags.file, "file", "", `read body from a file ("-" for stdin)`)
+	commentEditCmd.Flags().StringVar(&commentEditFlags.author, "author", "", "comment author (default: $USER)")
+	commentEditCmd.Flags().StringVar(&commentEditFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
-	commentRmCmd.Flags().StringVar(&commentFlags.author, "author", "", "comment author for tombstone (default: $USER)")
+	commentRmCmd.Flags().StringVar(&commentRmFlags.author, "author", "", "comment author for tombstone (default: $USER)")
 
 	commentCmd.AddCommand(commentAddCmd, commentEditCmd, commentRmCmd)
 

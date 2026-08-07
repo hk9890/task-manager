@@ -28,38 +28,7 @@ package cmd_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks"
 )
-
-// newStoreWithOpenAndClosed initialises a temp store with one open and one
-// closed issue. Returns (root, openID, closedID).
-func newStoreWithOpenAndClosed(t *testing.T) (root, openID, closedID string) {
-	t.Helper()
-	root = t.TempDir()
-	s, err := tasks.Init(root, "lst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
-	open, err := unwrap(s.Create(tasks.CreateInput{Title: "active task", Labels: []string{"area:hot"}}))
-	if err != nil {
-		t.Fatalf("Create open: %v", err)
-	}
-	closed, err := unwrap(s.Create(tasks.CreateInput{Title: "done task", Labels: []string{"area:cold"}}))
-	if err != nil {
-		t.Fatalf("Create closed: %v", err)
-	}
-	if _, err := s.Close(closed.ID, "done"); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	return root, open.ID, closed.ID
-}
 
 // issueIDsFromJSON parses a JSON array of issueDTO and returns the ids.
 func issueIDsFromJSON(t *testing.T, output string) []string {
@@ -81,7 +50,7 @@ func issueIDsFromJSON(t *testing.T, output string) []string {
 // TestL4_ListDefault_HotOnly verifies that `taskmgr list` without --all excludes
 // closed issues (hot-only).
 func TestL4_ListDefault_HotOnly(t *testing.T) {
-	root, openID, closedID := newStoreWithOpenAndClosed(t)
+	root, openID, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	out, _, code := taskmgr(t, root, "--json", "list")
 	if code != 0 {
@@ -107,7 +76,7 @@ func TestL4_ListDefault_HotOnly(t *testing.T) {
 // TestL4_ListAll_IncludesClosed verifies that `taskmgr list --all` returns both
 // hot and cold issues.
 func TestL4_ListAll_IncludesClosed(t *testing.T) {
-	root, openID, closedID := newStoreWithOpenAndClosed(t)
+	root, openID, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	out, _, code := taskmgr(t, root, "--json", "list", "--all")
 	if code != 0 {
@@ -129,7 +98,7 @@ func TestL4_ListAll_IncludesClosed(t *testing.T) {
 // TestL4_ListQuery_ClosedStatus verifies that `taskmgr list -q 'status == "closed"'`
 // auto-includes the closed partition so closed issues are returned.
 func TestL4_ListQuery_ClosedStatus(t *testing.T) {
-	root, _, closedID := newStoreWithOpenAndClosed(t)
+	root, _, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	out, _, code := taskmgr(t, root, "--json", "list", "-q", `status == "closed"`)
 	if code != 0 {
@@ -150,7 +119,7 @@ func TestL4_ListQuery_ClosedStatus(t *testing.T) {
 // TestL4_ListQuery_OpenStatus verifies that `taskmgr list -q 'status == "open"'`
 // stays hot-only (no closed-referencing expression).
 func TestL4_ListQuery_OpenStatus(t *testing.T) {
-	root, _, closedID := newStoreWithOpenAndClosed(t)
+	root, _, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	out, _, code := taskmgr(t, root, "--json", "list", "-q", `status == "open"`)
 	if code != 0 {
@@ -169,7 +138,7 @@ func TestL4_ListQuery_OpenStatus(t *testing.T) {
 // TestL4_SearchDefault_HotOnly verifies that `taskmgr search <text>` without
 // --all excludes closed issues.
 func TestL4_SearchDefault_HotOnly(t *testing.T) {
-	root, _, closedID := newStoreWithOpenAndClosed(t)
+	root, _, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	// "done" is in the closed issue's title; without --all it must not appear.
 	out, _, code := taskmgr(t, root, "--json", "search", "done")
@@ -187,7 +156,7 @@ func TestL4_SearchDefault_HotOnly(t *testing.T) {
 // TestL4_SearchAll_IncludesClosed verifies that `taskmgr search <text> --all`
 // searches the cold partition too.
 func TestL4_SearchAll_IncludesClosed(t *testing.T) {
-	root, _, closedID := newStoreWithOpenAndClosed(t)
+	root, _, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	// "done" is in the closed issue's title; with --all it must appear.
 	out, _, code := taskmgr(t, root, "--json", "search", "done", "--all")
@@ -209,7 +178,7 @@ func TestL4_SearchAll_IncludesClosed(t *testing.T) {
 // TestL4_SearchAll_OpenIssueAlsoReturned verifies that search --all returns both
 // hot and cold issues that match.
 func TestL4_SearchAll_OpenIssueAlsoReturned(t *testing.T) {
-	root, openID, closedID := newStoreWithOpenAndClosed(t)
+	root, openID, closedID := newStoreWithOpenAndClosed(t, "lst")
 
 	// "task" is in both the open issue's title ("active task") and not in the closed
 	// one; use "a" to match both. Or use "task" which matches "active task".

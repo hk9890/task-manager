@@ -64,7 +64,7 @@ func TestLogHook_RecordsDecisionAndDuration(t *testing.T) {
 	fake := &exec.Fake{Func: func(exec.Spec) exec.Result {
 		return exec.Result{Category: exec.Completed, ExitCode: 0, Stdout: []byte("hi"), Duration: 7 * time.Millisecond}
 	}}
-	s, err := Init(t.TempDir(), "x", WithLogger(lg))
+	s, err := InitWithVFS("/", "x", vfs.NewMem(), WithLogger(lg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestLogHook_DenyLogsAtInfo(t *testing.T) {
 	lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Deny(1, "nope") }}
-	s, err := Init(t.TempDir(), "x", WithLogger(lg))
+	s, err := InitWithVFS("/", "x", vfs.NewMem(), WithLogger(lg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestLogHook_PostHookFailureLogsWarnNotDeny(t *testing.T) {
 	lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Deny(1, "notify failed") }}
-	s, err := Init(t.TempDir(), "x", WithLogger(lg))
+	s, err := InitWithVFS("/", "x", vfs.NewMem(), WithLogger(lg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestLogHook_ErrorDecisionIsPhaseIndependent(t *testing.T) {
 			fake := &exec.Fake{Func: func(exec.Spec) exec.Result {
 				return exec.Result{Category: exec.Timeout}
 			}}
-			s, err := Init(t.TempDir(), "x", WithLogger(lg))
+			s, err := InitWithVFS("/", "x", vfs.NewMem(), WithLogger(lg))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -274,7 +274,7 @@ func TestLogIOError_NonTransitionWrites(t *testing.T) {
 func TestLogger_DefaultIsSilent(t *testing.T) {
 	// No WithLogger: the discard logger must not panic and a successful run is
 	// silent. (We can't capture discard output; this asserts the path is safe.)
-	s, err := Init(t.TempDir(), "x")
+	s, err := InitWithVFS("/", "x", vfs.NewMem())
 	if err != nil {
 		t.Fatal(err)
 	}

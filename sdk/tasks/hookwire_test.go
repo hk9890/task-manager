@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // L2: the public mutation methods, gated by hooks end-to-end (HOOK-SPEC §4/§6.2).
@@ -183,7 +184,7 @@ func TestImport_RunHooks_SurfacesPostWarnings(t *testing.T) {
 }
 
 func TestUpdate_CloseViaUpdate_ClosedEqualsUpdated(t *testing.T) {
-	s := newTestStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	st := StatusClosed
 	res, err := s.Update(iss.ID, UpdateInput{Status: &st})
@@ -245,7 +246,7 @@ func TestUpdate_NoOpFiresNoHooks(t *testing.T) {
 }
 
 func TestConfigError_FailsMutationsClosed(t *testing.T) {
-	s, err := Init(t.TempDir(), "x")
+	s, err := InitWithVFS("/", "x", vfs.NewMem())
 	if err != nil {
 		t.Fatal(err)
 	}

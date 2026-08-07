@@ -19,7 +19,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -54,7 +53,7 @@ var storeListCmd = &cobra.Command{
 	Short: "List central registry entries",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		entries, err := tasks.Stores(resolveOptions())
+		entries, err := tasks.Stores()
 		if err != nil {
 			return err
 		}
@@ -66,10 +65,10 @@ var storeListCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		if len(entries) == 0 {
-			fmt.Println("no central stores")
+			_, _ = fmt.Fprintln(stdout, "no central stores")
 			return nil
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 		_, _ = fmt.Fprintln(w, "STORE\tPROJECT\tSTORE PATH")
 		for _, e := range entries {
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", e.Store, e.Path, e.StorePath)
@@ -78,12 +77,12 @@ var storeListCmd = &cobra.Command{
 	},
 }
 
-var (
-	moveCentral bool
-	moveRename  bool
-	moveRelink  bool
-	moveTo      string
-)
+var storeMoveFlags struct {
+	central bool
+	rename  bool
+	relink  bool
+	to      string
+}
 
 var storeMoveCmd = &cobra.Command{
 	// The mode alternatives sit in Use so both cobra's usage line and the
@@ -128,9 +127,9 @@ store leaves the project, so rewrite such hooks to an absolute path or to
 			return &usageError{cmd: cmd, msg: "--central, --rename and --relink are mutually exclusive; got " + strings.Join(modes, " and ")}
 		}
 		switch {
-		case moveCentral:
+		case storeMoveFlags.central:
 			return runStoreMoveCentral()
-		case moveRename:
+		case storeMoveFlags.rename:
 			return runStoreMoveRename(cmd)
 		default:
 			return runStoreMoveRelink(cmd)
@@ -145,7 +144,7 @@ func pickedModes() []string {
 	for _, m := range []struct {
 		name string
 		on   bool
-	}{{"--central", moveCentral}, {"--rename", moveRename}, {"--relink", moveRelink}} {
+	}{{"--central", storeMoveFlags.central}, {"--rename", storeMoveFlags.rename}, {"--relink", storeMoveFlags.relink}} {
 		if m.on {
 			picked = append(picked, m.name)
 		}
@@ -173,7 +172,7 @@ func runStoreMoveCentral() error {
 	if info.Kind != tasks.ResolvedLocal {
 		return fmt.Errorf("this project already uses a central store at %s; --central promotes a local .tasks store", info.StorePath)
 	}
-	name := moveTo
+	name := storeMoveFlags.to
 	if name == "" {
 		name = filepath.Base(info.ProjectPath)
 	}
@@ -187,7 +186,7 @@ func runStoreMoveCentral() error {
 
 // runStoreMoveRename renames the central store resolving here to --to.
 func runStoreMoveRename(cmd *cobra.Command) error {
-	if moveTo == "" {
+	if storeMoveFlags.to == "" {
 		return &usageError{cmd: cmd, msg: "--rename requires --to <name>"}
 	}
 	info, err := resolveForMove()
@@ -198,17 +197,17 @@ func runStoreMoveRename(cmd *cobra.Command) error {
 		return fmt.Errorf("--rename needs a central store, but %s resolves as %s", info.StorePath, info.Kind)
 	}
 	old := filepath.Base(info.StorePath)
-	dir, err := tasks.RenameCentral(old, moveTo)
+	dir, err := tasks.RenameCentral(old, storeMoveFlags.to)
 	if err != nil {
 		return err
 	}
-	return emitStoreMove(storeMoveDTO{Store: moveTo, StorePath: dir, ProjectPath: info.ProjectPath},
-		fmt.Sprintf("Renamed central store %q to %q at %s", old, moveTo, dir))
+	return emitStoreMove(storeMoveDTO{Store: storeMoveFlags.to, StorePath: dir, ProjectPath: info.ProjectPath},
+		fmt.Sprintf("Renamed central store %q to %q at %s", old, storeMoveFlags.to, dir))
 }
 
 // runStoreMoveRelink re-points the entry named --to at the current directory.
 func runStoreMoveRelink(cmd *cobra.Command) error {
-	if moveTo == "" {
+	if storeMoveFlags.to == "" {
 		return &usageError{cmd: cmd, msg: "--relink requires --to <name>"}
 	}
 	// Make the directory absolute here: unlike every other command, relink does
@@ -218,37 +217,37 @@ func runStoreMoveRelink(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	project, err := tasks.RelinkCentral(moveTo, dir)
+	project, err := tasks.RelinkCentral(storeMoveFlags.to, dir)
 	if err != nil {
 		return err
 	}
-	entries, err := tasks.Stores(resolveOptions())
+	entries, err := tasks.Stores()
 	if err != nil {
 		return err
 	}
 	var storePath string
 	for _, e := range entries {
-		if e.Store == moveTo {
+		if e.Store == storeMoveFlags.to {
 			storePath = e.StorePath
 		}
 	}
-	return emitStoreMove(storeMoveDTO{Store: moveTo, StorePath: storePath, ProjectPath: project},
-		fmt.Sprintf("Central store %q now tracks %s", moveTo, project))
+	return emitStoreMove(storeMoveDTO{Store: storeMoveFlags.to, StorePath: storePath, ProjectPath: project},
+		fmt.Sprintf("Central store %q now tracks %s", storeMoveFlags.to, project))
 }
 
 func emitStoreMove(d storeMoveDTO, human string) error {
 	if flagJSON {
 		return printJSON(d)
 	}
-	fmt.Println(human)
+	_, _ = fmt.Fprintln(stdout, human)
 	return nil
 }
 
 func init() {
-	storeMoveCmd.Flags().BoolVar(&moveCentral, "central", false, "promote the local store here into the central root")
-	storeMoveCmd.Flags().BoolVar(&moveRename, "rename", false, "rename the central store here to --to")
-	storeMoveCmd.Flags().BoolVar(&moveRelink, "relink", false, "re-point the entry named --to at this directory")
-	storeMoveCmd.Flags().StringVar(&moveTo, "to", "", "target registry name (default with --central: the project directory name)")
+	storeMoveCmd.Flags().BoolVar(&storeMoveFlags.central, "central", false, "promote the local store here into the central root")
+	storeMoveCmd.Flags().BoolVar(&storeMoveFlags.rename, "rename", false, "rename the central store here to --to")
+	storeMoveCmd.Flags().BoolVar(&storeMoveFlags.relink, "relink", false, "re-point the entry named --to at this directory")
+	storeMoveCmd.Flags().StringVar(&storeMoveFlags.to, "to", "", "target registry name (default with --central: the project directory name)")
 	// The mode flags are validated in RunE, not via cobra's flag groups — see
 	// the comment there.
 

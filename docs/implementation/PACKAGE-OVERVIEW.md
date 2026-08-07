@@ -12,7 +12,7 @@ Test layers: [TESTING-STRATEGY.md](TESTING-STRATEGY.md).
 ```
 sdk/tasks/                  package tasks — public facade + imperative shell
   model · frontmatter · validate · ids · ready · comments · store
-  mutation · transition · import · config · registry · resolve
+  list · mutation · transition · import · config · registry · resolve
   query · criteria · search  (query surface)
   hooks · hookrun · hookpayload  (lifecycle gates)
   log · doc
@@ -22,8 +22,9 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   internal/env/             the environment seam: Environment interface · OS impl · Fake
   internal/storetest/       fixture builder ("make a store") — test-only support package
 cmd/                        taskmgr CLI (cobra); calls Store, never the FS
+                            Run(args, stdout, stderr) int is the entry point;
+                            Execute is os.Exit(Run(...)) and nothing else
   taskmgr/                  package main — the binary entrypoint
-bench/                      separate module; excluded from go build ./... and make test
 ```
 
 ## What each package holds
@@ -52,9 +53,13 @@ bench/                      separate module; excluded from go build ./... and ma
 1. **Seam confinement** — within `sdk/tasks`, only `internal/vfs`, `internal/exec`,
    and `internal/env` import `os`/`syscall`. Enforced by
    `sdk/tasks/importboundary_test.go`.
-2. **The pure core imports neither `os` nor `vfs`** — `query`, `frontmatter`,
-   `validate`, `ids`, the `ready`/`blocked` graph, and comment `resolve` take
-   in-memory inputs and return values/errors (so they unit-test at L1).
+2. **The pure core imports neither `os` nor `vfs`, and declares no `*Store`
+   method** — `query`, `frontmatter`, `validate`, `ids`, the `ready`/`blocked`
+   graph, and comment `resolve` take in-memory inputs and return values/errors
+   (so they unit-test at L1). The receiver half of the rule matters as much as
+   the import half: a method reaches the seam through `s.fs`, which no import
+   list shows. `ready.go` holds the graph rules; the `*Store` methods that feed
+   them are in `list.go`.
 3. **`cmd` never touches the filesystem** — always via `Store`.
 4. **`internal/query` must not import `tasks`** (import cycle); it evaluates over `Row`.
 5. **Single writer:** every mutation runs through `Store` under the `vfs` lock;
