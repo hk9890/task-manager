@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -312,6 +313,61 @@ func (m *Mem) Rename(oldpath, newpath string) error {
 
 	m.files[newpath] = bytes.Clone(data)
 	delete(m.files, oldpath)
+	return nil
+}
+
+// MoveTree moves the directory tree at src to dst by re-keying every file and
+// directory path under src. Mem has one flat namespace, so there is no
+// cross-filesystem case to model: the move always succeeds as a whole or not at
+// all. src must be a known directory and dst must not exist.
+func (m *Mem) MoveTree(src, dst string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFault("MoveTree", src); err != nil {
+		return err
+	}
+
+	src, dst = filepath.Clean(src), filepath.Clean(dst)
+	if !m.dirs[src] {
+		return fmt.Errorf("%w: %s", os.ErrNotExist, src)
+	}
+	if _, isFile := m.files[dst]; isFile || m.dirs[dst] {
+		return fmt.Errorf("vfs.Mem.MoveTree: destination already exists: %s", dst)
+	}
+	if err := m.requireParentDir(dst, "destination parent directory"); err != nil {
+		return err
+	}
+
+	// Collect before mutating: rewriting the maps while ranging over them would
+	// make the visit order decide the result.
+	prefix := src + string(filepath.Separator)
+	movedFiles := make(map[string][]byte)
+	var oldFiles []string
+	for p, data := range m.files {
+		if strings.HasPrefix(p, prefix) {
+			movedFiles[dst+strings.TrimPrefix(p, src)] = data
+			oldFiles = append(oldFiles, p)
+		}
+	}
+	var oldDirs []string
+	for d := range m.dirs {
+		if d == src || strings.HasPrefix(d, prefix) {
+			oldDirs = append(oldDirs, d)
+		}
+	}
+
+	for _, p := range oldFiles {
+		delete(m.files, p)
+	}
+	for _, d := range oldDirs {
+		delete(m.dirs, d)
+		m.dirs[dst+strings.TrimPrefix(d, src)] = true
+	}
+	for p, data := range movedFiles {
+		m.files[p] = data
+	}
+	m.ensureDir(dst)
 	return nil
 }
 

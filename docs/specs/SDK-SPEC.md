@@ -21,6 +21,9 @@ func Resolve(opts ResolveOptions, sopts ...Option) (*Store, ResolveInfo, error) 
 func Open(start string, opts ...Option) (*Store, error)          // low-level: local walk-up only
 func Init(root, prefix string, opts ...Option) (*Store, error)   // create a local store
 func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, error) // create + register
+func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // promote a local store
+func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
+func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
 func Stores(opts ResolveOptions) ([]StoreEntry, error)           // enumerate the central registry
 
 type Option func(*Store)
@@ -48,6 +51,27 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
   (CONFIG-SPEC §3). An empty `prefix` is derived from the project directory name (else
   `task`), exactly as for `Init` — prefixes are per-project, with no global default.
   Fails if the subfolder or a registry entry for that path already exists.
+- **`MoveToCentral`** promotes an existing local store: it registers `name` for
+  `projectPath` and moves `<projectPath>/.tasks` to `<central_root>/stores/<name>`,
+  returning the store open at its new location (CONFIG-SPEC §5). The store's
+  `config.yaml` moves verbatim, so the prefix and hooks survive. Returns `ErrNoStore`
+  when there is no local store to promote, and `ErrStoreExists` when the name or the
+  subfolder is taken. The registry entry is written **before** the files move, so an
+  interrupted promote leaves the local store working, and it is **rolled back** when the
+  move returns an error, so the call can simply be retried (CONFIG-SPEC §5).
+- **`RenameCentral`** renames the central store `oldName` to `newName` — the subfolder
+  under `stores/` and the registry entry both — and returns the new store directory.
+  The folder moves first and is **moved back** if the registry write fails. Returns
+  `ErrStoreNotRegistered` for an unknown `oldName` and `ErrStoreExists` when `newName`
+  is taken.
+- **`RelinkCentral`** re-points the registry entry `name` at `projectPath`, for a
+  project that moved on disk, and returns the canonical path recorded. It touches no
+  files. `projectPath` must be **absolute** — a relative path is resolved against the
+  central root, not the caller's working directory. Returns `ErrStoreNotRegistered` for
+  an unknown name, `ErrNoStore` when the store subfolder is missing (it will not write
+  an entry resolution would skip), and an error when `projectPath` does not exist
+  (canonicalization falls back to the lexical form, so an unchecked typo would silently
+  point a live entry at nothing).
 - **`Stores`** reads the central registry and returns its entries (it does **not**
   resolve against a working directory — `where` uses `Resolve`; `store list` uses this).
   It reads through the same seams as `Resolve` and never writes; a missing registry
@@ -63,9 +87,7 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
 ```go
 type ResolveOptions struct {
     WorkDir   string // resolution origin; "" → process working directory
-    StorePath string // explicit store-path override (--store-path / TASKMGR_DIR); opens directly
     StoreName string // explicit central store-name override (--store-name); via the registry
-    // StorePath and StoreName are mutually exclusive.
 }
 
 type ResolveInfo struct {
@@ -78,7 +100,6 @@ type ResolveKind int
 const (
     ResolvedLocal        ResolveKind = iota // local .tasks found by walk-up
     ResolvedCentral                         // central registry match
-    ResolvedOverridePath                    // explicit store-path / TASKMGR_DIR
     ResolvedOverrideName                    // explicit store-name
 )
 
@@ -606,16 +627,17 @@ var (
     ErrNotFound           // issue not found
     ErrAlreadyExists      // an explicit CreateInput.ID / ImportInput.ID is already taken
     ErrNoStore            // no store found (no local .tasks and no registry match)
-    ErrStoreExists        // a store already exists at the create target
+    ErrStoreExists        // a store already exists at the create/move target
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
-    ErrStoreNotRegistered // --store-name names a store with no registry entry (CONFIG-SPEC §4)
-    ErrAmbiguousOverride  // both a store-path and a store-name override were supplied
+    ErrStoreNotRegistered // a store name has no registry entry (CONFIG-SPEC §4)
 )
 ```
 
 `Resolve` returns `ErrNoStore` when neither a local store nor a registry match is
-found, `ErrStoreNotRegistered` when an explicit `StoreName` has no entry, and
-`ErrAmbiguousOverride` when both `StorePath` and `StoreName` are set. A corrupt
+found, and `ErrStoreNotRegistered` when an explicit `StoreName` has no entry.
+`RenameCentral` and `RelinkCentral` return `ErrStoreNotRegistered` for the store they
+were asked to edit, and `ErrNoStore` when its subfolder is missing; `MoveToCentral`
+returns `ErrNoStore` when there is no local store to promote. A corrupt
 `config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
 is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 

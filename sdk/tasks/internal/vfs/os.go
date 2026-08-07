@@ -18,6 +18,7 @@ package vfs
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -142,6 +143,109 @@ func (osFS) Rename(oldpath, newpath string) error {
 		return fmt.Errorf("vfs.Rename fsyncDir: %w", err)
 	}
 	return nil
+}
+
+// MoveTree moves the directory tree at src to dst (see FS.MoveTree). The
+// same-filesystem path is a plain rename; the cross-filesystem path copies the
+// tree and then removes the source, which is deliberately not atomic.
+func (osFS) MoveTree(src, dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("vfs.MoveTree: destination already exists: %s", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("vfs.MoveTree stat destination: %w", err)
+	}
+	err := os.Rename(src, dst)
+	if err == nil {
+		if err := fsyncDir(filepath.Dir(dst)); err != nil {
+			return fmt.Errorf("vfs.MoveTree fsyncDir: %w", err)
+		}
+		return nil
+	}
+	if !isCrossDevice(err) {
+		return fmt.Errorf("vfs.MoveTree rename: %w", err)
+	}
+	if err := copyTree(src, dst); err != nil {
+		return fmt.Errorf("vfs.MoveTree copy: %w", err)
+	}
+	// Publish the new directory entry durably *before* unlinking the source, so
+	// a crash in between cannot leave neither copy on disk. copyTree fsyncs the
+	// files and the directories it creates, but not the parent it links dst
+	// into; the rename branch above gets this from its own fsyncDir.
+	if err := fsyncDir(filepath.Dir(dst)); err != nil {
+		return fmt.Errorf("vfs.MoveTree fsyncDir: %w", err)
+	}
+	if err := os.RemoveAll(src); err != nil {
+		return fmt.Errorf("vfs.MoveTree remove source (a complete copy is at %s; the source may be partly removed): %w", dst, err)
+	}
+	return nil
+}
+
+// copyTree recursively copies src to dst, which must not exist. Directories and
+// regular files are copied with their permissions; any other file type (symlink,
+// device, socket, fifo) is an error. A store holds neither, so hitting one means
+// the source is not the tree the caller thinks it is — and failing loudly here is
+// what keeps the caller from deleting a source it only partly copied.
+func copyTree(src, dst string) error {
+	fi, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	switch {
+	case fi.IsDir():
+		// Create it traversable, populate, then Chmod to the source mode. Mkdir
+		// and OpenFile subtract the process umask, so only an explicit Chmod
+		// reproduces the permissions exactly — and doing it last means a
+		// restrictive source mode cannot lock the copy out of its own children.
+		if err := os.Mkdir(dst, 0o700); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(src)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+		if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
+			return err
+		}
+		return fsyncDir(dst)
+	case fi.Mode().IsRegular():
+		return copyFile(src, dst, fi.Mode().Perm())
+	default:
+		return fmt.Errorf("unsupported file type %s: %s", fi.Mode().Type(), src)
+	}
+}
+
+// copyFile copies the regular file src to dst (which must not exist) and fsyncs
+// it before returning, so the content is durable once the tree copy completes.
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	// OpenFile's mode is masked by the umask; Chmod is not.
+	if err := out.Chmod(perm); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (osFS) MkdirAll(dir string, perm os.FileMode) error {

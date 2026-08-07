@@ -242,22 +242,6 @@ func TestResolve_NoStore(t *testing.T) {
 	}
 }
 
-func TestResolve_OverridePath_FlagAndEnv(t *testing.T) {
-	m := vfs.NewMem()
-	makeStore(t, m, "/ov", "/ov/store", "ovx")
-
-	// via flag
-	_, info, err := resolveWith(ResolveOptions{StorePath: "/ov/store"}, m, fakeEnv(nil), nil)
-	if err != nil || info.Kind != ResolvedOverridePath || info.StorePath != "/ov/store" {
-		t.Fatalf("flag override: kind=%v path=%q err=%v", info.Kind, info.StorePath, err)
-	}
-	// via TASKMGR_DIR
-	_, info, err = resolveWith(ResolveOptions{}, m, fakeEnv(map[string]string{"TASKMGR_DIR": "/ov/store"}), nil)
-	if err != nil || info.Kind != ResolvedOverridePath {
-		t.Fatalf("env override: kind=%v err=%v", info.Kind, err)
-	}
-}
-
 func TestResolve_OverrideName(t *testing.T) {
 	m := vfs.NewMem()
 	storeDir := filepath.Join(testCentral, storesSubdir, "proj")
@@ -275,14 +259,6 @@ func TestResolve_OverrideName(t *testing.T) {
 	_, _, err = resolveWith(ResolveOptions{StoreName: "nope"}, m, fakeEnv(nil), nil)
 	if !errors.Is(err, ErrStoreNotRegistered) {
 		t.Errorf("unknown name err = %v, want ErrStoreNotRegistered", err)
-	}
-}
-
-func TestResolve_AmbiguousOverride(t *testing.T) {
-	m := vfs.NewMem()
-	_, _, err := resolveWith(ResolveOptions{StorePath: "/x", StoreName: "y"}, m, fakeEnv(nil), nil)
-	if !errors.Is(err, ErrAmbiguousOverride) {
-		t.Errorf("err = %v, want ErrAmbiguousOverride", err)
 	}
 }
 
