@@ -53,9 +53,16 @@ jobs:
       # in-tree SDK, so none of them sees a go.mod that still pins an older sdk —
       # while `go install .../cmd/taskmgr@<tag>` compiles against exactly that pin
       # and fails for every user. On a tag push this is the last point at which a
-      # stale pin can be caught, and the tag is already public by then; on a dry
-      # run it is a real gate, which is the point of running one.
+      # stale pin can be caught, and the tag is already public by then; on a
+      # dispatched dry run it is a real gate, which is the point of running one.
+      #
+      # Skipped on the weekly schedule: this is a release-readiness gate, not a
+      # drift check. Between releases the CLI legitimately uses SDK symbols that
+      # are not published yet, so it is *expected* to fail on an arbitrary main —
+      # which is why `.mise.toml` keeps `verify:pin` out of `quality` too. Running
+      # it every Monday would just teach everyone to ignore a red release run.
       - name: Verify the SDK pin resolves (go install path)
+        if: github.event_name != 'schedule'
         run: |
           if ! GOWORK=off go build ./...; then
             echo "::error::go.mod pins an SDK version this commit does not build against."
@@ -83,6 +90,22 @@ jobs:
       - name: Install syft (SBOM generator)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
+      # GoReleaser must never resolve the tag itself here. Releases carry a
+      # parallel `sdk/vX.Y.Z` tag on the same history — usually one commit behind
+      # the CLI tag, since the SDK has to be published before the CLI can pin it —
+      # so a bare `git describe` can land on `sdk/v0.7.0`, which is not semver and
+      # is not this artifact. A tag push knows its own tag; a dry run takes the
+      # newest CLI tag, `--match` keeping the sdk tags out.
+      - name: Resolve the tag GoReleaser builds against
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            echo "GORELEASER_CURRENT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
+            echo "GORELEASER_CURRENT_TAG=${tag}" >> "$GITHUB_ENV"
+            echo "Dry run: building a snapshot off ${tag}"
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -93,10 +116,7 @@ jobs:
           args: release --clean ${{ github.event_name != 'push' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Pin the tag so the parallel `sdk/v*` tag on the same commit is never
-          # picked up. Left unset on a dry run, where the ref is a branch and the
-          # snapshot version comes from `git describe` instead.
-          GORELEASER_CURRENT_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          # GORELEASER_CURRENT_TAG comes from the step above, via $GITHUB_ENV.
 
   # PR touching the release config -> snapshot build only (no publish, read-only
   # token). Catches a broken .goreleaser.yaml before any tag is ever cut.

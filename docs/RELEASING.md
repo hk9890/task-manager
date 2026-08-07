@@ -79,8 +79,11 @@ on a clean, up-to-date tree.
    CI job build inside the committed `go.work`, which wires the CLI to the
    in-tree SDK — so a `go.mod` still pinning the *previous* `sdk` version passes
    all of them, while `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for
-   every user. The release workflow runs the same check before GoReleaser, but by
-   then the tag is already pushed.
+   every user. The release workflow runs the same check before GoReleaser — on a
+   tag push, though, the tag is already public by then, which is the other reason
+   to dry-run first (step 5). The weekly dry run skips this check: between
+   releases the CLI legitimately uses SDK symbols that are not published yet, so
+   on an arbitrary `main` it is expected to fail.
 
 5. **Dry-run the release workflow on the commit you are about to tag.** This is
    the same job that runs on a tag push — same build, same signing, same SBOMs —
