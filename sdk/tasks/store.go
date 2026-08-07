@@ -1176,9 +1176,19 @@ func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
 	return iss, s.commentsPath(iss.ID), nil
 }
 
-// requireReplaceTarget verifies commentID exists as an earlier comment in the
+// requireReplaceTarget verifies commentID names an earlier comment in the
 // sidecar stream at sidecarPath. Caller must hold the store lock.
+//
+// The empty check is not redundant with validateReplaces: that helper answers
+// "is this document's optional replaces field valid?", for which empty means
+// "this is not a revision" and is correct. Edit and Delete are the opposite
+// case — the id is the whole point of the call — so an empty one has to be
+// rejected here, or `EditComment(id, "", …)` silently appends a fresh comment
+// instead of revising anything.
 func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
+	if commentID == "" {
+		return invalid("comment_id", "comment id is required")
+	}
 	stream, err := readCommentStream(s.fs, sidecarPath)
 	if err != nil {
 		return err

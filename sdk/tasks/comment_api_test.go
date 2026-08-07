@@ -450,6 +450,51 @@ func TestEditComment_RejectsMissingComment(t *testing.T) {
 	}
 }
 
+// TestEditDeleteComment_RejectEmptyCommentID pins that the comment id is
+// required, not merely checked when present.
+//
+// The existence check runs through validateReplaces, whose contract is "is this
+// document's optional replaces field valid?" — and for that question an empty
+// value correctly means "not a revision". Edit and Delete borrow the helper for
+// the opposite question, so before this was fixed EditComment(id, "", …) passed
+// straight through and appended a plain comment, and DeleteComment(id, "", …)
+// wrote a tombstone that retracted nothing. Both reported success.
+func TestEditDeleteComment_RejectEmptyCommentID(t *testing.T) {
+	s, _ := newMemStore(t)
+	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.AddComment(iss.ID, "hans", "original\n"); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	var ve *ValidationError
+
+	_, err = s.EditComment(iss.ID, "", "hans", "revision\n")
+	if err == nil {
+		t.Error("EditComment with an empty commentID must fail")
+	} else if !errors.As(err, &ve) {
+		t.Errorf("EditComment: expected *ValidationError, got %T: %v", err, err)
+	}
+
+	err = s.DeleteComment(iss.ID, "", "hans")
+	if err == nil {
+		t.Error("DeleteComment with an empty commentID must fail")
+	} else if !errors.As(err, &ve) {
+		t.Errorf("DeleteComment: expected *ValidationError, got %T: %v", err, err)
+	}
+
+	// Neither call may have appended anything.
+	got, err := s.Comments(iss.ID)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("comment stream has %d entries, want 1 — a rejected call still wrote", len(got))
+	}
+}
+
 // ── L2 (Mem): DeleteComment ───────────────────────────────────────────────
 
 // TestDeleteComment_OmittedFromResolved verifies that after DeleteComment,
