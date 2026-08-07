@@ -381,10 +381,34 @@ func (s *Store) getMutable(id string) (*Issue, error) {
 // issue path; the bulk read paths deliberately do not resolve (SDK-SPEC §4) —
 // use ResolveBody on an issue that came from one of those.
 func (s *Store) Get(id string) (*Issue, error) {
+	iss, err := s.getUnresolved(id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.resolveBody(iss); err != nil {
+		return nil, err
+	}
+	return iss, nil
+}
+
+// getUnresolved is Get without the body: it performs the same hot→closed
+// fall-through, but an overflowed issue comes back with an empty Description and
+// bodyExternal set, exactly as the bulk read paths return it.
+//
+// This is the read primitive for callers that want metadata or mere existence —
+// a ref lookup, a duplicate-ID check, the issue behind a comment mutation.
+// Resolving inside the shared primitive made all of them read a whole body they
+// never look at, and fail outright when the sidecar was missing: a comment on a
+// 100 MB doc read 100 MB to learn the doc was there.
+//
+// A caller that goes on to WRITE the issue must use Get instead. writeFiles
+// decides the layout from Description, so rewriting an unresolved issue would
+// see an empty body, re-join it inline and delete the sidecar.
+func (s *Store) getUnresolved(id string) (*Issue, error) {
 	// Try the hot directory first.
 	data, err := s.fs.ReadFile(s.filePath(id))
 	if err == nil {
-		return s.parseAndResolve(id, data)
+		return parseIssue(id, data)
 	}
 	if !vfs.IsNotExist(err) {
 		return nil, err
@@ -397,18 +421,14 @@ func (s *Store) Get(id string) (*Issue, error) {
 		}
 		return nil, err
 	}
-	return s.parseAndResolve(id, data)
+	return parseIssue(id, data)
 }
 
-// parseAndResolve unmarshals an issue file and fills in an overflowed body from
-// the content sidecar.
-func (s *Store) parseAndResolve(id string, data []byte) (*Issue, error) {
+// parseIssue unmarshals an issue file, naming the id in the parse error.
+func parseIssue(id string, data []byte) (*Issue, error) {
 	iss, err := Unmarshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", id, err)
-	}
-	if err := s.resolveBody(iss); err != nil {
-		return nil, err
 	}
 	return iss, nil
 }
@@ -512,13 +532,14 @@ func (s *Store) nextID() (string, error) {
 // partition. Auto-allocated IDs skip this — they are well-formed by
 // construction and unique by allocation.
 func (s *Store) validateNewID(id string) error {
-	if len(id) > maxIDLen || !idRe.MatchString(id) {
+	if !validIssueID(id) {
 		return invalid("id", "%q is not a valid issue ID", id)
 	}
 	if !strings.HasPrefix(id, s.cfg.Prefix+"-") {
 		return invalid("id", "%q does not carry the store prefix %q", id, s.cfg.Prefix)
 	}
-	if _, err := s.Get(id); err == nil {
+	// Existence only — no reason to read an overflowed body to say "taken".
+	if _, err := s.getUnresolved(id); err == nil {
 		return fmt.Errorf("%w: %s", ErrAlreadyExists, id)
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
@@ -1066,8 +1087,9 @@ func (s *Store) reopenWrite(iss *Issue) error {
 // The on-disk stream keeps full history; this returns the current view.
 // All() / Ready() / List() never read sidecars; Comments() loads it lazily.
 func (s *Store) Comments(id string) ([]Comment, error) {
-	// Verify the issue exists first.
-	if _, err := s.Get(id); err != nil {
+	// Verify the issue exists first. Existence only: the comment log is a
+	// separate sidecar, so the issue body is never looked at.
+	if _, err := s.getUnresolved(id); err != nil {
 		return nil, err
 	}
 	stream, err := readCommentStream(s.fs, s.commentsPath(id))
@@ -1145,7 +1167,10 @@ func (s *Store) issueFilePath(id string) (string, error) {
 // comments, and returns the issue plus its sidecar path (keyed on iss.ID, not
 // the input id). Caller must hold the store lock.
 func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
-	iss, err := s.Get(id)
+	// Unresolved: only iss.ID is used, to key the sidecar. A comment append never
+	// rewrites the issue .md (TASK-STORAGE-SPEC §4.4), so the body is not needed
+	// — and reading it would make commenting on a large doc cost the whole body.
+	iss, err := s.getUnresolved(id)
 	if err != nil {
 		return nil, "", err
 	}

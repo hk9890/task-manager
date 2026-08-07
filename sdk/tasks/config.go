@@ -45,6 +45,10 @@ const (
 
 	// envTaskmgrHome overrides the per-user home (CONFIG-SPEC §1).
 	envTaskmgrHome = "TASKMGR_HOME"
+	// envTaskmgrDir is the withdrawn store-directory override. It is read only
+	// so resolution can refuse when it is set (CONFIG-SPEC §4) — a pin that is
+	// silently ignored files work into the wrong store.
+	envTaskmgrDir = "TASKMGR_DIR"
 )
 
 // globalConfig is the per-user configuration (CONFIG-SPEC §2). Every field is

@@ -408,6 +408,31 @@ func (m *Mem) Remove(name string) error {
 	return nil
 }
 
+// RemoveAll removes path and everything under it. Mem has one flat namespace, so
+// "under" is a path-prefix match. A path that does not exist is not an error.
+func (m *Mem) RemoveAll(path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFault("RemoveAll", path); err != nil {
+		return err
+	}
+
+	path = filepath.Clean(path)
+	prefix := path + string(filepath.Separator)
+	for p := range m.files {
+		if p == path || strings.HasPrefix(p, prefix) {
+			delete(m.files, p)
+		}
+	}
+	for d := range m.dirs {
+		if d == path || strings.HasPrefix(d, prefix) {
+			delete(m.dirs, d)
+		}
+	}
+	return nil
+}
+
 // Lock acquires an in-process exclusive lock on path. Multiple sequential
 // callers within the same process are serialized. The lock does not interact
 // with the real filesystem — cross-process locking is an L3 concern.

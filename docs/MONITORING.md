@@ -54,9 +54,11 @@ touches two files — the task `.md` and the content sidecar
 ([TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md) §4.6) — and a failure of either
 emits one `io_error` under the operation's own `op`, because the sidecar write
 happens inside the same gated closure. So a failed content write during a
-dependency edit logs `op=dep_add`, not a storage-layer name. The sidecar is
-written before the `.md`, so such a failure leaves the issue's previous body
-intact and readable.
+dependency edit logs `op=dep_add`, not a storage-layer name. An `io_error` means
+the mutation did not land: a body already in the sidecar is replaced only by a
+rename performed after the `.md` is committed, so a failure anywhere before that
+leaves the issue's previous body intact and readable
+([TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md) §4.6 rule 4).
 
 ### `deny` vs `warn` vs `error`
 

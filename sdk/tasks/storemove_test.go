@@ -181,13 +181,19 @@ func TestRenameCentral_RollsBackFolderOnRegistryFailure(t *testing.T) {
 	}
 }
 
-// TestResolve_SkipsIncompleteStore pins that a folder without a config.yaml —
-// what a failed promote leaves behind — is skipped like a missing one rather
-// than opened as a store.
-func TestResolve_SkipsIncompleteStore(t *testing.T) {
+// TestResolve_ReportsIncompleteStore pins that a folder without a config.yaml is
+// REPORTED, not skipped.
+//
+// Skipping it treats a store whose config went missing as if the project had no
+// store at all: `taskmgr list` fails with "no .tasks directory found — run
+// 'taskmgr init'", and following that advice creates a second, empty store
+// beside a folder that still holds every issue file. A folder that is entirely
+// absent is a different case — a dangling entry, which is skipped (CONFIG-SPEC
+// §3) and is covered below.
+func TestResolve_ReportsIncompleteStore(t *testing.T) {
 	m := vfs.NewMem()
 	writeRegistry(t, m, testCentral, registryEntry{Path: "/dev/proj", Store: "half"})
-	// A folder with issue files but no config: a copy that died part-way.
+	// A folder with issue files but no config.
 	if err := m.MkdirAll(storeDirFor("half"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -195,16 +201,35 @@ func TestResolve_SkipsIncompleteStore(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	if _, _, err := resolveWith(ResolveOptions{WorkDir: "/dev/proj"}, m, fakeEnv(nil), nil); !errors.Is(err, ErrNoStore) {
-		t.Errorf("err = %v, want ErrNoStore for a half-built store", err)
+	_, _, err := resolveWith(ResolveOptions{WorkDir: "/dev/proj"}, m, fakeEnv(nil), nil)
+	if err == nil {
+		t.Fatal("resolving into a half-built store should fail")
 	}
-	// Named explicitly, the error says what is actually wrong.
-	_, _, err := resolveWith(ResolveOptions{StoreName: "half"}, m, fakeEnv(nil), nil)
+	if errors.Is(err, ErrNoStore) {
+		t.Errorf("err = %v, want a diagnostic rather than ErrNoStore", err)
+	}
+	if !strings.Contains(err.Error(), "not a finished store") {
+		t.Errorf("err = %v, want it to name the incomplete store", err)
+	}
+	// Named explicitly, the error says the same thing.
+	_, _, err = resolveWith(ResolveOptions{StoreName: "half"}, m, fakeEnv(nil), nil)
 	if err == nil {
 		t.Fatal("--store-name on a half-built store should fail")
 	}
 	if !strings.Contains(err.Error(), "not a finished store") {
 		t.Errorf("err = %v, want it to name the incomplete store", err)
+	}
+}
+
+// TestResolve_SkipsDanglingEntry pins the other half: an entry whose folder is
+// gone entirely is skipped, so a hard-killed promote leaves the project able to
+// resolve elsewhere instead of wedged (CONFIG-SPEC §3).
+func TestResolve_SkipsDanglingEntry(t *testing.T) {
+	m := vfs.NewMem()
+	writeRegistry(t, m, testCentral, registryEntry{Path: "/dev/proj", Store: "gone"})
+
+	if _, _, err := resolveWith(ResolveOptions{WorkDir: "/dev/proj"}, m, fakeEnv(nil), nil); !errors.Is(err, ErrNoStore) {
+		t.Errorf("err = %v, want ErrNoStore for an entry with no folder", err)
 	}
 }
 

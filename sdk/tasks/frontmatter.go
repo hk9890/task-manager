@@ -195,5 +195,16 @@ func unmarshalWithLegacy(data []byte) (*Issue, []legacyComment, error) {
 	if fm.Closed != nil {
 		iss.Closed = *fm.Closed
 	}
+	// The ID is checked here, at the parse boundary, because it is the one
+	// frontmatter field the store turns into a filesystem path: the .md, the
+	// comment sidecar and the content sidecar are all <dir>/<id>. A file whose
+	// frontmatter carries "../../etc/passwd" is reachable by anyone who can write
+	// into .tasks/ — a hand edit, or a pull request touching the tracked store —
+	// and every read and write keyed on that ID would escape the store. Rejecting
+	// it on the way in keeps the grammar's no-separator guarantee meaningful
+	// (validIssueID, TASK-STORAGE-SPEC §3).
+	if !validIssueID(iss.ID) {
+		return nil, nil, fmt.Errorf("invalid issue id %q: must match the issue-ID grammar (TASK-STORAGE-SPEC §3)", iss.ID)
+	}
 	return iss, lfm.Comments, nil
 }

@@ -129,30 +129,84 @@ func lockCentral(fs vfs.FS, croot string) (func() error, error) {
 	return fs.Lock(filepath.Join(croot, centralLockName))
 }
 
-// storeComplete reports whether dir is a finished store: a directory holding a
-// config.yaml. A registry entry pointing at anything else is treated like one
-// whose folder is missing — skipped by resolution (CONFIG-SPEC §3/§4). That
-// covers a folder left behind by a failed promote, and narrows (without
-// closing) the window in which a store still being copied could be opened: a
-// copy that has already written config.yaml but not the issue files still looks
-// complete.
-func storeComplete(fs vfs.FS, dir string) bool {
-	if fi, err := fs.Stat(dir); err != nil || !fi.IsDir() {
-		return false
+// storeState classifies what a registry entry's store subfolder actually is.
+// The three cases are handled differently and must not be collapsed: a folder
+// that is gone is a dangling entry, which resolution skips (CONFIG-SPEC §3),
+// while a folder that is there but unusable is a broken store, which resolution
+// reports. Treating the second as the first hides a real store behind "no
+// .tasks directory found".
+type storeState int
+
+const (
+	storeMissing  storeState = iota // no directory at all: a dangling entry
+	storePartial                    // a directory, but no config.yaml
+	storeFinished                   // a usable store
+)
+
+func storeStateOf(fs vfs.FS, dir string) storeState {
+	fi, err := fs.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return storeMissing
 	}
-	_, err := fs.Stat(filepath.Join(dir, ConfigFileName))
-	return err == nil
+	if _, err := fs.Stat(filepath.Join(dir, ConfigFileName)); err != nil {
+		return storePartial
+	}
+	return storeFinished
 }
+
+// storeComplete reports whether dir is a finished store: a directory holding a
+// config.yaml.
+func storeComplete(fs vfs.FS, dir string) bool {
+	return storeStateOf(fs, dir) == storeFinished
+}
+
+// errPartialStore is the shared diagnostic for a registry entry whose folder is
+// present but unusable. It names the folder and what is missing, so the fix is
+// obvious; the alternative — reporting no store at all — sends the user to
+// `taskmgr init`, which creates a second, empty store and splits the project's
+// issues across the two.
+func errPartialStore(name, dir string) error {
+	return fmt.Errorf("central store %q is not a finished store at %s (no %s) — a move may have failed part-way",
+		name, dir, ConfigFileName)
+}
+
+// stagingPrefix names the directory a store is assembled in before it is
+// published under its real name. It is not a legal store name (validStoreName
+// rejects the leading dot), so it can never be resolved as one or collide with
+// a real store.
+const stagingPrefix = ".incoming-"
 
 // moveStoreDir moves a store directory from src to dst while holding the store's
 // own write lock, so a concurrent mutation in that store cannot be split across
 // the two locations.
+//
+// The tree is moved to a staging directory beside dst and renamed into place
+// only once it is whole. Moving straight to dst publishes it a piece at a time
+// on the cross-filesystem path: the registry entry is already live by then, so
+// the moment config.yaml lands another process resolves the half-copied folder
+// as a finished store, takes ITS lock — a different file from the one held here,
+// which is why locking the source serializes nothing at the destination — and
+// writes into it, whereupon the copy walks into its own EEXIST. The final rename
+// is within one directory and atomic, so dst never exists half-built.
+//
+// A failed attempt therefore leaves its partial copy at the staging path, not at
+// dst where it would block every retry with ErrStoreExists. The next attempt
+// clears it: getting here means src exists and is locked, and the central-root
+// lock serializes attempts, so anything staged is a leftover and never the only
+// copy of the data.
 func moveStoreDir(fs vfs.FS, src, dst string) error {
 	unlock, err := fs.Lock(filepath.Join(src, lockFileName))
 	if err != nil {
 		return err
 	}
-	moveErr := fs.MoveTree(src, dst)
+	staging := filepath.Join(filepath.Dir(dst), stagingPrefix+filepath.Base(dst))
+	moveErr := fs.RemoveAll(staging)
+	if moveErr == nil {
+		moveErr = fs.MoveTree(src, staging)
+	}
+	if moveErr == nil {
+		moveErr = fs.MoveTree(staging, dst)
+	}
 	_ = unlock()
 	if moveErr != nil {
 		return fmt.Errorf("move store to %s: %w", dst, moveErr)
@@ -170,6 +224,17 @@ func Resolve(opts ResolveOptions, sopts ...Option) (*Store, ResolveInfo, error) 
 
 // resolveWith is Resolve with injectable seams, for hermetic tests.
 func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Option) (*Store, ResolveInfo, error) {
+	// 0. TASKMGR_DIR used to point resolution at a store directory outright. The
+	// override is gone, along with the --store-path flag it mirrored. The flag
+	// now fails as unknown, but an environment variable has no such backstop:
+	// left unread it silently pins nothing, and a CI job or direnv profile that
+	// exports it writes every issue into whatever store the walk-up happens to
+	// find. Refuse instead of misfiling the work.
+	if dir := strings.TrimSpace(e.Getenv(envTaskmgrDir)); dir != "" {
+		return nil, ResolveInfo{}, fmt.Errorf("%s is set (%s) but is no longer supported — run from inside the project, or register the store centrally with 'taskmgr store move --central --to <name>' and select it with --store",
+			envTaskmgrDir, dir)
+	}
+
 	// 1. Explicit override: open the named central store via the registry.
 	if opts.StoreName != "" {
 		home, croot, entries, err := loadCentral(fs, e)
@@ -184,8 +249,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 			if !storeComplete(fs, dir) {
 				// Named explicitly, so say what is wrong rather than reporting
 				// it as unregistered: the entry is there, the store is not.
-				return nil, ResolveInfo{}, fmt.Errorf("central store %q is not a finished store at %s (no %s) — a move may have failed part-way",
-					en.Store, dir, ConfigFileName)
+				return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 			}
 			project := canonicalize(fs, en.Path, home, croot)
 			s, err := openData(project, dir, fs, sopts)
@@ -222,8 +286,8 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	var kept []registryEntry
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
-		if !storeComplete(fs, dir) {
-			continue // dangling or half-built — skip (CONFIG-SPEC §3)
+		if storeStateOf(fs, dir) == storeMissing {
+			continue // dangling: the folder is gone — skip (CONFIG-SPEC §3)
 		}
 		canonPaths = append(canonPaths, canonicalize(fs, en.Path, home, croot))
 		kept = append(kept, en)
@@ -234,6 +298,15 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	}
 	en := kept[idx]
 	dir := filepath.Join(croot, storesSubdir, en.Store)
+	// The entry that owns this directory is the one that answers for it, so a
+	// folder that is present but unusable is reported rather than skipped. A
+	// store whose config.yaml went missing is still the project's store, with
+	// every issue file intact; skipping it hands the project a shorter ancestor's
+	// store or ErrNoStore, and the advice that comes with the latter creates a
+	// second, empty store beside the real one.
+	if !storeComplete(fs, dir) {
+		return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
+	}
 	project := canonPaths[idx]
 	s, err := openData(project, dir, fs, sopts)
 	if err != nil {
@@ -311,19 +384,27 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	return s, nil
 }
 
-// checkFree reports whether a new entry (name, project) can be added: both the
-// store name and the project path must be unused (CONFIG-SPEC §3).
+// projectKeys returns the lexical keys a project path must be matched on: the
+// caller's raw input and the symlink-resolved form.
 //
-// The path is matched on two keys — the caller's raw input and the
-// symlink-resolved form — because registry entries are only ever compared
-// lexically. Matching on the resolved form alone would let a project registered
-// under a path that has since become a symlink be registered a second time, and
-// the resulting duplicate would be invisible to loadRegistry's lexical dedup.
-func checkFree(entries []registryEntry, name, rawProject, project, home, croot string) error {
-	keys := map[string]bool{
+// Two keys are needed because registry entries are only ever compared lexically.
+// Matching on the resolved form alone would let a project registered under a
+// path that has since become a symlink be registered a second time, and the
+// resulting duplicate would be invisible to loadRegistry's lexical dedup —
+// leaving two entries for one project, with resolution picking whichever it
+// scanned into first. Every registry writer must use this, not just the ones
+// that create entries.
+func projectKeys(rawProject, project, home, croot string) map[string]bool {
+	return map[string]bool{
 		lexCanon(rawProject, home, croot): true,
 		lexCanon(project, home, croot):    true,
 	}
+}
+
+// checkFree reports whether a new entry (name, project) can be added: both the
+// store name and the project path must be unused (CONFIG-SPEC §3).
+func checkFree(entries []registryEntry, name, rawProject, project, home, croot string) error {
+	keys := projectKeys(rawProject, project, home, croot)
 	for _, en := range entries {
 		if en.Store == name {
 			return fmt.Errorf("%w: central store %q", ErrStoreExists, name)
@@ -348,7 +429,8 @@ func checkFree(entries []registryEntry, name, rawProject, project, home, croot s
 // dangling (CONFIG-SPEC §3).
 //
 // The files are not rolled back: a partial cross-filesystem copy stays at the
-// destination for inspection, where resolution skips it for having no config.
+// staging path beside the destination for inspection (see moveStoreDir), which
+// is neither a legal store name nor in the way of a retry.
 func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) {
 	return moveToCentralWith(projectPath, name, vfs.NewOS(), env.NewOS(), opts)
 }
@@ -523,13 +605,18 @@ func relinkCentralWith(name, projectPath string, fs vfs.FS, e env.Environment) (
 	if idx < 0 {
 		return "", fmt.Errorf("%w: %s", ErrStoreNotRegistered, name)
 	}
+	// The folder must be a finished store, not merely a directory: resolution
+	// requires config.yaml, so a bare Stat here would accept a folder left behind
+	// by a half-done promote and report success on an entry the very next command
+	// skips as dangling.
 	dir := filepath.Join(croot, storesSubdir, name)
-	if fi, err := fs.Stat(dir); err != nil || !fi.IsDir() {
-		return "", fmt.Errorf("%w: %s", ErrNoStore, dir)
+	if !storeComplete(fs, dir) {
+		return "", fmt.Errorf("%w: %s is not a finished store (no %s) — relinking it would write an entry that resolution skips",
+			ErrNoStore, dir, ConfigFileName)
 	}
-	projKey := lexCanon(project, home, croot)
+	keys := projectKeys(projectPath, project, home, croot)
 	for i, en := range entries {
-		if i != idx && lexCanon(en.Path, home, croot) == projKey {
+		if i != idx && keys[lexCanon(en.Path, home, croot)] {
 			return "", fmt.Errorf("a central store is already registered for %q", project)
 		}
 	}

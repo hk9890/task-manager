@@ -38,12 +38,22 @@ func (s *Store) contentDir() string {
 // contentPath returns the sidecar path for an issue's body.
 //
 // The path is derived entirely from the ID — there is no stored path, and no
-// extension. Nothing user-supplied ever reaches a filesystem path, so directory
-// traversal is impossible by construction rather than by validation. The absent
-// extension is the accepted cost: the bytes could be HTML, markdown or a log,
-// and the store does not record which.
+// extension. The ID is not user-supplied in the sense that matters: it comes
+// from an allocation or from a frontmatter field that Unmarshal has already
+// checked against the issue-ID grammar (validIssueID), which admits no path
+// separator and no dot. Traversal is closed off there, at the parse boundary,
+// because that is the only place an ID can enter the store. The absent extension
+// is the accepted cost: the bytes could be HTML, markdown or a log, and the
+// store does not record which.
 func (s *Store) contentPath(id string) string {
 	return filepath.Join(s.contentDir(), id)
+}
+
+// stagedContentPath returns the path new sidecar bytes are written to before
+// they replace an existing body — see writeFiles. The leading dot puts it
+// outside the issue-ID grammar, so it can never collide with a real sidecar.
+func (s *Store) stagedContentPath(id string) string {
+	return filepath.Join(s.contentDir(), "."+id+".incoming")
 }
 
 // previousLayout reports whether the issue currently on disk keeps its body in
@@ -89,9 +99,18 @@ func (s *Store) previousLayout(id string) (bool, error) {
 // the .md and the body it names in agreement, and any sidecar nothing points at
 // is inert garbage rather than a silent override of the .md.
 //
-// It is NOT atomic across the pair: on a split where the body was already
-// external, a crash can leave the new body beside the old frontmatter. That is
-// accepted — the alternative is a journal — and nothing is silently reverted.
+// A body that is ALREADY external is never overwritten in place. The new bytes
+// are staged beside it and renamed over it only once the .md has landed, because
+// the obvious order — overwrite the sidecar, then write the .md — commits the
+// new body even when the .md write fails. The caller is told the mutation failed
+// (Update returns the error, gateWrite logs io_error and fires no post-hooks)
+// while the next read already returns the new body under the old frontmatter.
+// Staging keeps the previous body readable until the mutation is real.
+//
+// It is still NOT atomic across the pair: a crash between the .md and the rename
+// leaves the new frontmatter beside the previous body. That is accepted — the
+// alternative is a journal — and it never loses a body, and never reports a
+// write as failed after committing it.
 //
 // The caller holds the store lock.
 func (s *Store) writeFiles(iss *Issue, writeMD func(md []byte) error) error {
@@ -104,23 +123,47 @@ func (s *Store) writeFiles(iss *Issue, writeMD func(md []byte) error) error {
 		return err
 	}
 
+	// staged is set only when there is a previous body to protect. On a split
+	// there is none: the .md that will name the sidecar has not landed yet, so
+	// the bytes go straight to the final path and a crash leaves a sidecar
+	// nothing points at.
+	staged := ""
 	if sidecar != nil {
 		if err := s.fs.MkdirAll(s.contentDir(), 0o755); err != nil {
 			return fmt.Errorf("create content dir: %w", err)
 		}
-		if err := s.fs.WriteAtomic(s.contentPath(iss.ID), sidecar, 0o644); err != nil {
+		target := s.contentPath(iss.ID)
+		if prevExternal {
+			staged = s.stagedContentPath(iss.ID)
+			target = staged
+		}
+		if err := s.fs.WriteAtomic(target, sidecar, 0o644); err != nil {
 			return fmt.Errorf("write content sidecar %s: %w", iss.ID, err)
 		}
 	}
 
 	if err := writeMD(md); err != nil {
+		if staged != "" {
+			// Nothing is committed: the staged body is garbage, and the body the
+			// .md on disk still names is untouched.
+			_ = s.fs.Remove(staged)
+		}
 		return err
 	}
 
-	if dropSidecar {
-		if err := s.fs.Remove(s.contentPath(iss.ID)); err != nil && !vfs.IsNotExist(err) {
-			return fmt.Errorf("remove content sidecar %s: %w", iss.ID, err)
+	if staged != "" {
+		if err := s.fs.Rename(staged, s.contentPath(iss.ID)); err != nil {
+			return fmt.Errorf("commit content sidecar %s: %w", iss.ID, err)
 		}
+	}
+
+	if dropSidecar {
+		// The .md is committed and says the body is inline, so the mutation has
+		// landed. Reporting a failure here would report a write that succeeded as
+		// failed — the caller would see an error, no post-hooks, and the new body
+		// on the next read. The leftover file is inert: nothing points at it, and
+		// the next overflow overwrites it.
+		_ = s.fs.Remove(s.contentPath(iss.ID))
 	}
 	return nil
 }

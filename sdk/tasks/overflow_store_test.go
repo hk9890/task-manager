@@ -652,16 +652,16 @@ func TestOverflow_ClosedIssueTextSearch(t *testing.T) {
 	}
 }
 
-// TestOverflow_TornSplitIsReadable pins the residual that TASK-STORAGE-SPEC §4.6
-// rule 4 documents as accepted: when a body that was ALREADY external is
-// rewritten and the process dies between the sidecar write and the .md write,
-// the new body sits beside the previous frontmatter.
+// TestOverflow_FailedMDWriteKeepsPreviousBody pins that a failed write does not
+// commit the new body of an issue whose body was ALREADY external.
 //
-// The point of the test is that this state is readable and self-consistent — the
-// issue still resolves, nothing errors, and no older body is resurrected. It is
-// the one crash outcome the design tolerates, so it should be pinned rather than
-// discovered later.
-func TestOverflow_TornSplitIsReadable(t *testing.T) {
+// The obvious write order — overwrite the sidecar, then rewrite the .md — makes
+// the failure lie: Update returns an error and fires no post-hooks, while the
+// next read serves the new body under the old frontmatter. writeFiles therefore
+// stages the new bytes and renames them into place only after the .md lands, so
+// a failure anywhere before that leaves the previous body exactly where it was
+// (TASK-STORAGE-SPEC §4.6, docs/MONITORING.md).
+func TestOverflow_FailedMDWriteKeepsPreviousBody(t *testing.T) {
 	m := vfs.NewMem()
 	s, err := InitWithVFS("/", "x", m)
 	if err != nil {
@@ -680,21 +680,36 @@ func TestOverflow_TornSplitIsReadable(t *testing.T) {
 
 	got, err := s.Get(iss.ID)
 	if err != nil {
-		t.Fatalf("the issue must remain readable after a torn split: %v", err)
+		t.Fatalf("the issue must remain readable after a failed write: %v", err)
 	}
-	// Frontmatter is the old one — the .md never landed.
+	// Neither half of the mutation landed: the write was reported as failed, so
+	// nothing about the issue may have changed.
 	if got.Title != "original title" {
 		t.Fatalf("title = %q, want the un-rewritten frontmatter", got.Title)
 	}
-	// The body is the new one — the sidecar did land. This is the documented,
-	// accepted tear. What matters is that it is coherent, not that it is absent.
-	if !strings.Contains(got.Description, "secondbody") {
-		t.Fatalf("body should be the newly written sidecar content")
+	if !strings.Contains(got.Description, "firstbody") {
+		t.Fatalf("body must still be the previous one after a failed write")
 	}
-	// And critically: nothing older was resurrected, and the flag still agrees
-	// with where the body actually is.
-	if strings.Contains(got.Description, "firstbody") {
-		t.Fatal("an older body must never come back")
+	if strings.Contains(got.Description, "secondbody") {
+		t.Fatal("a write reported as failed must not commit the new body")
+	}
+
+	// The staged bytes are not left where a reader could pick them up.
+	if _, err := m.ReadFile(s.stagedContentPath(iss.ID)); !vfs.IsNotExist(err) {
+		t.Errorf("staged sidecar should have been cleaned up, got err = %v", err)
+	}
+
+	// And the store still works: the fault was consumed, so the same update
+	// succeeds on a retry.
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle, Description: &newBody})); err != nil {
+		t.Fatalf("retry after the fault cleared: %v", err)
+	}
+	got, err = s.Get(iss.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != newTitle || !strings.Contains(got.Description, "secondbody") {
+		t.Errorf("retry did not land: title = %q, body has secondbody = %v", got.Title, strings.Contains(got.Description, "secondbody"))
 	}
 }
 

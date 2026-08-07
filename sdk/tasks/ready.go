@@ -17,6 +17,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -154,34 +155,47 @@ func (s *Store) Detail(id string) (*Detail, error) {
 	}
 	iss, ok := idx[id]
 	if !ok {
-		// Fall through to closed/.
-		iss, err = s.Get(id)
+		// Fall through to closed/. Unresolved on purpose: Get would resolve the
+		// body here and clear the flag, so BodyExternal below would read false
+		// for every closed overflowed issue — the one class of issue most likely
+		// to be overflowed. Detail resolves the body itself, after recording it.
+		iss, err = s.getUnresolved(id)
 		if err != nil {
 			return nil, err
 		}
 	}
 	d := &Detail{Issue: *iss}
-	// The index is a bulk read, so an overflowed body arrives empty. Detail is a
-	// single-issue path and resolves it, like Get. BodyExternal records where the
-	// bytes actually live, which the embedded Issue can no longer say once its
-	// flag is cleared — a viewer uses it to warn before rendering a huge body.
+	// Both sources — the index and getUnresolved — are unresolved reads, so an
+	// overflowed body arrives empty. Detail is a single-issue path and resolves
+	// it, like Get. BodyExternal records where the bytes actually live, which the
+	// embedded Issue can no longer say once its flag is cleared — a viewer uses
+	// it to warn before rendering a huge body.
 	d.BodyExternal = d.bodyExternal
 	if err := s.resolveBody(&d.Issue); err != nil {
 		return nil, err
 	}
 
 	// resolveRef returns a Ref for id, first from the hot index and, if absent,
-	// by falling through to closed/ via Get (cheap: closed reads are lock-free).
+	// by falling through to closed/ (cheap: closed reads are lock-free).
+	//
+	// The fall-through is an unresolved read: a Ref carries five metadata fields
+	// and no body, so going through Get would read a closed doc's entire sidecar
+	// to fill them in. Only a genuinely dangling ref is dropped; an I/O failure
+	// is returned, because swallowing it omitted the ref from the rendered issue
+	// — a blocked issue would print with no Blocked-by line and exit 0.
 	resolveRef := func(refID string) (*Ref, error) {
 		if x, ok := idx[refID]; ok {
 			r := ref(x)
 			return &r, nil
 		}
-		// Not in hot set — try closed/.
-		x, err := s.Get(refID)
+		x, err := s.getUnresolved(refID)
+		if errors.Is(err, ErrNotFound) {
+			// Dangling: checkRefs rejects these at write time, so this is a store
+			// edited by hand. Drop the ref rather than fail the whole read.
+			return nil, nil
+		}
 		if err != nil {
-			// Truly dangling (should not happen post-checkRefs, but be defensive).
-			return nil, nil //nolint:nilerr
+			return nil, err
 		}
 		r := ref(x)
 		return &r, nil

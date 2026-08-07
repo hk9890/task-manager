@@ -98,17 +98,29 @@ stores:
 - A **missing** `mapping.yaml` means "no central stores" (not an error); a **corrupt**
   one is a hard error.
 
-**Dangling entries.** An entry whose `store` subfolder no longer exists — or exists but
-holds no `config.yaml`, so it is not a finished store — is **ignored** by resolution
-(§4) rather than failing the command. The second case is what a move that died part-way
-leaves behind (§5); skipping it keeps a half-built directory from being opened and
-written to. A missing project `path` is not ignored: an entry whose project directory
-was deleted or moved still matches and opens its central store. A subfolder with no
-registry entry is simply unreachable until an entry is added (§5).
+**Dangling vs. broken entries.** The two are handled differently and must not be
+conflated:
 
-An entry named *explicitly* by `--store-name` is the exception: rather than reporting it
-as unregistered, resolution fails with an error saying the store is unfinished, since
-the caller named something that does exist in the registry.
+- **Dangling** — the `store` subfolder does not exist at all. **Ignored** by resolution
+  (§4) rather than failing the command, so a hard-killed promote leaves the project able
+  to resolve elsewhere instead of wedged.
+- **Broken** — the subfolder exists but holds no `config.yaml`, so it is not a finished
+  store. Resolution **reports** it, naming the folder and what is missing. Skipping it
+  would treat a store whose config went missing as if the project had no store at all,
+  while every issue file is still sitting there: the command fails with "no store", and
+  the advice that comes with that — run `taskmgr init` — creates a second, empty store
+  beside the real one and splits the project's issues across the two.
+
+A missing project `path` is neither: an entry whose project directory was deleted or
+moved still matches and opens its central store. A subfolder with no registry entry is
+simply unreachable until an entry is added (§5).
+
+`--store-name` reports a broken store the same way, since the caller named something
+that does exist in the registry.
+
+Note that a *published* half-built store is not a state the tooling produces: a promote
+assembles the tree under a staging name and publishes it with one atomic rename (§5), so
+a broken folder means external interference or a store edited by hand.
 
 **Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
 `<central_root>/.lock` — an empty file whose only role is its lock state, mirroring a
@@ -123,6 +135,13 @@ Map a working directory `W` (plus optional override) to one store, in order. `W`
 caller-provided resolution origin — for the CLI, `--dir`/`-C` if given, else the cwd
 (SDK: `ResolveOptions.WorkDir`) — and the **same** `W` drives every step below:
 
+0. **Withdrawn overrides** — `TASKMGR_DIR` is **rejected**: if it is set to anything
+   non-empty, resolution fails naming it. It once pointed resolution at a store
+   directory outright; the override is gone along with the `--store-path` flag that
+   mirrored it. The flag now fails as an unknown flag, but an environment variable has
+   no such backstop — left merely unread, a CI job or direnv profile that exports it to
+   pin a store keeps exiting 0 while every issue lands in whatever store the walk-up
+   happens to find.
 1. **Explicit override** — `--store-name` opens `<central_root>/stores/<name>` via the
    registry (error if it has no entry). There is no path-based override: every store is
    reached through walk-up or the registry, so the project a store tracks is always
@@ -131,8 +150,9 @@ caller-provided resolution origin — for the CLI, `--dir`/`-C` if given, else t
    resolution stops. This is why a local store always beats a central one.
 3. **Central fallback** — no local store: canonicalize `W` and pick the registry entry
    whose canonical `path` is the **longest** ancestor-of-or-equal-to `W`; open its
-   store. Dangling entries — a missing subfolder, or one without a `config.yaml` (§3)
-   — are skipped.
+   store. Dangling entries (§3) are skipped before the match. The winning entry is then
+   required to be a finished store: a broken one is reported, not skipped past to a
+   shorter ancestor — the entry that owns the directory is the one that answers for it.
 4. **None** → `ErrNoStore` (the CLI renders this actionably; `taskmgr where` shows the
    outcome).
 
@@ -155,30 +175,49 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
   project root as their working directory (HOOK-SPEC §3.2), which the promote does not
   change, so a hook whose argv points into `.tasks` must be rewritten by hand.
   The **registry entry is written before the files move**, so a promote that dies in
-  between leaves the local store in place and still winning step 2 — the project keeps
-  working. If the move *returns an error* the entry is rolled back, so the command can
-  simply be run again; only a hard kill leaves the entry behind, and resolution skips it. The **registry entry is written before the files move**: an
-  interrupted promote leaves a dangling entry (ignored by resolution, §3) plus the local
-  store, which still exists and still wins step 2 — so the project keeps working. The
-  reverse order would leave a store nothing points at.
+  between leaves a dangling entry (ignored by resolution, §3) plus the local store,
+  which still exists and still wins step 2 — the project keeps working. The reverse
+  order would leave a store nothing points at. If the move *returns an error* the entry
+  is rolled back, so the command can simply be run again; only a hard kill leaves the
+  entry behind.
+  The **files are published by one atomic rename**. The tree is moved into a staging
+  directory beside the destination (a name `validStoreName` rejects, so it can never be
+  resolved as a store) and renamed into place only once it is whole. Copying straight to
+  the destination publishes it a piece at a time on the cross-filesystem path: the entry
+  is already live, so the moment `config.yaml` lands another process resolves the
+  half-copied folder as a finished store and writes into it — under that folder's own
+  `.lock`, which is a different file from the one the promote holds on the source, so
+  locking the source serializes nothing. A failed attempt therefore leaves its partial
+  copy at the staging path rather than at the destination, where it would block every
+  retry (the name is taken, and so is the project path under any other name); the next
+  attempt clears it.
 - **Rename a central store** — rename the subfolder under `stores/` and update the
   entry's `store` field (`store move --rename`). Always within one filesystem, so the
   folder move is a plain rename. The folder moves first; if the registry write fails
   the folder is moved back, leaving the untouched entry still pointing at it.
 - **Re-link a moved project** — update an entry's `path` to the project's new location
-  (`store move --relink`). A pure registry edit; it refuses when the store subfolder is
-  missing rather than writing an entry resolution would skip, and when the new project
-  path does not exist — canonicalization (§4) falls back to the lexical form for a
-  path that is not there, so an unchecked typo would point a live entry at nothing.
+  (`store move --relink`). A pure registry edit, held to the same checks as the writers
+  that create entries. It refuses when the store subfolder is not a **finished** store —
+  the same test resolution applies (§3), not merely "is a directory", or relink would
+  report success on an entry the very next command skips — when the new project path
+  does not exist (canonicalization (§4) falls back to the lexical form for a path that
+  is not there, so an unchecked typo would point a live entry at nothing), and when
+  another entry already claims the project. That last check matches on **both** the raw
+  and the symlink-resolved path, exactly as entry creation does: entries are only ever
+  compared lexically, so matching the resolved form alone would let a project registered
+  before its path became a symlink be claimed a second time, and the duplicate would be
+  invisible to the registry's own lexical dedup.
 - **Unlink** — dropping an entry has no dedicated verb; the registry is one short YAML
   file the user can hand-edit.
 
 **Cross-filesystem moves.** A store folder is moved by rename where possible and by
 recursive copy plus removal of the source when the project and the central root sit on
 different filesystems. The copy path is **not** atomic and is not rolled back: a failure
-leaves the partial copy in place for inspection, with the source untouched, and reports
-what to remove. The copy is strict — an entry that is neither a directory nor a regular
-file aborts it — so the source is only ever removed after a complete copy.
+leaves the partial copy at the staging path for inspection, with the source untouched.
+The copy is strict — an entry that is neither a directory nor a regular file aborts it —
+so the source is only ever removed after a complete copy. Because the copy targets the
+staging name and only the final rename publishes it, the destination store name is never
+occupied by a partial result.
 
 **Prefix.** A store's ID prefix is `--prefix` if given, else derived from the project
 directory name (lowercased, non-alphanumerics stripped, leading digits removed,

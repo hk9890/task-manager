@@ -256,6 +256,10 @@ func (osFS) Remove(name string) error {
 	return os.Remove(name)
 }
 
+func (osFS) RemoveAll(path string) error {
+	return os.RemoveAll(path)
+}
+
 func (osFS) Getwd() (string, error) {
 	return os.Getwd()
 }
