@@ -19,9 +19,11 @@ package tasks
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -541,6 +543,158 @@ func TestOverflow_ImportSplitsInBothPartitions(t *testing.T) {
 		if !strings.Contains(got.Description, "needle-imp") {
 			t.Fatalf("imported body must resolve for %s", id)
 		}
+	}
+}
+
+// TestOverflow_ConcurrentWritesStayConsistent: a body write is now two files, so
+// interleaving between them would be a new way to corrupt an issue. It cannot
+// happen — writeFiles runs inside the store lock like every other write — and
+// this pins that. Workers push one issue across the split and join thresholds
+// repeatedly while others create their own overflowed issues; afterwards every
+// issue must still resolve, with a body that is one of the values actually
+// written rather than a mix.
+//
+// Run with -race, which is how the suite runs in CI.
+func TestOverflow_ConcurrentWritesStayConsistent(t *testing.T) {
+	const workers = 12
+
+	s := newMemStore(t)
+	shared := mustCreate(t, s, CreateInput{Title: "contended", Description: "seed"})
+
+	big := bigBody("concurrent-big")
+	small := "concurrent-small"
+
+	var wg sync.WaitGroup
+	errs := make(chan error, workers*2)
+	for i := range workers {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			// Alternate the shared issue across the split/join thresholds.
+			body := big
+			if n%2 == 0 {
+				body = small
+			}
+			if _, err := s.Update(shared.ID, UpdateInput{Description: &body}); err != nil {
+				errs <- fmt.Errorf("worker %d Update: %w", n, err)
+				return
+			}
+			// And create an overflowed issue of its own.
+			if _, err := s.Create(CreateInput{
+				Title:       fmt.Sprintf("worker doc %d", n),
+				Type:        TypeDoc,
+				Description: bigBody(fmt.Sprintf("worker-%d", n)),
+			}); err != nil {
+				errs <- fmt.Errorf("worker %d Create: %w", n, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent write failed: %v", err)
+	}
+
+	// The contended issue must have landed on exactly one of the two bodies —
+	// never a torn mixture, never an unreadable pointer to a missing sidecar.
+	got, err := s.Get(shared.ID)
+	if err != nil {
+		t.Fatalf("Get contended issue: %v", err)
+	}
+	if got.Description != small && got.Description != strings.TrimSpace(big) {
+		t.Fatalf("contended body is neither value written (%d bytes)", len(got.Description))
+	}
+
+	// And every issue in the store must still resolve.
+	all, err := s.All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != workers+1 {
+		t.Fatalf("want %d issues, got %d", workers+1, len(all))
+	}
+	for _, iss := range all {
+		if err := s.ResolveBody(iss); err != nil {
+			t.Fatalf("issue %s did not resolve after concurrent writes: %v", iss.ID, err)
+		}
+	}
+}
+
+// TestOverflow_ClosedIssueTextSearch: a closed issue's .md lives in closed/ but
+// its sidecar stays in content/, so the resolver must not assume the hot
+// partition. Without this, superseded design docs — the exact thing a doc gets
+// closed for — would become unfindable by content the moment they are closed.
+func TestOverflow_ClosedIssueTextSearch(t *testing.T) {
+	s := newMemStore(t)
+	doc := mustCreate(t, s, CreateInput{
+		Title: "Auth redesign v1", Type: TypeDoc, Description: bigBody("supersededmarker"),
+	})
+	if _, err := unwrap(s.Close(doc.ID, "superseded")); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Hot-only scope must not see it (it is closed), and must not error.
+	hot, err := s.Query(`text ~ "supersededmarker"`)
+	if err != nil {
+		t.Fatalf("hot-scope text query: %v", err)
+	}
+	if len(hot) != 0 {
+		t.Fatalf("a closed issue must not appear in hot scope, got %d", len(hot))
+	}
+
+	// With the closed partition in scope, the body must still be reachable.
+	got, err := s.List(Filter{Expr: `text ~ "supersededmarker"`, IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("closed-scope text query: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != doc.ID {
+		t.Fatalf("a closed overflowed body must stay searchable, got %d matches", len(got))
+	}
+}
+
+// TestOverflow_TornSplitIsReadable pins the residual that TASK-STORAGE-SPEC §4.6
+// rule 4 documents as accepted: when a body that was ALREADY external is
+// rewritten and the process dies between the sidecar write and the .md write,
+// the new body sits beside the previous frontmatter.
+//
+// The point of the test is that this state is readable and self-consistent — the
+// issue still resolves, nothing errors, and no older body is resurrected. It is
+// the one crash outcome the design tolerates, so it should be pinned rather than
+// discovered later.
+func TestOverflow_TornSplitIsReadable(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/", "x", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss := mustCreate(t, s, CreateInput{Title: "original title", Description: bigBody("firstbody")})
+
+	// Fail only the .md write; the sidecar write ahead of it succeeds. That is
+	// exactly a crash landing between the two.
+	newBody := bigBody("secondbody")
+	newTitle := "renamed title"
+	m.FailOn("WriteAtomic", s.filePath(iss.ID), errors.New("simulated crash"))
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &newTitle, Description: &newBody})); err == nil {
+		t.Fatal("expected the injected fault to fail the update")
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("the issue must remain readable after a torn split: %v", err)
+	}
+	// Frontmatter is the old one — the .md never landed.
+	if got.Title != "original title" {
+		t.Fatalf("title = %q, want the un-rewritten frontmatter", got.Title)
+	}
+	// The body is the new one — the sidecar did land. This is the documented,
+	// accepted tear. What matters is that it is coherent, not that it is absent.
+	if !strings.Contains(got.Description, "secondbody") {
+		t.Fatalf("body should be the newly written sidecar content")
+	}
+	// And critically: nothing older was resurrected, and the flag still agrees
+	// with where the body actually is.
+	if strings.Contains(got.Description, "firstbody") {
+		t.Fatal("an older body must never come back")
 	}
 }
 
