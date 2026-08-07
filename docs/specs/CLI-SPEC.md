@@ -142,6 +142,8 @@ Enumerate the registry entries — each entry's project `path`, `store` name, an
 store directory. A plain listing (no health classification in this slice; a dangling
 entry, CONFIG-SPEC §3, is shown like any other).
 
+- **Output (JSON):** array of `storeListDTO` (§6).
+
 ### `taskmgr store move`
 
 Move a store between locations, in one of three modes. Exactly one mode flag is
@@ -164,13 +166,17 @@ required, and they are mutually exclusive.
   `--store-name` to rename a store you are not standing in. Fails if `--to` is already
   taken.
 - **`--relink`** touches no files. Fails if `--to` is not registered, if its store
-  subfolder is missing (it will not create a dangling entry), or if another entry
-  already maps this project path.
+  subfolder is missing (it will not create a dangling entry), if the target directory
+  does not exist, or if another entry already maps this project path. `--dir`/`-C` is
+  made absolute against the working directory before it is recorded.
 - A store keeps its `config.yaml` verbatim across all three modes, so the ID prefix and
-  the hooks travel with it and existing IDs stay valid.
+  the hooks block travel with it and existing IDs stay valid. **Hook argv paths are not
+  rewritten**: hooks run with the working directory set to the project root
+  ([HOOK-SPEC](HOOK-SPEC.md) §3.2), which `--central` does not change, so a hook whose
+  argv points into `.tasks` stops resolving once the store leaves the project. Such
+  hooks must be rewritten to an absolute path or to `["sh", "-c",
+  "$TASKMGR_STORE/…"]`.
 - **Output:** the store name, store path, and project path (`storeMoveDTO` in JSON, §6).
-
-- **Output (JSON):** array of `storeListDTO` (§6).
 
 ---
 

@@ -143,8 +143,10 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
   **and** add its registry entry in one step (the `init --central` command, CLI-SPEC §2).
 - **Promote local → central** — move an existing `<project>/.tasks` to
   `<central_root>/stores/<store>` and register it (`store move --central`, CLI-SPEC §2.1).
-  The store moves whole, `config.yaml` included, so its prefix and hooks survive and
-  existing IDs stay valid. The **registry entry is written before the files move**: an
+  The store moves whole, `config.yaml` included, so its prefix and hooks block survive
+  and existing IDs stay valid. Hook **argv** is not rewritten: hooks run with the
+  project root as their working directory (HOOK-SPEC §3.2), which the promote does not
+  change, so a hook whose argv points into `.tasks` must be rewritten by hand. The **registry entry is written before the files move**: an
   interrupted promote leaves a dangling entry (ignored by resolution, §3) plus the local
   store, which still exists and still wins step 2 — so the project keeps working. The
   reverse order would leave a store nothing points at.
@@ -153,7 +155,9 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
   folder move is a plain rename.
 - **Re-link a moved project** — update an entry's `path` to the project's new location
   (`store move --relink`). A pure registry edit; it refuses when the store subfolder is
-  missing rather than writing an entry resolution would skip.
+  missing rather than writing an entry resolution would skip, and when the new project
+  path does not exist — canonicalization (§4) falls back to the lexical form for a
+  path that is not there, so an unchecked typo would point a live entry at nothing.
 - **Unlink** — dropping an entry has no dedicated verb; the registry is one short YAML
   file the user can hand-edit.
 

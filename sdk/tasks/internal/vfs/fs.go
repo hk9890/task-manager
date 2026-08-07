@@ -54,10 +54,15 @@ type FS interface {
 	// MoveTree moves the directory tree at src to dst. dst must not exist and
 	// its parent must. It renames when src and dst share a filesystem — atomic,
 	// nothing observable in between — and falls back to a recursive copy plus
-	// removal of src when they do not (EXDEV). The fallback is NOT atomic: on
-	// failure the partial copy is left at dst and src is untouched, so the
-	// caller can inspect and retry. Only directories and regular files are
-	// copied; any other file type is an error rather than a silent omission.
+	// removal of src when they do not (EXDEV). Only directories and regular
+	// files are copied; any other file type is an error rather than a silent
+	// omission, and permissions are reproduced exactly.
+	//
+	// The fallback is NOT atomic, and its two halves fail differently. If the
+	// copy fails, src is untouched and the partial copy is left at dst for the
+	// caller to inspect. If the copy succeeds but removing src does not, a
+	// complete tree exists at dst while src is left **partly removed** — the
+	// error says so, but the caller cannot treat src as intact.
 	MoveTree(src, dst string) error
 
 	// MkdirAll creates dir and any necessary parents with the given perm.

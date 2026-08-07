@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -75,6 +76,53 @@ func TestCopyTree_CopiesEverything(t *testing.T) {
 	// The source is untouched — copyTree copies, MoveTree does the removing.
 	if _, err := os.Stat(filepath.Join(src, "config.yaml")); err != nil {
 		t.Errorf("source must be intact after copyTree: %v", err)
+	}
+}
+
+// TestCopyTree_PermissionsSurviveUmask pins the Chmod calls in copyTree: Mkdir
+// and OpenFile subtract the process umask from the requested mode, so without an
+// explicit Chmod a group-readable store silently loses that access when promoted
+// across filesystems.
+func TestCopyTree_PermissionsSurviveUmask(t *testing.T) {
+	base := t.TempDir()
+	src := filepath.Join(base, "src")
+	if err := os.MkdirAll(filepath.Join(src, "hooks"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// MkdirAll/WriteFile are themselves umask-subject, so set the modes exactly.
+	if err := os.Chmod(filepath.Join(src, "hooks"), 0o775); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+	script := filepath.Join(src, "hooks", "pre-create")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatalf("chmod file: %v", err)
+	}
+
+	// A umask that would strip every group and other bit if it applied.
+	old := syscall.Umask(0o077)
+	defer syscall.Umask(old)
+
+	dst := filepath.Join(base, "dst")
+	if err := copyTree(src, dst); err != nil {
+		t.Fatalf("copyTree: %v", err)
+	}
+
+	di, err := os.Stat(filepath.Join(dst, "hooks"))
+	if err != nil {
+		t.Fatalf("stat copied dir: %v", err)
+	}
+	if perm := di.Mode().Perm(); perm != 0o775 {
+		t.Errorf("dir perm = %o, want 775 (umask must not narrow it)", perm)
+	}
+	fi, err := os.Stat(filepath.Join(dst, "hooks", "pre-create"))
+	if err != nil {
+		t.Fatalf("stat copied file: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o755 {
+		t.Errorf("file perm = %o, want 755 (umask must not narrow it)", perm)
 	}
 }
 

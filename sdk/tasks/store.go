@@ -50,7 +50,10 @@ var (
 	ErrNotFound      = errors.New("issue not found")
 	ErrAlreadyExists = errors.New("issue already exists")
 	ErrNoStore       = errors.New("no .tasks directory found")
-	ErrStoreExists   = errors.New(".tasks directory already exists")
+	// ErrStoreExists is returned when a store already occupies the create or
+	// move target. Its text names no location: a store may be a local .tasks or
+	// a central subfolder, so every caller appends the specific one.
+	ErrStoreExists = errors.New("store already exists")
 	// ErrStoreNotRegistered is returned when a store name has no registry entry:
 	// by Resolve for an explicit StoreName override (CONFIG-SPEC §4), and by
 	// RenameCentral / RelinkCentral for the store they were asked to edit.
@@ -217,7 +220,7 @@ func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error
 		return nil, err
 	}
 	if _, err := fs.Stat(dir); err == nil {
-		return nil, ErrStoreExists
+		return nil, fmt.Errorf("%w: %s", ErrStoreExists, dir)
 	}
 	if err := fs.MkdirAll(dir, 0o755); err != nil {
 		return nil, err

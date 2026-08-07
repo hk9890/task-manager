@@ -41,8 +41,23 @@ func taskmgrCentral(t *testing.T, workDir, home string, args ...string) (stdout,
 // after TASKMGR_HOME, for tests that need to set a variable themselves.
 func taskmgrCentralEnv(t *testing.T, workDir, home string, extraEnv []string, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
+	return taskmgrCentralIn(t, "", workDir, home, extraEnv, args...)
+}
+
+// taskmgrCentralCwd runs the binary with its process working directory set to
+// cwd and --dir passed verbatim, so a test can exercise a *relative* --dir.
+func taskmgrCentralCwd(t *testing.T, cwd, home, dirFlag string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	return taskmgrCentralIn(t, cwd, dirFlag, home, nil, args...)
+}
+
+// taskmgrCentralIn is the shared core: cwd (empty → inherit), the --dir value,
+// an isolated TASKMGR_HOME, and any extra environment.
+func taskmgrCentralIn(t *testing.T, cwd, dirFlag, home string, extraEnv []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
 	bin := taskmgrBin(t)
-	cmd := exec.Command(bin, append([]string{"--dir", workDir}, args...)...)
+	cmd := exec.Command(bin, append([]string{"--dir", dirFlag}, args...)...)
+	cmd.Dir = cwd
 	cmd.Env = append(append(os.Environ(), "TASKMGR_HOME="+home), extraEnv...)
 	var o, e strings.Builder
 	cmd.Stdout = &o

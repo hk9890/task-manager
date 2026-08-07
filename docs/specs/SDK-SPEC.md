@@ -64,8 +64,12 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
   `newName` is taken.
 - **`RelinkCentral`** re-points the registry entry `name` at `projectPath`, for a
   project that moved on disk, and returns the canonical path recorded. It touches no
-  files. Returns `ErrStoreNotRegistered` for an unknown name and `ErrNoStore` when the
-  store subfolder is missing (it will not write an entry resolution would skip).
+  files. `projectPath` must be **absolute** — a relative path is resolved against the
+  central root, not the caller's working directory. Returns `ErrStoreNotRegistered` for
+  an unknown name, `ErrNoStore` when the store subfolder is missing (it will not write
+  an entry resolution would skip), and an error when `projectPath` does not exist
+  (canonicalization falls back to the lexical form, so an unchecked typo would silently
+  point a live entry at nothing).
 - **`Stores`** reads the central registry and returns its entries (it does **not**
   resolve against a working directory — `where` uses `Resolve`; `store list` uses this).
   It reads through the same seams as `Resolve` and never writes; a missing registry

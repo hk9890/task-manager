@@ -17,9 +17,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -103,24 +105,68 @@ var storeMoveCmd = &cobra.Command{
   --relink    Re-point the registry entry named --to at this directory, for a
               project that moved on disk. No files are touched.
 
-A store keeps its ID prefix and its hooks across all three, so existing IDs stay
-valid. See CONFIG-SPEC §5.`,
+The store's config.yaml moves verbatim, so its ID prefix and hooks block are
+kept and existing IDs stay valid. Note that hooks run with the working directory
+set to the *project* root, which --central does not change: a hook whose argv is
+a path into .tasks (["\.tasks/validators/check.sh"]) stops resolving once the
+store leaves the project, so rewrite such hooks to an absolute path or to
+["sh", "-c", "$TASKMGR_STORE/validators/check.sh"]. See CONFIG-SPEC §5.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Validate the mode here rather than with cobra's flag groups: those
+		// count a flag as "set" whenever it appears, so --rename=false would
+		// satisfy MarkFlagsOneRequired and then fall through to another mode.
+		// Doing it by value also lets a misuse render the full help block,
+		// which cobra's own group errors bypass (they carry no annotation
+		// Execute can detect).
+		switch modes := pickedModes(); len(modes) {
+		case 1:
+			// fallthrough to dispatch below
+		case 0:
+			return &usageError{cmd: cmd, msg: "exactly one of --central, --rename, --relink is required"}
+		default:
+			return &usageError{cmd: cmd, msg: "--central, --rename and --relink are mutually exclusive; got " + strings.Join(modes, " and ")}
+		}
 		switch {
 		case moveCentral:
 			return runStoreMoveCentral()
 		case moveRename:
-			return runStoreMoveRename()
+			return runStoreMoveRename(cmd)
 		default:
-			return runStoreMoveRelink()
+			return runStoreMoveRelink(cmd)
 		}
 	},
 }
 
+// pickedModes returns the mode flags that are actually true, by value — an
+// explicit --central=false picks nothing.
+func pickedModes() []string {
+	var picked []string
+	for _, m := range []struct {
+		name string
+		on   bool
+	}{{"--central", moveCentral}, {"--rename", moveRename}, {"--relink", moveRelink}} {
+		if m.on {
+			picked = append(picked, m.name)
+		}
+	}
+	return picked
+}
+
+// resolveForMove resolves the store for a move, turning the SDK's generic
+// ErrNoStore into the actionable guidance CLI-SPEC §1 requires of every command
+// but init and where (openStore does the same for the store-opening commands).
+func resolveForMove() (tasks.ResolveInfo, error) {
+	_, info, err := tasks.Resolve(resolveOptions(), logOption())
+	if errors.Is(err, tasks.ErrNoStore) {
+		return info, fmt.Errorf("%w — run 'taskmgr init' to create one", err)
+	}
+	return info, err
+}
+
 // runStoreMoveCentral promotes the local store resolving here into the central root.
 func runStoreMoveCentral() error {
-	_, info, err := tasks.Resolve(resolveOptions(), logOption())
+	info, err := resolveForMove()
 	if err != nil {
 		return err
 	}
@@ -140,11 +186,11 @@ func runStoreMoveCentral() error {
 }
 
 // runStoreMoveRename renames the central store resolving here to --to.
-func runStoreMoveRename() error {
+func runStoreMoveRename(cmd *cobra.Command) error {
 	if moveTo == "" {
-		return fmt.Errorf("--rename requires --to <name>")
+		return &usageError{cmd: cmd, msg: "--rename requires --to <name>"}
 	}
-	_, info, err := tasks.Resolve(resolveOptions(), logOption())
+	info, err := resolveForMove()
 	if err != nil {
 		return err
 	}
@@ -161,17 +207,16 @@ func runStoreMoveRename() error {
 }
 
 // runStoreMoveRelink re-points the entry named --to at the current directory.
-func runStoreMoveRelink() error {
+func runStoreMoveRelink(cmd *cobra.Command) error {
 	if moveTo == "" {
-		return fmt.Errorf("--relink requires --to <name>")
+		return &usageError{cmd: cmd, msg: "--relink requires --to <name>"}
 	}
-	dir := flagDir
-	if dir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		dir = wd
+	// Make the directory absolute here: unlike every other command, relink does
+	// not route --dir through Resolve, and the SDK resolves a relative path
+	// against the central root, not the cwd. filepath.Abs("") is the cwd.
+	dir, err := filepath.Abs(flagDir)
+	if err != nil {
+		return err
 	}
 	project, err := tasks.RelinkCentral(moveTo, dir)
 	if err != nil {
@@ -204,8 +249,8 @@ func init() {
 	storeMoveCmd.Flags().BoolVar(&moveRename, "rename", false, "rename the central store here to --to")
 	storeMoveCmd.Flags().BoolVar(&moveRelink, "relink", false, "re-point the entry named --to at this directory")
 	storeMoveCmd.Flags().StringVar(&moveTo, "to", "", "target registry name (default with --central: the project directory name)")
-	storeMoveCmd.MarkFlagsMutuallyExclusive("central", "rename", "relink")
-	storeMoveCmd.MarkFlagsOneRequired("central", "rename", "relink")
+	// The mode flags are validated in RunE, not via cobra's flag groups — see
+	// the comment there.
 
 	storeCmd.AddCommand(storeListCmd)
 	storeCmd.AddCommand(storeMoveCmd)

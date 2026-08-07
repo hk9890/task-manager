@@ -246,6 +246,148 @@ func TestL4_StoreMove_Rejections(t *testing.T) {
 	}
 }
 
+// TestL4_StoreMove_ExplicitFalseModeIsNotAMode pins that a mode flag set to
+// false picks nothing. Cobra's flag groups count a flag as "set" whenever it
+// appears, so `--rename=false` would otherwise satisfy the one-required check
+// and then fall through to the relink branch — silently re-pointing the store.
+func TestL4_StoreMove_ExplicitFalseModeIsNotAMode(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	seedLocal(t, proj, home)
+	if _, errOut, code := taskmgrCentral(t, proj, home, "store", "move", "--central", "--to", "myproj"); code != 0 {
+		t.Fatalf("promote: %s", errOut)
+	}
+
+	elsewhere := t.TempDir()
+	for _, flag := range []string{"--central=false", "--rename=false", "--relink=false"} {
+		_, errOut, code := taskmgrCentral(t, elsewhere, home, "store", "move", flag, "--to", "myproj")
+		if code == 0 {
+			t.Errorf("%s should not select a mode", flag)
+		}
+		if !strings.Contains(errOut, "exactly one of") {
+			t.Errorf("%s: stderr = %q, want the no-mode-selected message", flag, errOut)
+		}
+	}
+
+	// The registry entry must still point at the original project.
+	out, _, code := taskmgrCentral(t, proj, home, "--json", "where")
+	if code != 0 {
+		t.Fatalf("where: code=%d", code)
+	}
+	var w whereJSON
+	if err := json.Unmarshal([]byte(out), &w); err != nil {
+		t.Fatalf("where json: %v", err)
+	}
+	if w.Kind != "central" || w.ProjectPath != proj {
+		t.Errorf("entry was re-pointed by a =false flag: %+v", w)
+	}
+}
+
+// TestL4_StoreMove_RelinkRelativeDir pins that a relative -C is resolved against
+// the working directory. The SDK resolves a relative path against the central
+// root, so passing --dir through unchanged would record a path under the home.
+func TestL4_StoreMove_RelinkRelativeDir(t *testing.T) {
+	home := t.TempDir()
+	parent := t.TempDir()
+	proj := filepath.Join(parent, "proj")
+	if err := os.Mkdir(proj, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	seedLocal(t, proj, home)
+	if _, errOut, code := taskmgrCentral(t, proj, home, "store", "move", "--central", "--to", "demo"); code != 0 {
+		t.Fatalf("promote: %s", errOut)
+	}
+
+	// Run from `parent` with a relative --dir naming the project.
+	out, errOut, code := taskmgrCentralCwd(t, parent, home, "./proj", "--json", "store", "move", "--relink", "--to", "demo")
+	if code != 0 {
+		t.Fatalf("relink with relative --dir: code=%d stderr=%q", code, errOut)
+	}
+	var res storeMoveJSON
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("relink json: %v (%q)", err, out)
+	}
+	if res.ProjectPath != proj {
+		t.Errorf("project_path = %q, want %q (a relative --dir must resolve against the cwd)", res.ProjectPath, proj)
+	}
+	if strings.HasPrefix(res.ProjectPath, home) {
+		t.Errorf("project_path %q was resolved against the central root", res.ProjectPath)
+	}
+}
+
+// TestL4_StoreMove_RelinkRefusesMissingDir pins that a typo'd path is refused
+// rather than silently orphaning the store.
+func TestL4_StoreMove_RelinkRefusesMissingDir(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	seedLocal(t, proj, home)
+	if _, errOut, code := taskmgrCentral(t, proj, home, "store", "move", "--central", "--to", "demo"); code != 0 {
+		t.Fatalf("promote: %s", errOut)
+	}
+
+	if _, errOut, code := taskmgrCentral(t, "/definitely/not/a/real/dir", home, "store", "move", "--relink", "--to", "demo"); code == 0 {
+		t.Error("relink at a nonexistent directory should fail")
+	} else if !strings.Contains(errOut, "does not exist") {
+		t.Errorf("stderr = %q, want it to name the missing directory", errOut)
+	}
+	// The original project still resolves.
+	if out, _, _ := taskmgrCentral(t, proj, home, "--json", "where"); !strings.Contains(out, `"central"`) {
+		t.Errorf("original project should still resolve: %q", out)
+	}
+}
+
+// TestL4_StoreMove_MisuseRendersHelp pins that a mode-flag misuse gets the full
+// misuse-help block, not a bare one-liner — cobra's own flag-group errors carry
+// no annotation the Execute layer can detect, so the modes are validated in RunE.
+func TestL4_StoreMove_MisuseRendersHelp(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	seedLocal(t, proj, home)
+
+	cases := []struct {
+		name string
+		want string
+		args []string
+	}{
+		{"no mode", "exactly one of", []string{"store", "move"}},
+		{"two modes", "mutually exclusive", []string{"store", "move", "--central", "--relink", "--to", "x"}},
+		{"rename without --to", "requires --to", []string{"store", "move", "--rename"}},
+	}
+	for _, tc := range cases {
+		_, errOut, code := taskmgrCentral(t, proj, home, tc.args...)
+		if code == 0 {
+			t.Errorf("%s: expected a non-zero exit", tc.name)
+		}
+		if !strings.Contains(errOut, tc.want) {
+			t.Errorf("%s: stderr = %q, want it to contain %q", tc.name, errOut, tc.want)
+		}
+		// The misuse-help block carries a usage line and a --help pointer.
+		if !strings.Contains(errOut, "usage:") || !strings.Contains(errOut, "--help") {
+			t.Errorf("%s: stderr = %q, want the full misuse-help block", tc.name, errOut)
+		}
+	}
+}
+
+// TestL4_StoreMove_NoStoreHintsInit pins CLI-SPEC §1: every command but init and
+// where turns "no store" into actionable guidance.
+func TestL4_StoreMove_NoStoreHintsInit(t *testing.T) {
+	home := t.TempDir()
+	empty := t.TempDir()
+
+	for _, args := range [][]string{
+		{"store", "move", "--central"},
+		{"store", "move", "--rename", "--to", "x"},
+	} {
+		_, errOut, code := taskmgrCentral(t, empty, home, args...)
+		if code == 0 {
+			t.Errorf("%v: expected a non-zero exit", args)
+		}
+		if !strings.Contains(errOut, "taskmgr init") {
+			t.Errorf("%v: stderr = %q, want the 'run taskmgr init' hint", args, errOut)
+		}
+	}
+}
+
 // TestL4_StorePathFlagRemoved pins the removal of --store-path / TASKMGR_DIR:
 // the flag is rejected and the environment variable has no effect.
 func TestL4_StorePathFlagRemoved(t *testing.T) {

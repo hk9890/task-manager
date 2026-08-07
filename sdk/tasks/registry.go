@@ -271,7 +271,7 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	if err != nil {
 		return nil, err
 	}
-	if err := checkFree(entries, name, project, home, croot); err != nil {
+	if err := checkFree(entries, name, projectPath, project, home, croot); err != nil {
 		return nil, err
 	}
 
@@ -291,14 +291,23 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 }
 
 // checkFree reports whether a new entry (name, project) can be added: both the
-// store name and the canonical project path must be unused (CONFIG-SPEC §3).
-func checkFree(entries []registryEntry, name, project, home, croot string) error {
-	projKey := lexCanon(project, home, croot)
+// store name and the project path must be unused (CONFIG-SPEC §3).
+//
+// The path is matched on two keys — the caller's raw input and the
+// symlink-resolved form — because registry entries are only ever compared
+// lexically. Matching on the resolved form alone would let a project registered
+// under a path that has since become a symlink be registered a second time, and
+// the resulting duplicate would be invisible to loadRegistry's lexical dedup.
+func checkFree(entries []registryEntry, name, rawProject, project, home, croot string) error {
+	keys := map[string]bool{
+		lexCanon(rawProject, home, croot): true,
+		lexCanon(project, home, croot):    true,
+	}
 	for _, en := range entries {
 		if en.Store == name {
-			return ErrStoreExists
+			return fmt.Errorf("%w: central store %q", ErrStoreExists, name)
 		}
-		if lexCanon(en.Path, home, croot) == projKey {
+		if keys[lexCanon(en.Path, home, croot)] {
 			return fmt.Errorf("a central store is already registered for %q", project)
 		}
 	}
@@ -344,12 +353,12 @@ func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, o
 	if err != nil {
 		return nil, err
 	}
-	if err := checkFree(entries, name, project, home, croot); err != nil {
+	if err := checkFree(entries, name, projectPath, project, home, croot); err != nil {
 		return nil, err
 	}
 	dst := filepath.Join(croot, storesSubdir, name)
 	if _, err := fs.Stat(dst); err == nil {
-		return nil, ErrStoreExists
+		return nil, fmt.Errorf("%w: %s", ErrStoreExists, dst)
 	}
 	if err := fs.MkdirAll(filepath.Join(croot, storesSubdir), 0o755); err != nil {
 		return nil, err
@@ -398,7 +407,7 @@ func renameCentralWith(oldName, newName string, fs vfs.FS, e env.Environment) (s
 	idx := -1
 	for i, en := range entries {
 		if en.Store == newName {
-			return "", ErrStoreExists
+			return "", fmt.Errorf("%w: central store %q", ErrStoreExists, newName)
 		}
 		if en.Store == oldName {
 			idx = i
@@ -414,7 +423,7 @@ func renameCentralWith(oldName, newName string, fs vfs.FS, e env.Environment) (s
 		return "", fmt.Errorf("%w: %s", ErrNoStore, src)
 	}
 	if _, err := fs.Stat(dst); err == nil {
-		return "", ErrStoreExists
+		return "", fmt.Errorf("%w: %s", ErrStoreExists, dst)
 	}
 	if err := moveStoreDir(fs, src, dst); err != nil {
 		return "", err
@@ -432,7 +441,10 @@ func renameCentralWith(oldName, newName string, fs vfs.FS, e env.Environment) (s
 // canonical project path now recorded.
 //
 // It refuses when the store subfolder is missing, rather than writing an entry
-// that resolution would ignore as dangling.
+// that resolution would ignore as dangling, and when projectPath does not exist,
+// rather than pointing a live entry at nothing on a typo. projectPath must be
+// absolute: a relative path would be resolved against the central root, not the
+// caller's working directory.
 func RelinkCentral(name, projectPath string) (string, error) {
 	return relinkCentralWith(name, projectPath, vfs.NewOS(), env.NewOS())
 }
@@ -443,6 +455,12 @@ func relinkCentralWith(name, projectPath string, fs vfs.FS, e env.Environment) (
 		return "", err
 	}
 	project := canonicalize(fs, projectPath, home, croot)
+	// canonicalize falls back to the lexical path when the target does not
+	// exist, so a typo'd path is indistinguishable from a real one unless it is
+	// checked here.
+	if fi, err := fs.Stat(project); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("project directory does not exist: %s", project)
+	}
 
 	unlock, err := lockCentral(fs, croot)
 	if err != nil {

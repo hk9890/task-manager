@@ -19,6 +19,7 @@ package tasks
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -263,6 +264,57 @@ func TestRelinkCentral_Rejections(t *testing.T) {
 	// Re-pointing an entry at the path it already has is a no-op, not a clash.
 	if _, err := relinkCentralWith("a", "/dev/a", m, fakeEnv(nil)); err != nil {
 		t.Errorf("self-relink should be allowed: %v", err)
+	}
+}
+
+// TestRelinkCentral_RefusesMissingProject pins the guard against a typo'd path:
+// canonicalize falls back to the lexical form for a path that does not exist, so
+// without an explicit check a typo silently points a live entry at nothing.
+func TestRelinkCentral_RefusesMissingProject(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/a", "/dev/a/.tasks", "aaa")
+	if _, err := moveToCentralWith("/dev/a", "a", m, fakeEnv(nil), nil); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	if _, err := relinkCentralWith("a", "/dev/typo", m, fakeEnv(nil)); err == nil {
+		t.Fatal("re-pointing at a nonexistent directory should be rejected")
+	}
+	// The entry still points where it did.
+	entries, err := loadRegistry(m, testCentral, testHome)
+	if err != nil {
+		t.Fatalf("load registry: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Path != "/dev/a" {
+		t.Errorf("entries = %+v, want the original path untouched", entries)
+	}
+}
+
+// TestCentralNameClash_ErrorNamesCentralStore pins the error wording: a central
+// name collision must not report ".tasks directory already exists", which points
+// the reader at the project's local store instead of the registry.
+func TestCentralNameClash_ErrorNamesCentralStore(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/a", "/dev/a/.tasks", "aaa")
+	makeStore(t, m, "/dev/b", "/dev/b/.tasks", "bbb")
+	if _, err := moveToCentralWith("/dev/a", "taken", m, fakeEnv(nil), nil); err != nil {
+		t.Fatalf("promote a: %v", err)
+	}
+
+	_, err := moveToCentralWith("/dev/b", "taken", m, fakeEnv(nil), nil)
+	if !errors.Is(err, ErrStoreExists) {
+		t.Fatalf("err = %v, want ErrStoreExists", err)
+	}
+	if !strings.Contains(err.Error(), `central store "taken"`) {
+		t.Errorf("err = %q, want it to name the central store", err)
+	}
+	if strings.Contains(err.Error(), DataDirName) {
+		t.Errorf("err = %q, must not point at a local %s directory", err, DataDirName)
+	}
+
+	_, err = renameCentralWith("taken", "taken", m, fakeEnv(nil))
+	if !errors.Is(err, ErrStoreExists) || !strings.Contains(err.Error(), "central store") {
+		t.Errorf("rename onto a taken name err = %v, want a central-store ErrStoreExists", err)
 	}
 }
 
