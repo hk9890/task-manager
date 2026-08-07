@@ -82,7 +82,23 @@ on a clean, up-to-date tree.
    every user. The release workflow runs the same check before GoReleaser, but by
    then the tag is already pushed.
 
-5. Tag the CLI on the commit that pins the SDK and push it — this starts the
+5. **Dry-run the release workflow on the commit you are about to tag.** This is
+   the same job that runs on a tag push — same build, same signing, same SBOMs —
+   with `--snapshot`, so it publishes nothing:
+
+   ```bash
+   gh workflow run release.yml --ref main
+   sleep 5 && gh run list --workflow=release.yml --limit 1   # grab the run id, then `gh run watch <id>`
+   ```
+
+   Do not skip it. **A pushed tag cannot be taken back**: the Go module proxy
+   caches `vX.Y.Z` against that commit the moment the tag lands, so a release that
+   dies partway through burns the version and the next one has to be `vX.Y.Z+1`.
+   That is exactly how `v0.7.0` was lost. Signing is the step that most needs the
+   rehearsal — it is the one part of the pipeline no local snapshot and no PR
+   check exercises (see [below](#validating-the-config-locally)).
+
+6. Tag the CLI on the commit that pins the SDK and push it — this starts the
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
 
    ```bash
@@ -90,7 +106,7 @@ on a clean, up-to-date tree.
    git push origin vX.Y.Z
    ```
 
-6. GoReleaser builds linux / macOS / Windows archives (amd64 + arm64), a
+7. GoReleaser builds linux / macOS / Windows archives (amd64 + arm64), a
    `checksums.txt`, a **CycloneDX SBOM per archive**, a **keyless cosign signature
    over `checksums.txt`** (`checksums.txt.sig` + `checksums.txt.pem`, which is why
    the workflow grants `id-token: write`), and a **draft** release named
@@ -115,15 +131,23 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
 if you have both.
 
+**Signing is not covered by either of those.** Keyless cosign needs an `id-token`
+from GitHub's OIDC provider, which no local run has and which the PR job must never
+be given — it builds unreviewed code. So the signing step runs in exactly two
+places: a real tag push, and the dry run of step 5 (`workflow_dispatch` on
+`release.yml`, plus a weekly schedule that surfaces drift on its own). Run the dry
+run and signing is verified while the version is still recoverable; skip it and the
+tag push is the first execution.
+
 > **The cosign binary is pinned** (`cosign-release` in `release.yml`), not just the
-> installer action. The signing step is the one part of the release no local
-> snapshot exercises — `--skip=sign` skips it — so an unpinned cosign upgrade only
-> surfaces after the tag is pushed. That is how `v0.7.0` failed: cosign 3.x removed
-> `--output-signature` / `--output-certificate` from `sign-blob` in favour of a
-> single `--bundle`. Moving to that format is a deliberate change — it replaces the
-> published `checksums.txt.sig` + `.pem` with one `.bundle` and rewrites the
-> `verify-blob` invocation under [Verifying](#verifying) — not something to inherit
-> by drift.
+> installer action, so a new cosign cannot arrive unannounced. That is how `v0.7.0`
+> failed: cosign 3.x makes `--new-bundle-format` the default, which ignores the
+> `--output-signature` / `--output-certificate` flags `.goreleaser.yaml` passes and
+> then aborts on an empty `--bundle` path. Moving to that format is a deliberate
+> change — it replaces the published `checksums.txt.sig` + `.pem` with one
+> `.bundle` and rewrites the `verify-blob` invocation under
+> [Verifying](#verifying) — not something to inherit by drift. GoReleaser itself is
+> still a floating `~> v2` constraint; the weekly dry run is what covers it.
 
 ## Verifying
 

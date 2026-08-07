@@ -8,6 +8,16 @@ on:
     paths:                 # validate the release config on PRs that touch it (snapshot, no publish)
       - '.goreleaser.yaml'
       - '.github/workflows/release.yml'
+  # Both of these run the release job below as a DRY RUN — every step of the real
+  # thing, `--snapshot`, no publish. It is the only place signing and SBOM
+  # generation happen before a tag exists, and a tag cannot be taken back: the Go
+  # module proxy caches `vX.Y.Z` the moment it is pushed, so a release that dies
+  # after tagging burns the version (that is what happened to v0.7.0). The
+  # pull_request path cannot cover signing — keyless cosign needs `id-token:
+  # write`, which must never be handed to unreviewed PR code.
+  workflow_dispatch:       # required before pushing a tag — docs/RELEASING.md step 5
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC: surface toolchain drift on its own
 
 # Default every job to read-only. Only the publish job below elevates to write,
 # so the PR/snapshot path carries no write-capable token even while it builds PR
@@ -17,12 +27,15 @@ permissions:
 
 jobs:
   # Tag push -> real cross-platform build + (draft) GitHub release.
+  # Dispatch / schedule -> the same job with `--snapshot`: builds, signs and
+  # catalogs, publishes nothing. Deliberately one job and not two, so the
+  # rehearsal cannot drift away from the release it is rehearsing.
   release:
-    name: GoReleaser (release)
-    if: github.event_name == 'push'
+    name: GoReleaser (${{ github.event_name == 'push' && 'release' || 'dry run' }})
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # create the GitHub release and upload assets
+      contents: write      # create the GitHub release and upload assets (tag push only; a dry run publishes nothing)
       id-token: write      # keyless cosign signing via Sigstore OIDC
     steps:
       - name: Checkout
@@ -36,17 +49,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The tag is already pushed by the time this runs, so this is the last
-      # point at which a stale SDK pin can be caught. Every other job builds
-      # inside the committed go.work and resolves the in-tree SDK, so none of
-      # them sees a go.mod that still pins an older sdk — while
-      # `go install .../cmd/taskmgr@<this tag>` compiles against exactly that pin
-      # and fails for every user. Fail here, loudly, instead of publishing it.
+      # Every other job builds inside the committed go.work and resolves the
+      # in-tree SDK, so none of them sees a go.mod that still pins an older sdk —
+      # while `go install .../cmd/taskmgr@<tag>` compiles against exactly that pin
+      # and fails for every user. On a tag push this is the last point at which a
+      # stale pin can be caught, and the tag is already public by then; on a dry
+      # run it is a real gate, which is the point of running one.
       - name: Verify the SDK pin resolves (go install path)
         run: |
           if ! GOWORK=off go build ./...; then
-            echo "::error::go.mod pins an SDK version this tag does not build against."
-            echo "::error::Push sdk/${GITHUB_REF_NAME} and re-pin the CLI before tagging — docs/RELEASING.md step 4."
+            echo "::error::go.mod pins an SDK version this commit does not build against."
+            echo "::error::Push the matching sdk/vX.Y.Z tag and re-pin the CLI before tagging — docs/RELEASING.md step 4."
             exit 1
           fi
 
@@ -75,11 +88,15 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          # `--snapshot` off a tag push: same build, same signing, same SBOMs, but
+          # no GitHub release and no assets uploaded.
+          args: release --clean ${{ github.event_name != 'push' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Pin the tag so the parallel `sdk/v*` tag on the same commit is never picked up.
-          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+          # Pin the tag so the parallel `sdk/v*` tag on the same commit is never
+          # picked up. Left unset on a dry run, where the ref is a branch and the
+          # snapshot version comes from `git describe` instead.
+          GORELEASER_CURRENT_TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
 
   # PR touching the release config -> snapshot build only (no publish, read-only
   # token). Catches a broken .goreleaser.yaml before any tag is ever cut.
@@ -104,5 +121,7 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          # Snapshot validation has no cosign/syft installed, so skip those steps.
+          # No cosign/syft here, and no id-token to sign with even if there were:
+          # this job builds unreviewed PR code. Signing is covered by the dry run
+          # (`workflow_dispatch` on the release job), not by this path.
           args: release --snapshot --clean --skip=sign,sbom
