@@ -85,7 +85,7 @@ func (ff *filterFlags) build() tasks.Filter {
 	}
 }
 
-func runList(cmd *cobra.Command, ff *filterFlags) error {
+func runList(ff *filterFlags) error {
 	if err := validateSort(ff.sort); err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ var listCmd = &cobra.Command{
 	Short: "List issues (open by default)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList(cmd, &listFilter)
+		return runList(&listFilter)
 	},
 }
 
@@ -147,7 +147,7 @@ var searchCmd = &cobra.Command{
 		default:
 			searchFilter.query = textExpr
 		}
-		return runList(cmd, &searchFilter)
+		return runList(&searchFilter)
 	},
 }
 

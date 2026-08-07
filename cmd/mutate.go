@@ -180,11 +180,10 @@ var depAddCmd = &cobra.Command{
 		if err := s.AddDep(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s now blocked by %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "add"})
 		}
+		fmt.Printf("%s now blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -201,11 +200,10 @@ var depRmCmd = &cobra.Command{
 		if err := s.RemoveDep(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s no longer blocked by %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "rm"})
 		}
+		fmt.Printf("%s no longer blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -227,11 +225,10 @@ var relAddCmd = &cobra.Command{
 		if err := s.AddRelated(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s related to %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "add"})
 		}
+		fmt.Printf("%s related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -248,11 +245,10 @@ var relRmCmd = &cobra.Command{
 		if err := s.RemoveRelated(args[0], args[1]); err != nil {
 			return err
 		}
-		if !flagJSON {
-			fmt.Printf("%s no longer related to %s\n", args[0], args[1])
-		} else {
+		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "rm"})
 		}
+		fmt.Printf("%s no longer related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -388,7 +384,6 @@ var commentRmCmd = &cobra.Command{
 	},
 }
 
-// reportMutation prints a uniform success line (or the JSON detail).
 // reportResult prints a successful gated mutation, surfacing hook hints and
 // post-hook warnings (HOOK-SPEC §6.2). With --json the issue carries "hints" and
 // "warnings"; in text mode they print as notes on stderr so stdout stays clean.

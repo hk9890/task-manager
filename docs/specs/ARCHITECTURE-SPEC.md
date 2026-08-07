@@ -71,15 +71,14 @@ storage or validation logic. Those are illustrations, not planned work — see �
 
 ## 4. Modules
 
-Three Go modules:
+Two Go modules:
 
 ```
 github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra)
 ├── cmd/                                 command groups + output rendering
 │   └── taskmgr/                         package main — wires command execution
-├── sdk/                                 separate module — the engine
-│   └── tasks/                           package tasks: storage engine + public API
-└── bench/                               separate module — scaling harness
+└── sdk/                                 separate module — the engine
+    └── tasks/                           package tasks: storage engine + public API
 ```
 
 - **`sdk` is its own module** so consumers import
@@ -87,12 +86,10 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
   dependencies.
 - **Module wiring.** The root `go.mod` carries **no `replace`**: it requires the
   published `…/sdk vX.Y.Z`, which consumers and release builds resolve from the
-  `sdk/vX.Y.Z` tag. The committed `go.work` (`use . ./sdk ./bench`) points *local*
-  builds at the in-tree copy and is ignored by `go install <module>@<version>`.
-  A release therefore bumps the pin; it never removes a directive.
-- **`bench`** is a standalone scaling harness and the one place a `replace` is used
-  (`bench/go.mod`). Excluded from `go build ./...` and the default test suite, but
-  as a workspace member it is compiled and vetted by `build:all`/`vet:all`.
+  `sdk/vX.Y.Z` tag. The committed `go.work` (`use . ./sdk`) points *local* builds at
+  the in-tree copy and is ignored by `go install <module>@<version>`. A release
+  therefore bumps the pin; it never removes a directive. No module in this
+  repository uses a `replace` directive.
 - **`main` is at `cmd/taskmgr/`**, not the module root, so
   `go install …/cmd/taskmgr@latest` yields a binary named `taskmgr`.
 
@@ -226,11 +223,9 @@ Reads take a fresh snapshot of the directory and never hold the lock.
   separated so the common path stays proportional to open work, not total history.
   The partition axis is **open-vs-closed only** — deferred or long-parked issues
   stay in the hot set; there is deliberately no `parked/` partition (decision
-  at-39dru2). The hot scan is O(open) at ~13µs/file — measured by the `bench`
-  harness, REDESIGN A/B/C (see [bench/README.md](../../bench/README.md)) — so it
-  degrades gracefully
-  even at a few thousand hot issues; a status-based split would add routing
-  complexity for no correctness benefit.
+  at-39dru2). The hot scan is O(open) at ~13µs/file, so it degrades gracefully even
+  at a few thousand hot issues; a status-based split would add routing complexity
+  for no correctness benefit.
 
 ---
 

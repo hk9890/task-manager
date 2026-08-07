@@ -23,7 +23,6 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   internal/storetest/       fixture builder ("make a store") — test-only support package
 cmd/                        taskmgr CLI (cobra); calls Store, never the FS
   taskmgr/                  package main — the binary entrypoint
-bench/                      separate module; excluded from go build ./... and make test
 ```
 
 ## What each package holds

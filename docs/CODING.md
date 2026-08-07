@@ -67,10 +67,9 @@ seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bu
 
 ## Modules
 
-Three modules: root (the CLI), `sdk/` (minimal-dep — only `yaml.v3`), and `bench/`.
-The committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has
-no `replace` and pins the published `sdk vX.Y.Z` for consumers. `bench/` is outside
-`go build ./...` and `make test`, but `mise run quality` builds and vets it — so a
-bench compile error fails the gate.
+Two modules: root (the CLI) and `sdk/` (minimal-dep — only `yaml.v3`). The
+committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has no
+`replace` and pins the published `sdk vX.Y.Z` for consumers. `mise run build:all`
+compiles both so a cross-module break fails the gate.
 Run `mise run tidy` after changing imports. Authoritative:
 [ARCHITECTURE-SPEC §4](specs/ARCHITECTURE-SPEC.md).

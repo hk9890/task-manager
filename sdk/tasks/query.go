@@ -19,10 +19,9 @@
 // This file wires the pure internal/query engine into the store:
 //   - type ParseError = query.ParseError  (re-exported for callers)
 //   - issueRow adapts *Issue → query.Row  (field mapping per QUERY-SPEC.md §2)
-//   - compileExpr compiles an expression, returning the always-true predicate for "".
 //
-// Store.Query is defined in ready.go (it delegates to List).
-// List uses compileExpr + issueRow to apply the expression filter.
+// Store.Query is defined in list.go (it delegates to List).
+// List uses query.Compile + issueRow to apply the expression filter.
 //
 // import-cycle rule: internal/query must NOT import tasks; tasks imports query.
 package tasks
@@ -39,13 +38,6 @@ import (
 //	var pe *tasks.ParseError
 //	if errors.As(err, &pe) { ... }
 type ParseError = query.ParseError
-
-// compileExpr compiles the filter expression and returns a Predicate.
-// An empty or whitespace-only expression returns the always-true predicate.
-// A malformed expression returns a *ParseError (never nil on malformed input).
-func compileExpr(expr string) (query.Predicate, error) {
-	return query.Compile(expr)
-}
 
 // issueRow adapts a *Issue to the query.Row interface so the pure evaluator can
 // operate on it without importing the tasks package.

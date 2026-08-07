@@ -21,7 +21,7 @@ package tasks_test
 // Spec sections covered:
 //   §1  Opening a store — ErrNoStore (Open), ErrStoreExists (Init duplicate)
 //   §4  Store methods — ErrNotFound (Get, Reopen), ErrImmutable (Update on closed)
-//   §6  Errors & validation — all five sentinel errors exist and are returned by
+//   §6  Errors & validation — all six sentinel errors exist and are returned by
 //       the documented operations (errors.Is); ParseError carries Pos and Message.
 //
 // Already well-covered elsewhere (not duplicated here):
@@ -40,16 +40,17 @@ import (
 
 // ── §6 / §1: sentinel errors exist and are returned by documented operations ──
 
-// TestSpec_SDK_Sentinels_Declared verifies that all five sentinel error
+// TestSpec_SDK_Sentinels_Declared verifies that all six sentinel error
 // variables are non-nil and distinct — they must be importable and addressable
 // by consumers (SDK-SPEC §6).
 func TestSpec_SDK_Sentinels_Declared(t *testing.T) {
 	sentinels := map[string]error{
-		"ErrNotFound":      tasks.ErrNotFound,
-		"ErrAlreadyExists": tasks.ErrAlreadyExists,
-		"ErrNoStore":       tasks.ErrNoStore,
-		"ErrStoreExists":   tasks.ErrStoreExists,
-		"ErrImmutable":     tasks.ErrImmutable,
+		"ErrNotFound":           tasks.ErrNotFound,
+		"ErrAlreadyExists":      tasks.ErrAlreadyExists,
+		"ErrNoStore":            tasks.ErrNoStore,
+		"ErrStoreExists":        tasks.ErrStoreExists,
+		"ErrStoreNotRegistered": tasks.ErrStoreNotRegistered,
+		"ErrImmutable":          tasks.ErrImmutable,
 	}
 	seen := map[string]struct{}{}
 	for name, err := range sentinels {

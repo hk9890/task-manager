@@ -405,7 +405,9 @@ func (s *Store) Query(expr string) ([]*Issue, error) {
 // malformed f.Expr before any disk access.
 func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 	// Compile the expression first — return *ParseError before touching disk.
-	pred, err := compileExpr(f.Expr)
+	// An empty or whitespace-only expression compiles to the always-true
+	// predicate; a malformed one yields a *ParseError.
+	pred, err := query.Compile(f.Expr)
 	if err != nil {
 		return nil, err
 	}

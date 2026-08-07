@@ -15,14 +15,6 @@ updates:
     groups:
       go-dependencies:
         patterns: ["*"]
-  - package-ecosystem: gomod
-    directory: "/bench"
-    schedule:
-      interval: weekly
-    groups:
-      go-dependencies:
-        patterns: ["*"]
-
   # Keep the GitHub Actions (pinned to SHAs) up to date.
   - package-ecosystem: github-actions
     directory: "/"

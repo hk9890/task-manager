@@ -14,6 +14,13 @@ LDFLAGS := -ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT) -X 
 
 INSTALL_BIN_DIR ?= $(if $(GOBIN),$(GOBIN),$(shell go env GOPATH)/bin)
 
+# The format gate is goimports with -local, not plain gofmt: only goimports has
+# an opinion on the import grouping this repo uses, so a gofmt-only check would
+# accept files `mise run fmt:check` and CI reject. Keep this command identical to
+# the one in .mise.toml. goimports itself is pinned there — `mise install` puts it
+# on PATH.
+GOIMPORTS := goimports -local github.com/hk9890/task-manager
+
 all: build
 
 # Build the taskmgr binary into ./bin.
@@ -42,11 +49,11 @@ vet:
 	@cd sdk && go vet ./...
 
 fmt:
-	@gofmt -w cmd sdk/tasks
+	@$(GOIMPORTS) -w cmd sdk/tasks
 
-# 2>&1 folds gofmt's own diagnostics into $out so a broken invocation cannot pass.
+# 2>&1 folds goimports' own diagnostics into $out so a broken invocation cannot pass.
 fmt-check:
-	@out="$$(gofmt -l cmd sdk/tasks 2>&1)" || { echo "gofmt failed:"; echo "$$out"; exit 1; }; \
+	@out="$$($(GOIMPORTS) -l cmd sdk/tasks 2>&1)" || { echo "goimports failed:"; echo "$$out"; exit 1; }; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi
 
 tidy:

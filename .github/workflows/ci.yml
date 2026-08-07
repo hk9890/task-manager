@@ -25,21 +25,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # ── root module ───────────────────────────────────────────────────────
+      # ── formatting (both modules) ─────────────────────────────────────────
 
-      # 2>&1 folds gofmt's own diagnostics into $out so a broken run cannot pass.
-      - name: fmt-check (root)
-        run: |
-          if ! out="$(gofmt -l cmd sdk/tasks 2>&1)"; then
-            echo "gofmt failed:"
-            echo "$out"
-            exit 1
-          fi
-          if [ -n "$out" ]; then
-            echo "unformatted files:"
-            echo "$out"
-            exit 1
-          fi
+      # The format gate is defined once, in .mise.toml. Running it through mise
+      # here — rather than re-spelling it as `gofmt` — is what keeps CI from
+      # accepting files the canonical gate rejects: goimports with -local also
+      # enforces the import grouping that plain gofmt has no opinion on.
+      - name: Set up mise (pins go + goimports)
+        uses: jdx/mise-action@f10502fc09dadecfefb962fff68ce77213930204 # v4.2.2
+
+      - name: fmt-check (both modules)
+        run: mise run fmt:check
+
+      # ── root module ───────────────────────────────────────────────────────
 
       - name: vet (root)
         run: go vet ./...
@@ -55,20 +53,6 @@ jobs:
 
       # ── sdk module ────────────────────────────────────────────────────────
 
-      - name: fmt-check (sdk)
-        working-directory: sdk
-        run: |
-          if ! out="$(gofmt -l . 2>&1)"; then
-            echo "gofmt failed:"
-            echo "$out"
-            exit 1
-          fi
-          if [ -n "$out" ]; then
-            echo "unformatted files:"
-            echo "$out"
-            exit 1
-          fi
-
       - name: vet (sdk)
         working-directory: sdk
         run: go vet ./...
@@ -80,16 +64,6 @@ jobs:
       - name: test integration (sdk)
         working-directory: sdk
         run: CGO_ENABLED=1 go test -race -tags integration ./...
-
-      # ── bench module (standalone; excluded from root/sdk build) ──────────
-
-      - name: build (bench)
-        working-directory: bench
-        run: go build ./...
-
-      - name: vet (bench)
-        working-directory: bench
-        run: go vet ./...
 
       # ── fuzz seed corpora (no-ops if no fuzz targets exist yet) ──────────
 
