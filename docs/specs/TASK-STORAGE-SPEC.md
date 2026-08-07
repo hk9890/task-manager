@@ -72,8 +72,9 @@ Rules:
   (`<prefix>-0042`, zero-padded decimal) created under the previous scheme
   remain valid and resolvable.
 - **Full pattern:** `^[a-z][a-z0-9]*-[0-9a-z]+$`, max length 64.
-- **Prefix:** matches `^[a-z][a-z0-9]*$`; declared in
-  `config.yaml`. Every issue ID in the store shares it.
+- **Prefix:** matches `^[a-z][a-z0-9]*$`, max length 32; declared in
+  `config.yaml`. Every issue ID in the store shares it. The bound keeps every
+  allocated ID (`prefix` + `-` + a 6-char token) within the 64-char maximum.
 - **Canonical and stable.** An ID never changes. It appears in three places that
   must agree: the filename (`proj-3k9f2x.md`), the frontmatter `id` field, and any
   references to it from other issues.
@@ -127,7 +128,7 @@ hooks:                    # optional; lifecycle-gate hooks run at issue transiti
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `prefix` | string | yes | `^[a-z][a-z0-9]*$`. The ID prefix for every issue in the store. |
+| `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max length 32. The ID prefix for every issue in the store. |
 | `hook_timeout` | duration | no | Global per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
 | `hooks` | list | no | Lifecycle-gate hooks run at issue transitions; full schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3. |
 

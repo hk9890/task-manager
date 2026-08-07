@@ -19,7 +19,8 @@ package tasks
 // spec_storage_conformance_test.go — TASK-STORAGE-SPEC on-disk format conformance.
 //
 // Spec sections covered:
-//   §4.2  config.yaml — prefix field written and readable
+//   §4.2  config.yaml — prefix field written and readable; prefix length bound
+//         (§3, §4.2) enforced at store creation
 //   §4.3  Task file frontmatter — field order (normative); omitempty for optional
 //         fields (assignee, labels, parent, blocked_by, related, close_reason);
 //         closed field present iff status == closed; no comments in frontmatter.
@@ -495,6 +496,36 @@ func TestSpec_Storage_ClosedLayout(t *testing.T) {
 	closedPath := "/.tasks/closed/" + iss.ID + ".md"
 	if _, err := m.ReadFile(closedPath); err != nil {
 		t.Errorf("closed/ file %s must exist after Close: %v", closedPath, err)
+	}
+}
+
+// ── §4.2 / §3: prefix length bound ──────────────────────────────────────────
+
+// TestSpec_Storage_PrefixLengthBound verifies that store creation enforces the
+// prefix length bound from TASK-STORAGE-SPEC §3 and §4.2: a prefix at the limit
+// is accepted, one character longer is rejected. The bound guarantees every
+// allocated ID (prefix + '-' + a 6-char token) stays within maxIDLen — the
+// invariant auto-allocated IDs rely on without re-checking their own length.
+func TestSpec_Storage_PrefixLengthBound(t *testing.T) {
+	atLimit := strings.Repeat("a", maxPrefixLen)
+	overLimit := strings.Repeat("a", maxPrefixLen+1)
+
+	// At the limit: accepted, and an allocated ID stays within maxIDLen.
+	s, err := InitWithVFS("/", atLimit, vfs.NewMem())
+	if err != nil {
+		t.Fatalf("InitWithVFS with %d-char prefix: unexpected error %v", maxPrefixLen, err)
+	}
+	iss, err := unwrap(s.Create(CreateInput{Title: "within bound"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(iss.ID) > maxIDLen {
+		t.Errorf("allocated ID %q has length %d, exceeds maxIDLen %d", iss.ID, len(iss.ID), maxIDLen)
+	}
+
+	// One over the limit: rejected.
+	if _, err := InitWithVFS("/", overLimit, vfs.NewMem()); err == nil {
+		t.Errorf("InitWithVFS with %d-char prefix: expected error, got nil", maxPrefixLen+1)
 	}
 }
 

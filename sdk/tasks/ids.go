@@ -37,6 +37,13 @@ const idTokenLen = 6
 // maxIDLen bounds a full issue ID (TASK-STORAGE-SPEC §3).
 const maxIDLen = 64
 
+// maxPrefixLen bounds the store's ID prefix (TASK-STORAGE-SPEC §3, §4.2). It is
+// enforced at Init/InitCentral. An allocated ID is prefix + '-' + idTokenLen, so
+// bounding the prefix at 32 keeps every allocated ID (32+1+6 = 39) within
+// maxIDLen by construction — the hard ceiling would be maxIDLen-idTokenLen-1 = 57,
+// but 32 is ample for a human prefix (derived prefixes are capped at 8).
+const maxPrefixLen = 32
+
 // idRe is the issue-ID grammar: a prefix, a dash, then a base36 token. Legacy
 // sequential IDs ("<prefix>-0042") are a subset and remain valid.
 var idRe = regexp.MustCompile(`^[a-z][a-z0-9]*-[0-9a-z]+$`)
