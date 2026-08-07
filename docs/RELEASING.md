@@ -115,6 +115,16 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
 if you have both.
 
+> **The cosign binary is pinned** (`cosign-release` in `release.yml`), not just the
+> installer action. The signing step is the one part of the release no local
+> snapshot exercises — `--skip=sign` skips it — so an unpinned cosign upgrade only
+> surfaces after the tag is pushed. That is how `v0.7.0` failed: cosign 3.x removed
+> `--output-signature` / `--output-certificate` from `sign-blob` in favour of a
+> single `--bundle`. Moving to that format is a deliberate change — it replaces the
+> published `checksums.txt.sig` + `.pem` with one `.bundle` and rewrites the
+> `verify-blob` invocation under [Verifying](#verifying) — not something to inherit
+> by drift.
+
 ## Verifying
 
 The release carries the archives, `checksums.txt`, per-archive SBOMs, and
