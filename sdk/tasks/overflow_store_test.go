@@ -836,3 +836,107 @@ func TestComments_CapEnforcedThroughStore(t *testing.T) {
 		t.Fatalf("want exactly the accepted comment, got %d", len(cs))
 	}
 }
+
+// TestMetadataReadsDoNotNeedTheSidecar pins that operations which only need an
+// issue's metadata or its existence do not read its body.
+//
+// Resolving inside the shared read primitive made every such caller pay a full
+// body read — and turned a missing sidecar into a hard failure for operations
+// that never touch the body, so a comment could not be added to a doc whose
+// sidecar had gone missing. A removed sidecar is the observable stand-in for
+// "did it read the body?".
+func TestMetadataReadsDoNotNeedTheSidecar(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/p", "tst", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss := mustCreate(t, s, CreateInput{Title: "doc", Type: TypeDoc, Description: bigBody("body")})
+	if err := m.Remove(s.contentPath(iss.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Comments(iss.ID); err != nil {
+		t.Errorf("Comments: %v", err)
+	}
+	if _, err := s.AddComment(iss.ID, "hans", "a note"); err != nil {
+		t.Errorf("AddComment: %v", err)
+	}
+	// A duplicate-ID check reports "taken" without materializing the body.
+	_, err = s.Create(CreateInput{ID: iss.ID, Title: "clash"})
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Errorf("Create with a taken id: err = %v, want ErrAlreadyExists", err)
+	}
+
+	// Get still resolves — that is its contract — and still reports the loss.
+	if _, err := s.Get(iss.ID); err == nil {
+		t.Error("Get must still surface a missing sidecar")
+	}
+}
+
+// TestDetail_BodyExternalSurvivesClose pins that Detail reports where a body
+// actually lives for a CLOSED issue too.
+//
+// A closed issue is never in the hot index, so Detail reaches it through the
+// single-issue read. Resolving the body there clears the mirror flag before
+// Detail copies it, and the flag reads false for exactly the issues most likely
+// to be overflowed — a viewer stops warning about a huge body the moment the
+// issue is closed.
+func TestDetail_BodyExternalSurvivesClose(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/p", "tst", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss := mustCreate(t, s, CreateInput{Title: "doc", Type: TypeDoc, Description: bigBody("body")})
+
+	hot, err := s.Detail(iss.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hot.BodyExternal {
+		t.Fatal("open overflowed issue: BodyExternal = false, want true")
+	}
+	if _, err := unwrap(s.Close(iss.ID, "done")); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := s.Detail(iss.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closed.BodyExternal {
+		t.Error("closed overflowed issue: BodyExternal = false, want true")
+	}
+	if !strings.Contains(closed.Description, "body") {
+		t.Error("the body must still be resolved for the caller")
+	}
+}
+
+// TestOverflow_StaleSidecarRemovalDoesNotFailTheWrite pins that a failure while
+// deleting a now-stale sidecar does not report a committed write as failed.
+//
+// The removal happens AFTER the .md has landed, so by then the mutation is real:
+// returning an error makes the CLI exit non-zero and skips the post-hooks for a
+// change the next read will show. The leftover file is inert — the .md says the
+// body is inline, so nothing points at it.
+func TestOverflow_StaleSidecarRemovalDoesNotFailTheWrite(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/p", "tst", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss := mustCreate(t, s, CreateInput{Title: "doc", Description: bigBody("big")})
+
+	small := "now small"
+	m.FailOn("Remove", s.contentPath(iss.ID), errors.New("read-only content dir"))
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Description: &small})); err != nil {
+		t.Fatalf("the mutation was committed; it must not be reported as failed: %v", err)
+	}
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Description != small {
+		t.Errorf("Description = %q, want the committed body", got.Description)
+	}
+}
