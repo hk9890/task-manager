@@ -22,6 +22,8 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   internal/env/             the environment seam: Environment interface · OS impl · Fake
   internal/storetest/       fixture builder ("make a store") — test-only support package
 cmd/                        taskmgr CLI (cobra); calls Store, never the FS
+                            Run(args, stdout, stderr) int is the entry point;
+                            Execute is os.Exit(Run(...)) and nothing else
   taskmgr/                  package main — the binary entrypoint
 ```
 

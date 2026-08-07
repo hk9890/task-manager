@@ -185,7 +185,7 @@ var depAddCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "add"})
 		}
-		fmt.Printf("%s now blocked by %s\n", args[0], args[1])
+		_, _ = fmt.Fprintf(stdout, "%s now blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -205,7 +205,7 @@ var depRmCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "rm"})
 		}
-		fmt.Printf("%s no longer blocked by %s\n", args[0], args[1])
+		_, _ = fmt.Fprintf(stdout, "%s no longer blocked by %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -230,7 +230,7 @@ var relAddCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "add"})
 		}
-		fmt.Printf("%s related to %s\n", args[0], args[1])
+		_, _ = fmt.Fprintf(stdout, "%s related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -250,7 +250,7 @@ var relRmCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "rm"})
 		}
-		fmt.Printf("%s no longer related to %s\n", args[0], args[1])
+		_, _ = fmt.Fprintf(stdout, "%s no longer related to %s\n", args[0], args[1])
 		return nil
 	},
 }
@@ -339,7 +339,7 @@ var commentAddCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(toCommentDTO(*c))
 		}
-		fmt.Printf("Commented on %s (comment %s)\n", args[0], c.ID)
+		_, _ = fmt.Fprintf(stdout, "Commented on %s (comment %s)\n", args[0], c.ID)
 		return nil
 	},
 }
@@ -372,7 +372,7 @@ var commentEditCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(toCommentDTO(*c))
 		}
-		fmt.Printf("Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
+		_, _ = fmt.Fprintf(stdout, "Edited comment %s on %s (new revision %s)\n", args[1], args[0], c.ID)
 		return nil
 	},
 }
@@ -393,7 +393,7 @@ var commentRmCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(map[string]string{"op": "rm", "issue": args[0], "comment_id": args[1]})
 		}
-		fmt.Printf("Deleted comment %s from %s\n", args[1], args[0])
+		_, _ = fmt.Fprintf(stdout, "Deleted comment %s from %s\n", args[1], args[0])
 		return nil
 	},
 }
@@ -409,7 +409,7 @@ func reportResult(res *tasks.MutationResult, verb string) error {
 			Warnings: res.Warnings,
 		})
 	}
-	fmt.Printf("%s %s\n", verb, res.Issue.ID)
+	_, _ = fmt.Fprintf(stdout, "%s %s\n", verb, res.Issue.ID)
 	printNotes(res.Hints, res.Warnings)
 	return nil
 }
@@ -417,10 +417,10 @@ func reportResult(res *tasks.MutationResult, verb string) error {
 // printNotes writes hook hints and warnings to stderr as advisory notes.
 func printNotes(hints, warnings []string) {
 	for _, h := range hints {
-		fmt.Fprintln(os.Stderr, "hint: "+h)
+		_, _ = fmt.Fprintln(stderr, "hint: "+h)
 	}
 	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "warning: "+w)
+		_, _ = fmt.Fprintln(stderr, "warning: "+w)
 	}
 }
 

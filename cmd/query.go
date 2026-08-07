@@ -201,13 +201,13 @@ var blockedCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		if len(blocked) == 0 {
-			fmt.Println("(none)")
+			_, _ = fmt.Fprintln(stdout, "(none)")
 			return nil
 		}
 		for _, b := range blocked {
-			fmt.Printf("%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
+			_, _ = fmt.Fprintf(stdout, "%s  %s  P%d  %s\n", b.Issue.ID, b.Issue.Status, b.Issue.Priority, b.Issue.Title)
 			for _, r := range b.BlockedBy {
-				fmt.Printf("  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
+				_, _ = fmt.Fprintf(stdout, "  ↳ %s  %s  %s\n", r.ID, r.Status, r.Title)
 			}
 		}
 		return nil
@@ -231,7 +231,7 @@ var labelsCmd = &cobra.Command{
 			return printJSON(labels)
 		}
 		for _, l := range labels {
-			fmt.Println(l)
+			_, _ = fmt.Fprintln(stdout, l)
 		}
 		return nil
 	},
@@ -250,7 +250,7 @@ var statusesCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		for _, s := range out {
-			fmt.Println(s)
+			_, _ = fmt.Fprintln(stdout, s)
 		}
 		return nil
 	},
@@ -269,7 +269,7 @@ var typesCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		for _, t := range out {
-			fmt.Println(t)
+			_, _ = fmt.Fprintln(stdout, t)
 		}
 		return nil
 	},

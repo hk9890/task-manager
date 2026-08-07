@@ -88,7 +88,7 @@ var createCmd = &cobra.Command{
 		if flagJSON {
 			return printJSON(createResultDTO{ID: res.Issue.ID, Hints: res.Hints, Warnings: res.Warnings})
 		}
-		fmt.Printf("Created %s\n", res.Issue.ID)
+		_, _ = fmt.Fprintf(stdout, "Created %s\n", res.Issue.ID)
 		printNotes(res.Hints, res.Warnings)
 		return nil
 	},

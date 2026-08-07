@@ -14,16 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build integration
-
-// L4 CLI tests for `taskmgr commands` — the machine-readable command catalog.
+// In-process CLI tests for `taskmgr commands` — the machine-readable command catalog.
+//
+// In-process through Run, in the default suite: the catalog is derived from the
+// command tree, so a forked binary proves nothing extra.
 //
 // Coverage:
 //   - Output is valid YAML with the expected top-level shape.
 //   - Every user-facing command is present, each with a purpose and an example.
 //   - Derived metadata is accurate (required flags, positional placeholders).
 //   - --json emits the same catalog as valid JSON.
-package cmd_test
+package cmd
 
 import (
 	"encoding/json"
@@ -72,9 +73,9 @@ var allUserFacingCommands = []string{
 	"version", "commands", "guide",
 }
 
-func TestL4_Commands_YAMLCatalog(t *testing.T) {
-	root := t.TempDir() // commands needs no store, but the helper passes --dir.
-	stdout, stderr, code := taskmgr(t, root, "commands")
+func TestCommands_YAMLCatalog(t *testing.T) {
+	root := t.TempDir()
+	stdout, stderr, code := run(t, "--dir", root, "commands")
 	if code != 0 {
 		t.Fatalf("commands exit=%d stderr=%q", code, stderr)
 	}
@@ -138,9 +139,9 @@ func TestL4_Commands_YAMLCatalog(t *testing.T) {
 	}
 }
 
-func TestL4_Commands_JSON(t *testing.T) {
+func TestCommands_JSON(t *testing.T) {
 	root := t.TempDir()
-	stdout, stderr, code := taskmgr(t, root, "--json", "commands")
+	stdout, stderr, code := run(t, "--dir", root, "--json", "commands")
 	if code != 0 {
 		t.Fatalf("commands --json exit=%d stderr=%q", code, stderr)
 	}

@@ -18,7 +18,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -195,7 +194,7 @@ func renderUsageError(e *usageError) {
 	}
 
 	fmt.Fprintf(&b, "\nRun '%s --help' for the full help.\n", c.CommandPath())
-	fmt.Fprint(os.Stderr, b.String())
+	_, _ = fmt.Fprint(stderr, b.String())
 }
 
 // localFlagLines formats a command's own (non-inherited) flags for the help block,

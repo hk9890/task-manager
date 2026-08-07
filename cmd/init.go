@@ -70,8 +70,8 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 			if flagJSON {
 				return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix(), "store": name})
 			}
-			fmt.Printf("Initialized central store %q at %s (prefix %q)\n", name, s.Dir(), s.Prefix())
-			fmt.Fprintln(os.Stderr, "next: run 'taskmgr guide' to learn the workflow")
+			_, _ = fmt.Fprintf(stdout, "Initialized central store %q at %s (prefix %q)\n", name, s.Dir(), s.Prefix())
+			_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")
 			return nil
 		}
 
@@ -82,8 +82,8 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 		if flagJSON {
 			return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix()})
 		}
-		fmt.Printf("Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
-		fmt.Fprintln(os.Stderr, "next: run 'taskmgr guide' to learn the workflow")
+		_, _ = fmt.Fprintf(stdout, "Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
+		_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")
 		return nil
 	},
 }

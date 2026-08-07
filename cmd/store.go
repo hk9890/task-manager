@@ -19,7 +19,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -66,10 +65,10 @@ var storeListCmd = &cobra.Command{
 			return printJSON(out)
 		}
 		if len(entries) == 0 {
-			fmt.Println("no central stores")
+			_, _ = fmt.Fprintln(stdout, "no central stores")
 			return nil
 		}
-		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 		_, _ = fmt.Fprintln(w, "STORE\tPROJECT\tSTORE PATH")
 		for _, e := range entries {
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", e.Store, e.Path, e.StorePath)
@@ -240,7 +239,7 @@ func emitStoreMove(d storeMoveDTO, human string) error {
 	if flagJSON {
 		return printJSON(d)
 	}
-	fmt.Println(human)
+	_, _ = fmt.Fprintln(stdout, human)
 	return nil
 }
 

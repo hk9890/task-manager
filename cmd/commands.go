@@ -71,7 +71,7 @@ Output is YAML by default (compact and agent-friendly); pass --json for JSON.`,
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(out))
+		_, _ = fmt.Fprint(stdout, string(out))
 		return nil
 	},
 }

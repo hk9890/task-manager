@@ -49,7 +49,10 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 - Pure logic → **L1** (no FS). Store orchestration & error paths → **L2** on
   `vfs.Mem` (with fault injection). Durability, `flock`, round-trip → **L3** real
-  temp dir. CLI → **L4**.
+  temp dir. CLI → **L4**, in-process through `cmd.Run(args, stdout, stderr) int`
+  unless the process itself is the subject (exit codes as a shell sees them,
+  stdin, signals, two processes contending the lock) — those fork the binary
+  behind the `integration` tag.
 - Build fixtures with `sdk/tasks/internal/storetest`; never hand-roll a real
   `.tasks/`. Deterministic time via `Store.now` inside package `tasks`, via
   `Store.SetNow` from `cmd/` and external consumers. Details in

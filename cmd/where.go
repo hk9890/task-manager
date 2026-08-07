@@ -62,13 +62,13 @@ func emitWhere(d whereDTO) error {
 		return printJSON(d)
 	}
 	if d.Kind == "none" {
-		fmt.Println("kind:    none")
-		fmt.Println("(no store resolves here — run 'taskmgr init' to create one)")
+		_, _ = fmt.Fprintln(stdout, "kind:    none")
+		_, _ = fmt.Fprintln(stdout, "(no store resolves here — run 'taskmgr init' to create one)")
 		return nil
 	}
-	fmt.Printf("kind:    %s\n", d.Kind)
-	fmt.Printf("store:   %s\n", d.StorePath)
-	fmt.Printf("project: %s\n", d.ProjectPath)
+	_, _ = fmt.Fprintf(stdout, "kind:    %s\n", d.Kind)
+	_, _ = fmt.Fprintf(stdout, "store:   %s\n", d.StorePath)
+	_, _ = fmt.Fprintf(stdout, "project: %s\n", d.ProjectPath)
 	return nil
 }
 

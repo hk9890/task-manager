@@ -172,7 +172,7 @@ emitted per record.`,
 		if flagJSON {
 			return printJSON(importResult{SourceID: e.SourceID, ID: res.Issue.ID})
 		}
-		fmt.Printf("Imported %s\n", res.Issue.ID)
+		_, _ = fmt.Fprintf(stdout, "Imported %s\n", res.Issue.ID)
 		printNotes(res.Hints, res.Warnings)
 		return nil
 	},

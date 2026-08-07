@@ -15,10 +15,24 @@ layer model and the fixtures.
 | **L1 pure unit** | nothing (no `os`, no `vfs`) | query lex/parse/eval (fake `Row`s), frontmatter byte round-trips, validate tables, ready/blocked graph, comment `resolve` | `mise run test` |
 | **L2 store on Mem** | `vfs.Mem` | `Store` CRUD orchestration, `nextID` across partitions, close/reopen, **fault injection** (forced rename/append failure → no torn state) | `mise run test` |
 | **L3 integration** | real `t.TempDir()` (`osFS`) | real `fsync`/`flock`/`rename`; full lifecycle; **reload via a fresh `Open()` and re-assert** | `mise run test:integration` |
-| **L4 CLI** | temp store + cobra | command → JSON DTO golden | `mise run test:integration` |
+| **L4 CLI** | temp store + cobra | command → JSON DTO golden | see below |
 
-L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
-`integration` build tag.
+L1/L2 are the default build (fast, no tag); L3 is gated behind the `integration`
+build tag.
+
+**L4 runs at both speeds.** `cmd.Run(args, stdout, stderr) int` executes one
+invocation in-process, so anything whose subject is what the command *printed* —
+output shapes, the misuse-help block, the generated catalog — is an ordinary
+untagged test (`run_test.go`, `usage_render_test.go`,
+`commands_catalog_test.go`). Only end-to-end behaviour that needs a real process
+builds and forks the binary, behind the `integration` tag (`*_cli_test.go`, via
+the harness in `cmd/harness_cli_test.go`). Reach for the subprocess form when the
+process itself is the subject: exit codes as the shell sees them, stdin, signals,
+or two processes contending the store lock.
+
+`Run` drives package-level state — one command tree, reset per call. Sequential
+invocations are independent; concurrent ones are not, so never `t.Parallel` a
+test that calls it.
 
 ## Boundaries
 
@@ -74,8 +88,9 @@ store := st.Mem()        // L2: in-memory, instant
 store := st.TempDir(t)   // L3: materialized on real osFS
 ```
 
-`storetest` is internal, so only `sdk`-module tests can import it; L4 tests in
-`cmd/` use the public `Store` API or the built binary.
+`storetest` is internal, so only `sdk`-module tests can import it; tests in
+`cmd/` use the public `Store` API, `cmd.Run` for in-process assertions, or the
+built binary for the subprocess cases.
 
 ## Which test package a file belongs in
 
