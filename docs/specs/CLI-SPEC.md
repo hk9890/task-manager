@@ -27,6 +27,7 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|
 | `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
 | `TASKMGR_LOG` | Log level for observability output: `debug`, `info`, `warn`, `error` (default `warn`; an unknown value falls back to `warn`). Records always go to stderr as text. See [MONITORING.md](../MONITORING.md). |
+| `TASKMGR_DIR` | **Withdrawn — rejected, not ignored.** Any non-empty value fails the command with an error naming it. It once overrode the store directory, as `--store-path` did; that flag now fails as unknown, and an exported variable gets the same treatment rather than silently misfiling every write into whatever store the walk-up finds. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §4. |
 
 ### Output modes
 
@@ -166,9 +167,12 @@ required, and they are mutually exclusive.
   `--store-name` to rename a store you are not standing in. Fails if `--to` is already
   taken.
 - **`--relink`** touches no files. Fails if `--to` is not registered, if its store
-  subfolder is missing (it will not create a dangling entry), if the target directory
-  does not exist, or if another entry already maps this project path. `--dir`/`-C` is
-  made absolute against the working directory before it is recorded.
+  subfolder is not a finished store — missing, or present without a `config.yaml`; it
+  will not write an entry that resolution then skips — if the target directory does not
+  exist, or if another entry already maps this project path (matched on both the raw and
+  the symlink-resolved form, as entry creation is, so a project cannot be claimed twice
+  across a symlink). `--dir`/`-C` is made absolute against the working directory before
+  it is recorded.
 - A store keeps its `config.yaml` verbatim across all three modes, so the ID prefix and
   the hooks block travel with it and existing IDs stay valid. **Hook argv paths are not
   rewritten**: hooks run with the working directory set to the project root

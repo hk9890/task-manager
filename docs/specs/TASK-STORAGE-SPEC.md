@@ -84,6 +84,14 @@ Rules:
 - **Canonical and stable.** An ID never changes. It appears in three places that
   must agree: the filename (`proj-3k9f2x.md`), the frontmatter `id` field, and any
   references to it from other issues.
+- **Checked on read, not only on write.** A file whose frontmatter `id` does not
+  match the grammar is **rejected at parse time**; it is not loaded, indexed, or
+  addressable. The store turns an ID directly into filesystem paths — the `.md`
+  in either partition, `comments/<id>`, `content/<id>` (§4.6 rule 3) — and the
+  grammar admits neither a path separator nor a dot, so a validated ID cannot
+  address anything outside its store. `.tasks/` is git-tracked, which puts the
+  frontmatter within reach of a hand edit or a pull request, so this is the check
+  that makes the derived-path guarantee real.
 - **Allocation:** a random base36 token. Existing IDs are scanned across **all
   partitions of the store** — the hot directory **and** `closed/` (and any future
   cold partition) — and used to reject duplicates, regenerating on the
@@ -353,11 +361,13 @@ body. This applies to **every issue type**, not only `doc`.
    would change layout on every edit, and each change moves the whole body
    between two files — a maximal diff in both directions.
 3. **The path is derived, never stored.** It is always `content/` + the issue ID,
-   with no extension. Nothing user-supplied reaches a filesystem path, so
-   traversal is impossible by construction rather than by validation. The
-   trade-off is accepted: the format does not record whether the bytes are HTML,
-   markdown or a log, and a reader that needs to know must be told by convention
-   (e.g. a `format:html` label) or sniff.
+   with no extension. The ID reaching it is always one the parse boundary has
+   checked against the grammar (§3), which contains no path separator — that
+   check is what closes off traversal, and it is enforced there because that is
+   the only place an ID enters the store. The trade-off is accepted: the format
+   does not record whether the bytes are HTML, markdown or a log, and a reader
+   that needs to know must be told by convention (e.g. a `format:html` label) or
+   sniff.
 4. **Write order is the crash contract.** A write touches two files and is *not*
    a single transaction. The `.md` is therefore written **last on a split** (after
    the sidecar) and **first on a join** (before the sidecar is removed). Either
@@ -365,9 +375,20 @@ body. This applies to **every issue type**, not only `doc`.
    agreement, and a sidecar nothing points at is inert garbage — never a silent
    override that resurrects an older body. Orphans are tolerated; nothing
    collects them.
-   - Residual, accepted: on a split where the body was *already* external, a
-     crash between the two writes can leave the new body beside the previous
-     frontmatter. Nothing is silently reverted; the alternative is a journal.
+   - **A body already in the sidecar is never overwritten in place.** When the
+     body was *already* external the new bytes are written to a staging file and
+     renamed over the sidecar only after the `.md` has landed. Overwriting first
+     commits the new body even when the `.md` write fails: the caller is told the
+     mutation failed — an error, and no post-hooks — while the next read already
+     returns the new body under the old frontmatter. Staging keeps the previous
+     body readable until the mutation is real.
+   - **A failed stale-sidecar removal does not fail the write.** On a join the
+     removal happens after the `.md` is committed, so the mutation has already
+     landed; reporting an error there would report a committed write as failed.
+     The leftover is inert by rule 1.
+   - Residual, accepted: a crash between the `.md` and the rename can leave the
+     new frontmatter beside the *previous* body. Nothing is lost and nothing is
+     reported backwards; the alternative is a journal.
 5. **Sidecars do not move.** Closing an issue moves only its `.md` into
    `closed/`; the content sidecar stays at `content/<id>`, exactly as the comment
    sidecar does (§4.4 rule 6). No sidecar path ever changes.

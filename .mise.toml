@@ -144,6 +144,28 @@ CGO_ENABLED = "1"
 
 # ---- gates -----------------------------------------------------------------
 
+[tasks."verify:pin"]
+description = "Build the CLI against the SDK version pinned in go.mod, without the workspace — the check that 'go install .../cmd/taskmgr@vX.Y.Z' will compile"
+run = """
+# Every local build and every CI job runs inside the committed go.work, which
+# wires the CLI to the in-tree SDK. A go.mod still pinning an older sdk therefore
+# builds green everywhere while `go install .../cmd/taskmgr@vX.Y.Z` fails to
+# compile for users. GOWORK=off resolves the pin the way a consumer does, so this
+# is the only check that sees the gap.
+#
+# It is deliberately NOT part of `quality`: between releases the CLI legitimately
+# uses SDK symbols that are not published yet. It gates the release instead
+# (docs/RELEASING.md step 4).
+GOWORK=off go build ./... || {
+  echo ""
+  echo "The CLI does not build against the SDK version pinned in go.mod."
+  echo "Push the sdk/vX.Y.Z tag and re-pin before tagging the CLI:"
+  echo "  GOWORK=off go get github.com/hk9890/task-manager/sdk@vX.Y.Z && GOWORK=off go mod tidy"
+  echo "See docs/RELEASING.md step 4."
+  exit 1
+}
+"""
+
 [tasks.quality]
 description = "Fast pre-commit gate: fmt + vet + lint + L1/L2 tests + build/vet all modules + fuzz seeds"
 depends = ["fmt:check", "vet:all", "build:all", "lint", "test", "test:fuzz"]

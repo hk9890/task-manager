@@ -206,7 +206,9 @@ type Detail struct {
 `Detail` always carries a fully resolved `Description`. `BodyExternal` only says
 where the bytes were stored (TASK-STORAGE-SPEC §4.6) — it is the one public place
 that reports this, and is informational: a viewer can use it to say where the
-content lives, or to warn before rendering a very large body.
+content lives, or to warn before rendering a very large body. It reports the
+stored layout regardless of the issue's status: a closed issue reaches `Detail`
+by a different path than a hot one, and both must answer the same.
 
 ### Enums and bounds
 

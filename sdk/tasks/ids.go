@@ -48,6 +48,19 @@ const maxPrefixLen = 32
 // sequential IDs ("<prefix>-0042") are a subset and remain valid.
 var idRe = regexp.MustCompile(`^[a-z][a-z0-9]*-[0-9a-z]+$`)
 
+// validIssueID reports whether id satisfies the issue-ID grammar and the length
+// bound (TASK-STORAGE-SPEC §3). It is pure: no filesystem access.
+//
+// Every path that turns an ID into a filename — the .md in either partition, the
+// comment sidecar, the content sidecar — joins it onto a store directory. The
+// grammar admits neither a path separator nor a dot, so an ID that passes here
+// cannot address anything outside the store it came from. That property is only
+// worth anything if it is checked where IDs ENTER the store, which is why
+// Unmarshal rejects a malformed one rather than trusting the frontmatter.
+func validIssueID(id string) bool {
+	return len(id) <= maxIDLen && idRe.MatchString(id)
+}
+
 // idStem returns the "<prefix>-<token>" stem of a "<prefix>-<token>.md" entry
 // for the given prefix, or ("", false) if name is not such an entry. The token
 // may be a legacy numeric suffix or a base36 token; both are recognised. It is

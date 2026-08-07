@@ -449,7 +449,13 @@ func TestL4_StoreMove_FailedPromoteIsRetryable(t *testing.T) {
 }
 
 // TestL4_StorePathFlagRemoved pins the removal of --store-path / TASKMGR_DIR:
-// the flag is rejected and the environment variable has no effect.
+// both are rejected, neither is silently ignored.
+//
+// The flag gets that for free — cobra fails an unknown flag. The environment
+// variable has no such backstop, and an ignored one is worse than an unknown
+// flag: a CI job or direnv profile that exports TASKMGR_DIR to pin a store keeps
+// exiting 0 while every issue it creates lands in whatever store the walk-up
+// finds. Resolution therefore refuses outright.
 func TestL4_StorePathFlagRemoved(t *testing.T) {
 	home := t.TempDir()
 	proj := t.TempDir()
@@ -461,20 +467,24 @@ func TestL4_StorePathFlagRemoved(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name the unknown flag", errOut)
 	}
 
-	// TASKMGR_DIR pointing elsewhere must not divert resolution.
+	// TASKMGR_DIR pointing elsewhere must fail loudly rather than divert — or,
+	// worse, be ignored while the command reports success.
 	other := t.TempDir()
 	if _, errOut, code := taskmgrCentral(t, other, home, "init", "--prefix", "oth"); code != 0 {
 		t.Fatalf("init other: %s", errOut)
 	}
-	out, _, code := taskmgrCentralEnv(t, proj, home, []string{"TASKMGR_DIR=" + filepath.Join(other, ".tasks")}, "--json", "where")
-	if code != 0 {
-		t.Fatalf("where with TASKMGR_DIR set: code=%d", code)
+	env := []string{"TASKMGR_DIR=" + filepath.Join(other, ".tasks")}
+	_, errOut, code := taskmgrCentralEnv(t, proj, home, env, "--json", "where")
+	if code == 0 {
+		t.Fatal("where with TASKMGR_DIR set should fail")
 	}
-	var w whereJSON
-	if err := json.Unmarshal([]byte(out), &w); err != nil {
-		t.Fatalf("where json: %v (%q)", err, out)
+	if !strings.Contains(errOut, "TASKMGR_DIR") || !strings.Contains(errOut, "no longer supported") {
+		t.Errorf("stderr = %q, want it to name TASKMGR_DIR and say it is withdrawn", errOut)
 	}
-	if w.Kind != "local" || w.StorePath != filepath.Join(proj, ".tasks") {
-		t.Errorf("TASKMGR_DIR must be ignored, got %+v", w)
+
+	// A write is refused for the same reason: it must never land in the store
+	// the walk-up finds while the caller believes TASKMGR_DIR chose one.
+	if _, _, code := taskmgrCentralEnv(t, proj, home, env, "create", "--title", "misfiled"); code == 0 {
+		t.Error("create with TASKMGR_DIR set should fail rather than pick a store")
 	}
 }

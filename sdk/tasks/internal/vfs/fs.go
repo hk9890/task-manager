@@ -71,6 +71,10 @@ type FS interface {
 	// Remove removes the named file or empty directory.
 	Remove(name string) error
 
+	// RemoveAll removes path and any children it contains. A path that does not
+	// exist is not an error (matching os.RemoveAll).
+	RemoveAll(path string) error
+
 	// Lock acquires an exclusive advisory lock on the file at path (creating it
 	// if necessary). It returns an unlock function that must be called to
 	// release the lock. The lock is process-wide advisory (flock on unix).

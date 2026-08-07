@@ -82,21 +82,41 @@ func (osRunner) Run(spec Spec) Result {
 	cmd.Stderr = &stderr
 
 	// Run the hook in its own process group so a timeout can signal its whole
-	// tree (killGroup). This also detaches the hook from the terminal's
-	// foreground group, so a Ctrl-C aimed at taskmgr no longer reaches it — the
-	// hook is bounded by hook_timeout instead.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// tree (killGroup) — but only when there IS a timeout to enforce.
+	//
+	// The detachment costs the hook its place in the terminal's foreground
+	// group, so a Ctrl-C aimed at taskmgr no longer reaches it. That is only
+	// acceptable while hook_timeout bounds it instead. With hook_timeout: 0
+	// ("disables the limit", buildHookSet) the context is Background, whose
+	// Done() is nil, so os/exec starts no cancellation watcher at all: neither
+	// Cancel nor WaitDelay can ever fire. A hook detached under that config
+	// would be bounded by nothing and interruptible by nothing — a hang the user
+	// has to find with ps. An unlimited hook therefore stays in taskmgr's group,
+	// where Ctrl-C still reaches both.
+	if spec.Timeout > 0 {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	// On timeout, send SIGTERM to the whole group (the default would SIGKILL the
-	// spawned process alone); WaitDelay then upgrades to SIGKILL after KillGrace
-	// if it has not exited. A hook that ignores SIGTERM therefore still costs
-	// hook_timeout + KillGrace, which is the documented ceiling (HOOK-SPEC §8).
-	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
-	cmd.WaitDelay = KillGrace
+		// On timeout, send SIGTERM to the whole group (the default would SIGKILL
+		// the spawned process alone); WaitDelay then upgrades to SIGKILL after
+		// KillGrace if it has not exited. A hook that ignores SIGTERM therefore
+		// still costs hook_timeout + KillGrace, the documented ceiling
+		// (HOOK-SPEC §8).
+		cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.WaitDelay = KillGrace
+	}
 
 	start := time.Now()
 	err := cmd.Run()
 	dur := time.Since(start)
+
+	// Captured after Run: Process is set by Start and survives Wait, and the
+	// group id equals the leader's pid under Setpgid. A pid that is still a
+	// process-group id is not recycled while the group has members, so this stays
+	// addressed to the hook's own tree.
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
 
 	res := Result{
 		Stdout:   stdout.Bytes(),
@@ -113,6 +133,13 @@ func (osRunner) Run(spec Spec) Result {
 	// A timeout kill must be classified as Timeout even though it surfaces as a
 	// signal kill — check the context first.
 	if ctx.Err() == context.DeadlineExceeded {
+		// Sweep the group. os/exec's own escalation after WaitDelay is
+		// Process.Kill(), a SIGKILL to the leader alone, so a child that ignored
+		// the group SIGTERM — the ["sh", "-c", ...] tree killGroup exists for —
+		// outlives the run as an orphan. SIGTERM went to the group; SIGKILL has
+		// to as well, or the escalation only half happens. ESRCH (nothing left)
+		// is the expected case and is discarded.
+		_ = killGroup(pid, syscall.SIGKILL)
 		res.Category = Timeout
 		res.Err = err
 		return res

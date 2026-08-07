@@ -69,6 +69,19 @@ on a clean, up-to-date tree.
    ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). Both tags are cut on the merged
    `main` commit.
 
+   Then confirm the pin actually resolves:
+
+   ```bash
+   mise run verify:pin      # GOWORK=off go build ./...
+   ```
+
+   This is the one check that sees a stale pin. `mise run quality:full` and every
+   CI job build inside the committed `go.work`, which wires the CLI to the
+   in-tree SDK — so a `go.mod` still pinning the *previous* `sdk` version passes
+   all of them, while `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for
+   every user. The release workflow runs the same check before GoReleaser, but by
+   then the tag is already pushed.
+
 5. Tag the CLI on the commit that pins the SDK and push it — this starts the
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
 

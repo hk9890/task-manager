@@ -123,6 +123,10 @@ hooks:
 A single, **global** wall-clock limit applied to **every** hook process; there is no
 per-hook timeout. Go duration string (`"2s"`, `"5m"`); default **`2s`**; `0` disables it.
 
+With `0`, nothing bounds a hook — a hang blocks the command indefinitely, and for a
+pre-hook holds the store lock for that whole time (§8). Such a hook stays in taskmgr's
+process group so `Ctrl-C` can still end it (§7.1); prefer a generous limit over none.
+
 `hook_timeout` bounds when the hook is **signalled**, not when it is guaranteed
 gone: a hook that does not exit on SIGTERM is SIGKILLed after a fixed 2-second
 grace (§7). The worst case is therefore **`hook_timeout` + 2s** — with the default,
@@ -381,19 +385,31 @@ reported category, for diagnosis.
 
 ### 7.1 Timeout kill and the process group
 
-A hook runs in **its own process group**, and the timeout signals the whole group,
-not just the process taskmgr spawned. This matters because §3.2 points at
-`["sh", "-c", ...]` for shell features: the shell exits on SIGTERM but its
-children do not receive it, keep running, keep the captured stdout/stderr open —
-which stalls the engine for the full grace on top of `hook_timeout` (§3.1, §8) —
-and are orphaned once it gives up. Signalling the group ends the whole tree.
+A **bounded** hook runs in **its own process group**, and the timeout signals the
+whole group, not just the process taskmgr spawned. This matters because §3.2
+points at `["sh", "-c", ...]` for shell features: the shell exits on SIGTERM but
+its children do not receive it, keep running, keep the captured stdout/stderr
+open — which stalls the engine for the full grace on top of `hook_timeout` (§3.1,
+§8) — and are orphaned once it gives up. Signalling the group ends the whole tree.
 
-Two consequences:
+Three consequences:
 
 - The **2-second SIGKILL grace is fixed and additive** to `hook_timeout` (§3.1).
   It is only reached by a hook that ignores SIGTERM.
-- A hook is **detached from the terminal's foreground group**, so a `Ctrl-C` aimed
-  at `taskmgr` no longer reaches it. `hook_timeout` is what bounds a hook.
+- **Both signals go to the group.** The escalation after the grace is a SIGKILL to
+  the whole group, not to the spawned process alone — otherwise a child that traps
+  or ignores SIGTERM outlives the command as an orphan, which is the exact leak
+  the process group exists to prevent.
+- A bounded hook is **detached from the terminal's foreground group**, so a
+  `Ctrl-C` aimed at `taskmgr` no longer reaches it. `hook_timeout` is what bounds
+  it instead.
+
+**`hook_timeout: 0` is not detached.** With the limit disabled there is no timeout
+to enforce and therefore no signal to deliver to a group — and detaching anyway
+would leave a hook that nothing bounds *and* that `Ctrl-C` cannot reach, so a
+hanging hook could only be ended by finding it with `ps`. An unlimited hook
+therefore stays in taskmgr's own process group, where an interrupt still reaches
+both. This is the one case in which a hook is not group-isolated.
 
 A hook **must not** invoke `taskmgr` *mutations*: a pre-hook runs while the store lock is
 held and would deadlock; a post-hook could trigger further hooks. Read-only queries are

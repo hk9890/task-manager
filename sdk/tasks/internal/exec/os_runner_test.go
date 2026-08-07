@@ -21,7 +21,9 @@ package exec
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -168,11 +170,90 @@ func TestOSRunner_TimeoutKillsChildren(t *testing.T) {
 	}
 }
 
+// A child that IGNORES SIGTERM must still not outlive the run.
+//
+// os/exec's own escalation after WaitDelay is Process.Kill(), a SIGKILL to the
+// spawned process alone. The group gets the SIGTERM but only the shell gets the
+// SIGKILL, so a child that traps TERM — or re-execs under setsid — survives the
+// command as an orphan holding whatever it holds. That is the exact leak the
+// process group exists to prevent, so the escalation has to reach the group too.
+func TestOSRunner_TimeoutSIGKILLsChildrenThatIgnoreSIGTERM(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	// Both the shell and its child ignore SIGTERM, so nothing exits until a
+	// SIGKILL arrives. The parent records the child's pid via $! — inside the
+	// subshell $$ would still be the parent's, which is the process os/exec
+	// kills anyway, and the test would prove nothing.
+	script := "(trap '' TERM; sleep 30) & echo $! > " + pidFile + "; trap '' TERM; sleep 30"
+
+	r := NewOS()
+	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 100 * time.Millisecond})
+	if res.Category != Timeout {
+		t.Fatalf("got category=%v, want Timeout", res.Category)
+	}
+
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read child pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("parse child pid %q: %v", raw, err)
+	}
+
+	// Signal 0 probes for existence. Poll briefly: the SIGKILL is delivered as
+	// Run returns, and reaping is not instantaneous.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return // gone
+		}
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL) // don't leak it out of the test
+			t.Fatalf("child %d ignored SIGTERM and survived the timeout as an orphan", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestOSRunner_TimeoutZeroDisables(t *testing.T) {
 	r := NewOS()
 	res := r.Run(Spec{Argv: []string{"sh", "-c", "exit 0"}, Timeout: 0})
 	if res.Category != Completed {
 		t.Fatalf("got category=%v, want Completed (no timeout)", res.Category)
+	}
+}
+
+// An unlimited hook must stay in the caller's process group; a bounded one must
+// not.
+//
+// Detaching costs the hook its place in the terminal's foreground group, so
+// Ctrl-C no longer reaches it. That trade is only sound while hook_timeout
+// bounds it instead — and with hook_timeout: 0 the context is Background, whose
+// Done() is nil, so os/exec starts no cancellation watcher and neither Cancel
+// nor WaitDelay ever fires. Detaching there would leave a hook that nothing
+// bounds and nothing can interrupt.
+func TestOSRunner_ProcessGroupOnlyWhenBounded(t *testing.T) {
+	r := NewOS()
+	own := syscall.Getpgrp()
+
+	pgidOf := func(t *testing.T, timeout time.Duration) int {
+		t.Helper()
+		res := r.Run(Spec{Argv: []string{"sh", "-c", "ps -o pgid= -p $$"}, Timeout: timeout})
+		if res.Category != Completed || res.ExitCode != 0 {
+			t.Fatalf("probe failed: category=%v exit=%d stderr=%q", res.Category, res.ExitCode, res.Stderr)
+		}
+		pgid, err := strconv.Atoi(strings.TrimSpace(string(res.Stdout)))
+		if err != nil {
+			t.Fatalf("parse pgid %q: %v", res.Stdout, err)
+		}
+		return pgid
+	}
+
+	if got := pgidOf(t, 0); got != own {
+		t.Errorf("unbounded hook pgid = %d, want the caller's group %d — Ctrl-C cannot reach it and no timeout will either", got, own)
+	}
+	if got := pgidOf(t, 10*time.Second); got == own {
+		t.Errorf("bounded hook pgid = %d: it must be detached so the timeout can signal its whole tree", got)
 	}
 }
 
