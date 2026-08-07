@@ -175,7 +175,7 @@ func TestValidateReplaces_EarlierInStream(t *testing.T) {
 // TestAddComment_ReturnsSelf verifies that AddComment returns the new comment
 // with its ID populated.
 func TestAddComment_ReturnsSelf(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -202,7 +202,7 @@ func TestAddComment_ReturnsSelf(t *testing.T) {
 // TestAddComment_SidecarNotIssueMD verifies that AddComment does NOT rewrite
 // the issue .md file (sidecar is append-only, issue file is untouched).
 func TestAddComment_SidecarNotIssueMD(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "watch"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -234,7 +234,7 @@ func TestAddComment_SidecarNotIssueMD(t *testing.T) {
 // TestAddComment_SidecarContainsComment verifies that the sidecar now contains
 // the comment.
 func TestAddComment_SidecarContainsComment(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "sidecar test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -262,7 +262,7 @@ func TestAddComment_SidecarContainsComment(t *testing.T) {
 // TestAddComment_IssueHasNoComments verifies that after AddComment, calling
 // Get on the issue does NOT include comments (they're sidecar-only).
 func TestAddComment_IssueHasNoComments(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -287,7 +287,7 @@ func TestAddComment_IssueHasNoComments(t *testing.T) {
 // TestComments_Empty verifies that Comments() on an issue with no sidecar
 // returns an empty slice.
 func TestComments_Empty(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "no comments"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -305,7 +305,7 @@ func TestComments_Empty(t *testing.T) {
 // TestComments_AddAndResolve verifies that Comments() returns the resolved
 // effective comment log.
 func TestComments_AddAndResolve(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -337,7 +337,7 @@ func TestComments_AddAndResolve(t *testing.T) {
 // TestEditComment_ReturnsRevision verifies that EditComment appends a revision
 // and returns the new effective comment.
 func TestEditComment_ReturnsRevision(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -369,7 +369,7 @@ func TestEditComment_ReturnsRevision(t *testing.T) {
 // TestEditComment_ResolvesToRevision verifies that after EditComment, Comments()
 // returns the revised body (not the original).
 func TestEditComment_ResolvesToRevision(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -400,7 +400,7 @@ func TestEditComment_ResolvesToRevision(t *testing.T) {
 // TestEditComment_NotIssueMD verifies that EditComment does not rewrite the
 // issue .md file.
 func TestEditComment_NotIssueMD(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -434,7 +434,7 @@ func TestEditComment_NotIssueMD(t *testing.T) {
 // TestEditComment_RejectsMissingComment verifies that EditComment rejects a
 // commentID that doesn't exist in the stream.
 func TestEditComment_RejectsMissingComment(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -455,7 +455,7 @@ func TestEditComment_RejectsMissingComment(t *testing.T) {
 // TestDeleteComment_OmittedFromResolved verifies that after DeleteComment,
 // Comments() no longer returns the deleted comment.
 func TestDeleteComment_OmittedFromResolved(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -482,7 +482,7 @@ func TestDeleteComment_OmittedFromResolved(t *testing.T) {
 // TestDeleteComment_HistoryPreserved verifies that the on-disk stream still
 // contains both the original and tombstone (full history preserved).
 func TestDeleteComment_HistoryPreserved(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -517,7 +517,7 @@ func TestDeleteComment_HistoryPreserved(t *testing.T) {
 // TestDeleteComment_NotIssueMD verifies DeleteComment does not rewrite the
 // issue .md.
 func TestDeleteComment_NotIssueMD(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -550,7 +550,7 @@ func TestDeleteComment_NotIssueMD(t *testing.T) {
 // TestDeleteComment_RejectsMissingComment verifies that DeleteComment rejects
 // a commentID not in the stream.
 func TestDeleteComment_RejectsMissingComment(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -566,7 +566,7 @@ func TestDeleteComment_RejectsMissingComment(t *testing.T) {
 // TestDetail_CommentsLoaded verifies that Detail.Comments is populated from
 // the sidecar.
 func TestDetail_CommentsLoaded(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "detail test"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -596,7 +596,7 @@ func TestDetail_CommentsLoaded(t *testing.T) {
 // TestDetail_CommentsResolved verifies that Detail.Comments shows the resolved
 // view (edits applied, tombstones omitted).
 func TestDetail_CommentsResolved(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "resolved"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -631,7 +631,7 @@ func TestDetail_CommentsResolved(t *testing.T) {
 // are migrated to the sidecar on first touch (AddComment, EditComment,
 // DeleteComment).
 func TestMigration_InlineFrontmatterCommentsMovedToSidecar(t *testing.T) {
-	s, m := newCommentMemStore(t)
+	s, m := newMemStore(t)
 
 	// Create an issue the normal way.
 	iss, err := unwrap(s.Create(CreateInput{Title: "legacy"}))
@@ -701,7 +701,7 @@ func TestMigration_InlineFrontmatterCommentsMovedToSidecar(t *testing.T) {
 // TestAddComment_RejectEmptyBody verifies that AddComment rejects an empty
 // body (neither body nor deleted:true — §10).
 func TestAddComment_RejectEmptyBody(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -720,7 +720,7 @@ func TestAddComment_RejectEmptyBody(t *testing.T) {
 // TestAddComment_RejectControlCharsInBody verifies that bodies with control
 // characters that would force double-quoting are rejected.
 func TestAddComment_RejectControlCharsInBody(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)

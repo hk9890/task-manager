@@ -27,84 +27,11 @@ package cmd_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks"
 )
-
-// taskmgr runs the taskmgr binary (built from this module) with the given arguments
-// from the specified working directory. It returns stdout, stderr, and exit code.
-func taskmgr(t *testing.T, storeDir string, args ...string) (stdout, stderr string, exitCode int) {
-	t.Helper()
-	bin := taskmgrBin(t)
-	cmd := exec.Command(bin, append([]string{"--dir", storeDir}, args...)...)
-	var outBuf, errBuf strings.Builder
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	err := cmd.Run()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		} else {
-			exitCode = 1
-		}
-	}
-	return outBuf.String(), errBuf.String(), exitCode
-}
-
-// taskmgrBin returns the path to the taskmgr binary, building it once per test run.
-// The binary is placed in os.TempDir() so it survives individual test teardowns.
-var (
-	_taskmgrBinPath string
-	_taskmgrBinErr  error
-	_taskmgrBinOnce sync.Once
-)
-
-func taskmgrBin(t *testing.T) string {
-	t.Helper()
-	_taskmgrBinOnce.Do(func() {
-		bin := filepath.Join(os.TempDir(), "taskmgr-test-bin")
-		out, err := exec.Command("go", "build", "-o", bin,
-			"github.com/hk9890/task-manager/cmd/taskmgr").CombinedOutput()
-		if err != nil {
-			_taskmgrBinErr = fmt.Errorf("go build failed: %v\n%s", err, out)
-			return
-		}
-		_taskmgrBinPath = bin
-	})
-	if _taskmgrBinErr != nil {
-		t.Fatalf("failed to build taskmgr: %v", _taskmgrBinErr)
-	}
-	return _taskmgrBinPath
-}
-
-// newTestStoreDir creates a temporary directory, initialises a store, and
-// creates one issue. Returns (storeRoot, issueID).
-func newTestStoreDir(t *testing.T) (string, string) {
-	t.Helper()
-	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
-	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "cli comment test"}))
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	return root, iss.ID
-}
 
 // ── comment add ──────────────────────────────────────────────────────────────
 

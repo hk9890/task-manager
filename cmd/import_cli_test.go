@@ -30,8 +30,6 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-
-	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // taskmgrStdin runs the built binary with stdin piped.
@@ -53,15 +51,6 @@ func taskmgrStdin(t *testing.T, storeDir, stdin string, args ...string) (stdout,
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-func initImportStore(t *testing.T) string {
-	t.Helper()
-	root := t.TempDir()
-	if _, err := tasks.Init(root, "imp"); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	return root
-}
-
 type cliImportResult struct {
 	SourceID string `json:"source_id"`
 	ID       string `json:"id"`
@@ -69,7 +58,7 @@ type cliImportResult struct {
 }
 
 func TestL4_Import_SingleClosedWithComment(t *testing.T) {
-	root := initImportStore(t)
+	root := initStore(t, "imp")
 	env := `{"source_id":"ext-1","title":"old closed task","type":"bug","priority":1,
 	  "status":"closed","created_at":"2025-01-02T10:00:00Z","updated_at":"2025-03-01T09:00:00Z",
 	  "closed_at":"2025-03-01T09:00:00Z","close_reason":"fixed","labels":["ext:ext-1"],
@@ -105,7 +94,7 @@ func TestL4_Import_SingleClosedWithComment(t *testing.T) {
 }
 
 func TestL4_Import_BatchWithEdges(t *testing.T) {
-	root := initImportStore(t)
+	root := initStore(t, "imp")
 	// Dependency order: epic first (with a known ID), then a child referencing it.
 	ndjson := strings.Join([]string{
 		`{"source_id":"ext-epic","id":"imp-epic1","title":"epic","type":"epic","status":"open","created_at":"2025-01-01T00:00:00Z"}`,
@@ -134,7 +123,7 @@ func TestL4_Import_BatchWithEdges(t *testing.T) {
 }
 
 func TestL4_Import_BatchBestEffort(t *testing.T) {
-	root := initImportStore(t)
+	root := initStore(t, "imp")
 	// First record is good; second references a non-existent parent and must fail
 	// without taking down the first.
 	ndjson := strings.Join([]string{

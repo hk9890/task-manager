@@ -238,6 +238,9 @@ func TestMem_MkdirAll(t *testing.T) {
 func TestMem_LockInProcess(t *testing.T) {
 	m := vfs.NewMem()
 	path := "/tasks/.lock"
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 
 	unlock, err := m.Lock(path)
 	if err != nil {
@@ -245,6 +248,18 @@ func TestMem_LockInProcess(t *testing.T) {
 	}
 	if err := unlock(); err != nil {
 		t.Fatalf("unlock: %v", err)
+	}
+}
+
+// TestMem_Lock_MissingParent verifies that Lock refuses a path whose parent
+// directory does not exist, as osFS.Lock does — its O_CREATE open fails ENOENT.
+// Without this, Mem grants a lock on a store the OS implementation could not
+// lock, and the L2 layer proves a guarantee L3 does not have.
+func TestMem_Lock_MissingParent(t *testing.T) {
+	m := vfs.NewMem()
+
+	if _, err := m.Lock("/nonexistent/.lock"); !vfs.IsNotExist(err) {
+		t.Fatalf("expected a not-exist error, got %v", err)
 	}
 }
 
@@ -375,6 +390,31 @@ func TestMem_FailOn_Append(t *testing.T) {
 	err := m.Append(name, []byte("x"), 0o644)
 	if !errors.Is(err, errInjected) {
 		t.Fatalf("expected injected error, got %v", err)
+	}
+}
+
+// TestMem_FailOn_Lock verifies that FailOn("Lock", ...) makes lock acquisition
+// fail. Lock is the seam every mutation goes through, so without this hook its
+// failure path is unreachable from any test.
+func TestMem_FailOn_Lock(t *testing.T) {
+	m := vfs.NewMem()
+	name := "/tasks/.lock"
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	m.FailOn("Lock", name, errInjected)
+
+	if _, err := m.Lock(name); !errors.Is(err, errInjected) {
+		t.Fatalf("expected injected error, got %v", err)
+	}
+
+	// The fault is consumed: the next acquisition succeeds.
+	unlock, err := m.Lock(name)
+	if err != nil {
+		t.Fatalf("Lock after consumed fault: %v", err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatalf("unlock: %v", err)
 	}
 }
 

@@ -20,36 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
-
-// newConcurrentMemStore creates a vfs.Mem-backed store with a thread-safe
-// clock suitable for concurrent access. The clock uses a mutex-protected
-// counter so goroutines do not race on the tick variable.
-func newConcurrentMemStore(t *testing.T) *Store {
-	t.Helper()
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-
-	// Thread-safe monotonic clock: each call returns a unique, strictly
-	// increasing timestamp, which prevents identical Updated values that could
-	// mask races in timestamp comparisons.
-	var mu sync.Mutex
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		mu.Lock()
-		defer mu.Unlock()
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s
-}
 
 // TestConcurrentWrites_NoRace verifies that many goroutines calling Create,
 // Update, AddComment, AddDep, and RemoveDep concurrently on a single *Store
@@ -60,7 +31,7 @@ func newConcurrentMemStore(t *testing.T) *Store {
 func TestConcurrentWrites_NoRace(t *testing.T) {
 	const numWorkers = 20
 
-	s := newConcurrentMemStore(t)
+	s, _ := newMemStore(t)
 
 	// Pre-create two seed issues that workers can reference and mutate.
 	seed1, err := unwrap(s.Create(CreateInput{Title: "seed-1"}))
@@ -153,7 +124,7 @@ func TestConcurrentWrites_NoRace(t *testing.T) {
 func TestConcurrentWrites_DepRace(t *testing.T) {
 	const numWorkers = 10
 
-	s := newConcurrentMemStore(t)
+	s, _ := newMemStore(t)
 
 	dep, err := unwrap(s.Create(CreateInput{Title: "dep"}))
 	if err != nil {

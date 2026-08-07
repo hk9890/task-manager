@@ -27,33 +27,12 @@ package tasks
 import (
 	"errors"
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
-
-// newMemStoreRef creates a mem-backed store with a deterministic clock,
-// identical to newMemStoreForClose but with its own name so test isolation is clear.
-func newMemStoreRef(t *testing.T) *Store {
-	t.Helper()
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s
-}
 
 // TestCheckRefs_ClosedParentAccepted verifies that Create with a parent whose
 // .md lives in closed/ succeeds — the ref is valid, not dangling.
 func TestCheckRefs_ClosedParentAccepted(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	// Create and close a future parent issue.
 	parent, err := unwrap(s.Create(CreateInput{Title: "epic parent"}))
@@ -78,7 +57,7 @@ func TestCheckRefs_ClosedParentAccepted(t *testing.T) {
 // TestCheckRefs_ClosedBlockerAccepted verifies that Create with a blocker in
 // closed/ succeeds.
 func TestCheckRefs_ClosedBlockerAccepted(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -101,7 +80,7 @@ func TestCheckRefs_ClosedBlockerAccepted(t *testing.T) {
 // TestCheckRefs_ClosedRelatedAccepted verifies that Create with a related issue
 // in closed/ succeeds.
 func TestCheckRefs_ClosedRelatedAccepted(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	rel, err := unwrap(s.Create(CreateInput{Title: "related"}))
 	if err != nil {
@@ -125,7 +104,7 @@ func TestCheckRefs_ClosedRelatedAccepted(t *testing.T) {
 // neither the hot directory nor closed/ is still a dangling reference and
 // returns a ValidationError.
 func TestCheckRefs_DanglingRefStillFails(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	_, err := s.Create(CreateInput{Title: "orphan", Parent: "agt-9999"})
 	if err == nil {
@@ -140,7 +119,7 @@ func TestCheckRefs_DanglingRefStillFails(t *testing.T) {
 // TestCheckRefs_DanglingBlockerFails verifies that a blocker that does not
 // exist in either partition is rejected.
 func TestCheckRefs_DanglingBlockerFails(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	_, err := s.Create(CreateInput{Title: "dep", BlockedBy: []string{"agt-9999"}})
 	if err == nil {
@@ -155,7 +134,7 @@ func TestCheckRefs_DanglingBlockerFails(t *testing.T) {
 // TestReady_ClosedBlockerCountsAsResolved verifies that an issue whose only
 // blocker is in closed/ appears in Ready().
 func TestReady_ClosedBlockerCountsAsResolved(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -193,7 +172,7 @@ func TestReady_ClosedBlockerCountsAsResolved(t *testing.T) {
 // TestBlocked_ClosedBlockerNoLongerBlocks verifies that after the only blocker
 // is closed, the issue does NOT appear in Blocked().
 func TestBlocked_ClosedBlockerNoLongerBlocks(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -223,7 +202,7 @@ func TestBlocked_ClosedBlockerNoLongerBlocks(t *testing.T) {
 // TestDetail_ResolvesClosedParentRef verifies that Detail populates ParentRef
 // even when the parent is in closed/.
 func TestDetail_ResolvesClosedParentRef(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	parent, err := unwrap(s.Create(CreateInput{Title: "closed parent"}))
 	if err != nil {
@@ -256,7 +235,7 @@ func TestDetail_ResolvesClosedParentRef(t *testing.T) {
 // TestDetail_ResolvesClosedBlockerRef verifies that Detail populates BlockedBy
 // refs even when a blocker is in closed/.
 func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "closed blocker"}))
 	if err != nil {
@@ -289,7 +268,7 @@ func TestDetail_ResolvesClosedBlockerRef(t *testing.T) {
 // TestDetail_ResolvesClosedRelatedRef verifies that Detail populates Related
 // refs even when the related issue is in closed/.
 func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	related, err := unwrap(s.Create(CreateInput{Title: "closed related"}))
 	if err != nil {
@@ -322,7 +301,7 @@ func TestDetail_ResolvesClosedRelatedRef(t *testing.T) {
 // TestUpdate_ClosedBlockerRemainsValid verifies that Update on an open issue
 // that already references a closed blocker succeeds (not rejected as dangling).
 func TestUpdate_ClosedBlockerRemainsValid(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {
@@ -349,7 +328,7 @@ func TestUpdate_ClosedBlockerRemainsValid(t *testing.T) {
 // TestAddDep_ClosedBlockerAccepted verifies that AddDep with a closed blocker
 // succeeds.
 func TestAddDep_ClosedBlockerAccepted(t *testing.T) {
-	s := newMemStoreRef(t)
+	s, _ := newMemStore(t)
 
 	blocker, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
 	if err != nil {

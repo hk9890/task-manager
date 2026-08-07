@@ -27,22 +27,10 @@ package cmd_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
-
-// writeBodyFile writes content to a temp file and returns its path.
-func writeBodyFile(t *testing.T, content string) string {
-	t.Helper()
-	f := filepath.Join(t.TempDir(), "body.txt")
-	if err := os.WriteFile(f, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return f
-}
 
 // ── create mutually-exclusive description flags ───────────────────────────────
 
@@ -54,7 +42,7 @@ func TestL4_Create_DescAndFileAreMutuallyExclusive(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	bodyFile := writeBodyFile(t, "from file")
+	bodyFile := writeTempFile(t, "body.txt", "from file")
 
 	_, stderr, code := taskmgr(t, root, "create", "--title", "test issue",
 		"--description", "inline",
@@ -90,7 +78,7 @@ func TestL4_Update_NoFlagsIsError(t *testing.T) {
 func TestL4_Update_DescAndFileAreMutuallyExclusive(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	bodyFile := writeBodyFile(t, "from file")
+	bodyFile := writeTempFile(t, "body.txt", "from file")
 
 	_, stderr, code := taskmgr(t, root, "update", issID,
 		"--description", "inline",
@@ -110,7 +98,7 @@ func TestL4_Update_DescAndFileAreMutuallyExclusive(t *testing.T) {
 func TestL4_CommentAdd_BodyAndFileAreMutuallyExclusive(t *testing.T) {
 	root, issID := newTestStoreDir(t)
 
-	bodyFile := writeBodyFile(t, "from file")
+	bodyFile := writeTempFile(t, "body.txt", "from file")
 
 	_, stderr, code := taskmgr(t, root, "comment", "add", issID,
 		"inline body",
@@ -141,7 +129,7 @@ func TestL4_CommentEdit_BodyAndFileAreMutuallyExclusive(t *testing.T) {
 	}
 	commentID, _ := dto["id"].(string)
 
-	bodyFile := writeBodyFile(t, "from file")
+	bodyFile := writeTempFile(t, "body.txt", "from file")
 
 	_, stderr, code := taskmgr(t, root, "comment", "edit", issID, commentID,
 		"inline body",

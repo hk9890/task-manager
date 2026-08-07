@@ -24,10 +24,19 @@ func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, erro
 func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // promote a local store
 func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
 func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
-func Stores(opts ResolveOptions) ([]StoreEntry, error)           // enumerate the central registry
+func Stores() ([]StoreEntry, error)                              // enumerate the central registry
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
+```
+
+Package-level constants naming the on-disk layout (TASK-STORAGE-SPEC §2), so a
+consumer can locate a store's files without hard-coding the names:
+
+```go
+const DataDirName    = ".tasks"      // the data directory under a project root
+const ConfigFileName = "config.yaml" // the store config inside it
+const FileExt        = ".md"         // the per-issue file extension
 ```
 
 - **`Resolve`** is the single function a front end calls to get "the store for here".
@@ -75,7 +84,9 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
 - **`Stores`** reads the central registry and returns its entries (it does **not**
   resolve against a working directory — `where` uses `Resolve`; `store list` uses this).
   It reads through the same seams as `Resolve` and never writes; a missing registry
-  yields an empty slice, a corrupt one an error.
+  yields an empty slice, a corrupt one an error. It takes **no arguments**: the
+  registry is global, so there is nothing a working directory or a store-name
+  override could select.
 - **`Option`** values configure the store. `WithLogger` supplies the `log/slog`
   logger the store writes observability records to (hook timing, writes, IO errors;
   see [MONITORING.md](../MONITORING.md)); without it the store is silent. The SDK does not read
@@ -113,6 +124,21 @@ type StoreEntry struct {
 In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;
 hermetic tests inject in-memory/fake seams through the same internal hooks the store
 already uses for `vfs.Mem`, so resolution is exercised with no real `HOME` or disk.
+
+Two further symbols are exported but **not part of the consumer API**, because
+their argument types live under `internal/` and no outside package can name them:
+
+```go
+func InitWithVFS(root, prefix string, fs vfs.FS, opts ...Option) (*Store, error)
+func (s *Store) SetNow(fn func() time.Time)
+```
+
+`InitWithVFS` is the in-memory creation seam used by `internal/storetest` and the
+engine's own tests. It routes through the same creation path as `Init`, so it
+applies the identical `ErrStoreExists` guard, prefix validation and `Option`
+values — a fixture must not be able to construct a store production could not.
+`SetNow` overrides the clock for deterministic timestamps and is the one of the
+two that a front end may legitimately call (the CLI uses it in its tests).
 
 `Store` is the single gateway to a project's files; every read and write goes
 through it. It is safe for concurrent use within a process and across processes; the

@@ -436,8 +436,26 @@ func (m *Mem) RemoveAll(path string) error {
 // Lock acquires an in-process exclusive lock on path. Multiple sequential
 // callers within the same process are serialized. The lock does not interact
 // with the real filesystem — cross-process locking is an L3 concern.
+//
+// Like every other method it honours FailOn("Lock", …), so the lock-acquisition
+// failure path — reachable in production on a read-only filesystem, on a mount
+// without flock support (ENOLCK), or when .tasks is removed under an open
+// handle — can be exercised at L2. It also refuses a path whose parent
+// directory does not exist, matching osFS.Lock, whose O_CREATE open fails
+// ENOENT there: without that check Mem would grant a lock on a store the OS
+// implementation cannot lock at all.
 func (m *Mem) Lock(path string) (func() error, error) {
 	m.mu.Lock()
+
+	if err := m.checkFault("Lock", path); err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if err := m.requireParentDir(path, "parent directory"); err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("vfs.Lock open: %w", err)
+	}
+
 	lmu, ok := m.locks[path]
 	if !ok {
 		lmu = &sync.Mutex{}

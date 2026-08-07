@@ -27,22 +27,6 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-// mkIssue creates an issue via the CLI and returns its id.
-func mkIssue(t *testing.T, root, title string) string {
-	t.Helper()
-	out, errs, code := taskmgr(t, root, "create", "--title", title, "--json")
-	if code != 0 {
-		t.Fatalf("create exit=%d stderr=%q", code, errs)
-	}
-	var res struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(out), &res); err != nil || res.ID == "" {
-		t.Fatalf("bad create json %q: %v", out, err)
-	}
-	return res.ID
-}
-
 type detailRefs struct {
 	Status      string `json:"status"`
 	RelatedRefs []struct {

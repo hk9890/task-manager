@@ -45,24 +45,6 @@ func bigHTML(marker string) string {
 	return b.String()
 }
 
-func initCLIStore(t *testing.T, prefix string) string {
-	t.Helper()
-	root := t.TempDir()
-	if _, err := tasks.Init(root, prefix); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	return root
-}
-
-func writeFileFor(t *testing.T, content string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "page.html")
-	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return p
-}
-
 // createDoc creates a doc from a file and returns its ID.
 func createDoc(t *testing.T, root, title, path string, extra ...string) string {
 	t.Helper()
@@ -85,9 +67,9 @@ func createDoc(t *testing.T, root, title, path string, extra ...string) string {
 // a generated HTML page goes in through an existing flag, no new command, and
 // lands in the sidecar rather than the hot directory.
 func TestL4_Doc_CreateFromFileOverflows(t *testing.T) {
-	root := initCLIStore(t, "l4d")
+	root := initStore(t, "l4d")
 	page := bigHTML("auth-redesign-marker")
-	id := createDoc(t, root, "Auth redesign", writeFileFor(t, page))
+	id := createDoc(t, root, "Auth redesign", writeTempFile(t, "page.html", page))
 
 	dir := filepath.Join(root, tasks.DataDirName)
 	md, err := os.ReadFile(filepath.Join(dir, id+tasks.FileExt)) //nolint:gosec // test-controlled path
@@ -112,9 +94,9 @@ func TestL4_Doc_CreateFromFileOverflows(t *testing.T) {
 // TestL4_Show_TruncatesHumanKeepsJSON: the terminal gets a bounded excerpt and a
 // pointer; --json gets every byte, because a script asked for the whole thing.
 func TestL4_Show_TruncatesHumanKeepsJSON(t *testing.T) {
-	root := initCLIStore(t, "l4s")
+	root := initStore(t, "l4s")
 	page := bigHTML("show-marker")
-	id := createDoc(t, root, "Auth redesign", writeFileFor(t, page))
+	id := createDoc(t, root, "Auth redesign", writeTempFile(t, "page.html", page))
 
 	human, stderr, code := taskmgr(t, root, "show", id)
 	if code != 0 {
@@ -154,7 +136,7 @@ func TestL4_Show_TruncatesHumanKeepsJSON(t *testing.T) {
 // TestL4_Show_SmallBodyNotTruncated guards against the truncation notice leaking
 // into ordinary output.
 func TestL4_Show_SmallBodyNotTruncated(t *testing.T) {
-	root := initCLIStore(t, "l4t")
+	root := initStore(t, "l4t")
 	out, stderr, code := taskmgr(t, root, "--json", "create", "--title", "small",
 		"--description", "a short body")
 	if code != 0 {
@@ -182,8 +164,8 @@ func TestL4_Show_SmallBodyNotTruncated(t *testing.T) {
 // TestL4_Doc_NotReadyButListedAndSearchable is the work-view contract end to
 // end: docs never appear as ready work, but stay ordinary issues everywhere else.
 func TestL4_Doc_NotReadyButListedAndSearchable(t *testing.T) {
-	root := initCLIStore(t, "l4r")
-	docID := createDoc(t, root, "Auth redesign", writeFileFor(t, bigHTML("searchable-marker")))
+	root := initStore(t, "l4r")
+	docID := createDoc(t, root, "Auth redesign", writeTempFile(t, "page.html", bigHTML("searchable-marker")))
 
 	out, stderr, code := taskmgr(t, root, "--json", "create", "--title", "real work")
 	if code != 0 {
@@ -239,7 +221,7 @@ func TestL4_Doc_NotReadyButListedAndSearchable(t *testing.T) {
 // TestL4_Comment_OversizedRejected: comments are bounded rather than overflowed,
 // and the error says where large content belongs instead.
 func TestL4_Comment_OversizedRejected(t *testing.T) {
-	root := initCLIStore(t, "l4c")
+	root := initStore(t, "l4c")
 	out, _, code := taskmgr(t, root, "--json", "create", "--title", "issue")
 	if code != 0 {
 		t.Fatalf("create: exit %d", code)

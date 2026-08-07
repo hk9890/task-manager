@@ -28,28 +28,10 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-// newMemStoreForClose creates a mem-backed store with a deterministic clock.
-// The closed/ directory does NOT exist yet — Close must create it.
-func newMemStoreForClose(t *testing.T) *Store {
-	t.Helper()
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s
-}
-
 // TestClose_MovesToClosedDir verifies that Close moves the task .md to
 // closed/<id>.md and the hot-dir file is gone.
 func TestClose_MovesToClosedDir(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "to close"}))
 	if err != nil {
@@ -91,7 +73,7 @@ func TestClose_MovesToClosedDir(t *testing.T) {
 // TestClose_SidecarStaysInComments verifies that the comment sidecar is NOT
 // moved when the task .md is relocated to closed/.
 func TestClose_SidecarStaysInComments(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "has comment"}))
 	if err != nil {
@@ -122,7 +104,7 @@ func TestClose_SidecarStaysInComments(t *testing.T) {
 // TestClose_GetFallsThroughToClosedDir verifies that Get() still finds a
 // closed issue after the .md has been moved to closed/.
 func TestClose_GetFallsThroughToClosedDir(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "to find after close"}))
 	if err != nil {
@@ -144,7 +126,7 @@ func TestClose_GetFallsThroughToClosedDir(t *testing.T) {
 // TestClose_ImmutableInPlace_UpdateRejected verifies that Update on a closed
 // issue is rejected (in-place writes to closed/ are forbidden).
 func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "immutable"}))
 	if err != nil {
@@ -168,7 +150,7 @@ func TestClose_ImmutableInPlace_UpdateRejected(t *testing.T) {
 // The returned issue must still be closed, the original close_reason is
 // preserved (not overwritten), and no ErrImmutable is returned.
 func TestClose_Idempotent(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "close twice"}))
 	if err != nil {
@@ -210,7 +192,7 @@ func TestClose_Idempotent(t *testing.T) {
 // TestClose_CommentOnClosedIssue verifies that AddComment still works on a
 // closed issue (sidecar append is the one exception to immutability).
 func TestClose_CommentOnClosedIssue(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "comment after close"}))
 	if err != nil {
@@ -242,7 +224,7 @@ func TestClose_CommentOnClosedIssue(t *testing.T) {
 // TestReopen_MovesBackToHot verifies that Reopen moves the .md back to the
 // hot directory, clears closed/close_reason, and sets status open.
 func TestReopen_MovesBackToHot(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "reopen me"}))
 	if err != nil {
@@ -281,7 +263,7 @@ func TestReopen_MovesBackToHot(t *testing.T) {
 
 // TestReopen_EnablesWrites verifies that after Reopen, Update works again.
 func TestReopen_EnablesWrites(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "original"}))
 	if err != nil {
@@ -306,7 +288,7 @@ func TestReopen_EnablesWrites(t *testing.T) {
 
 // TestReopen_NotFound verifies that Reopen on an unknown ID returns ErrNotFound.
 func TestReopen_NotFound(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	_, err := s.Reopen("agt-9999")
 	if !errors.Is(err, ErrNotFound) {
@@ -406,7 +388,7 @@ func TestClose_FaultInjection_RenameAfterWrite(t *testing.T) {
 // TestUpdateStatus_ClosedRoutesThroughClose verifies that Update with
 // Status=StatusClosed routes through Close (moves to closed/).
 func TestUpdateStatus_ClosedRoutesThroughClose(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "via update"}))
 	if err != nil {
@@ -433,7 +415,7 @@ func TestUpdateStatus_ClosedRoutesThroughClose(t *testing.T) {
 // TestUpdateStatus_OpenRoutesThroughReopen verifies that Update with
 // Status=StatusOpen on a closed issue routes through Reopen (moves back).
 func TestUpdateStatus_OpenRoutesThroughReopen(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "reopen via update"}))
 	if err != nil {
@@ -466,7 +448,7 @@ func TestUpdateStatus_OpenRoutesThroughReopen(t *testing.T) {
 // reopens the issue and leaves it with status in_progress, not open.
 // Acceptance criterion: Update(closedID, {Status: in_progress}) → active, in_progress.
 func TestUpdateReopen_InProgress(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "reopen to in_progress"}))
 	if err != nil {
@@ -506,7 +488,7 @@ func TestUpdateReopen_InProgress(t *testing.T) {
 // TestUpdateReopen_Open verifies that Update(closedID, {Status: open}) → active, open.
 // This tests the existing status=open path still works correctly.
 func TestUpdateReopen_Open(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "reopen to open"}))
 	if err != nil {
@@ -533,7 +515,7 @@ func TestUpdateReopen_Open(t *testing.T) {
 // reopens the issue with status blocked and applies the title change.
 // Acceptance criterion: Update(closedID, {Status: blocked, Title: ...}) → active, blocked, title applied.
 func TestUpdateReopen_BlockedWithTitle(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "original title"}))
 	if err != nil {
@@ -576,7 +558,7 @@ func TestUpdateReopen_BlockedWithTitle(t *testing.T) {
 // always lands on StatusOpen regardless of the issue's pre-close status.
 // Acceptance criterion: Reopen(closedID) → open.
 func TestReopen_AlwaysLandsOnOpen(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "reopen lands on open"}))
 	if err != nil {
@@ -599,7 +581,7 @@ func TestReopen_AlwaysLandsOnOpen(t *testing.T) {
 // issue is a no-op: it succeeds and returns the issue unchanged.
 // Acceptance criterion: Reopen(activeID) is a no-op returning it unchanged.
 func TestReopen_ActiveIssue_NoOp(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "already active"}))
 	if err != nil {
@@ -627,7 +609,7 @@ func TestReopen_ActiveIssue_NoOp(t *testing.T) {
 // edit still returns ErrImmutable (store.go ordinary-update path, not reopen path).
 // Acceptance criterion: no code change expected; test guards against regressions.
 func TestUpdateReopen_RegressionGuard_ClosedStatusErrImmutable(t *testing.T) {
-	s := newMemStoreForClose(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "regression guard"}))
 	if err != nil {

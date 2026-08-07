@@ -318,7 +318,12 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 // Stores returns the central registry entries (CONFIG-SPEC §4, SDK-SPEC §1). It
 // does not resolve against a working directory; it reads through the seams and
 // never writes. A missing registry yields an empty slice; a corrupt one an error.
-func Stores(opts ResolveOptions) ([]StoreEntry, error) {
+//
+// It deliberately takes no ResolveOptions: the registry is global, so there is
+// nothing for a working directory or a store-name override to select. It used to
+// accept one and discard it, which made --dir and --store-name look as if they
+// filtered `taskmgr store list` when they never did.
+func Stores() ([]StoreEntry, error) {
 	return storesWith(vfs.NewOS(), env.NewOS())
 }
 

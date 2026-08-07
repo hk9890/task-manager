@@ -54,7 +54,7 @@ var storeListCmd = &cobra.Command{
 	Short: "List central registry entries",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		entries, err := tasks.Stores(resolveOptions())
+		entries, err := tasks.Stores()
 		if err != nil {
 			return err
 		}
@@ -222,7 +222,7 @@ func runStoreMoveRelink(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	entries, err := tasks.Stores(resolveOptions())
+	entries, err := tasks.Stores()
 	if err != nil {
 		return err
 	}

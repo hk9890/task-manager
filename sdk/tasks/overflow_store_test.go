@@ -57,7 +57,7 @@ func exists(s *Store, path string) bool {
 // never lands in the hot directory. The .md keeps frontmatter only, the bytes go
 // to content/<id>, and the flag says so.
 func TestOverflow_CreateSplitsBody(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	body := bigBody("needle-alpha")
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: body})
 
@@ -86,7 +86,7 @@ func TestOverflow_CreateSplitsBody(t *testing.T) {
 // so a round-trip cannot produce a file that points at a sidecar while also
 // carrying an inline body).
 func TestOverflow_GetResolvesTransparently(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	body := bigBody("needle-beta")
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: body})
 
@@ -113,7 +113,7 @@ func TestOverflow_GetResolvesTransparently(t *testing.T) {
 // paths return an empty Description for an overflowed issue so that listing a
 // thousand of them can never materialize gigabytes.
 func TestOverflow_BulkReadsDoNotResolve(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-gamma")})
 
 	all, err := s.All()
@@ -156,7 +156,7 @@ func TestOverflow_BulkReadsDoNotResolve(t *testing.T) {
 // resolves like Get, and it is the one public place that still says where the
 // bytes live.
 func TestOverflow_DetailResolvesAndReports(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	big := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-delta")})
 	small := mustCreate(t, s, CreateInput{Title: "small", Description: "stays inline"})
 
@@ -184,7 +184,7 @@ func TestOverflow_DetailResolvesAndReports(t *testing.T) {
 // bottom, checking the layout changes only where it should — and that the stale
 // sidecar is actually removed on the way back inline.
 func TestOverflow_UpdateHysteresis(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-eps")})
 	if !exists(s, s.contentPath(iss.ID)) {
 		t.Fatal("setup: expected an external body")
@@ -231,7 +231,7 @@ func TestOverflow_UpdateHysteresis(t *testing.T) {
 // TestOverflow_UpdateGrowsIntoSidecar covers the other direction: an ordinary
 // small issue that later grows past the cap.
 func TestOverflow_UpdateGrowsIntoSidecar(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "starts small", Description: "tiny"})
 	if exists(s, s.contentPath(iss.ID)) {
 		t.Fatal("setup: a small issue must not have a sidecar")
@@ -257,7 +257,7 @@ func TestOverflow_UpdateGrowsIntoSidecar(t *testing.T) {
 // destroy data: touching an unrelated field on an overflowed issue must not
 // truncate its body or orphan its sidecar.
 func TestOverflow_UpdateOtherFieldsKeepsBody(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-keep")})
 
 	title := "renamed"
@@ -282,7 +282,7 @@ func TestOverflow_UpdateOtherFieldsKeepsBody(t *testing.T) {
 // TestOverflow_CloseKeepsSidecarInPlace: only the .md moves to closed/, exactly
 // like the comment sidecar rule. The body stays reachable afterwards.
 func TestOverflow_CloseKeepsSidecarInPlace(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-close")})
 
 	if _, err := unwrap(s.Close(iss.ID, "done")); err != nil {
@@ -327,7 +327,7 @@ func TestOverflow_CloseKeepsSidecarInPlace(t *testing.T) {
 // what the flag buys, and without it a stale file would silently resurrect an
 // older body.
 func TestOverflow_OrphanSidecarIsInert(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "inline", Description: "the real body"})
 
 	// Simulate the debris of a crash between the sidecar write and the .md write.
@@ -359,7 +359,7 @@ func TestOverflow_OrphanSidecarIsInert(t *testing.T) {
 // an expression using it must see overflowed content — otherwise a large issue
 // is silently unmatchable.
 func TestOverflow_QueryTextReadsSidecars(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	big := mustCreate(t, s, CreateInput{Title: "big one", Description: bigBody("zebrafish")})
 	mustCreate(t, s, CreateInput{Title: "small one", Description: "nothing here"})
 
@@ -390,7 +390,7 @@ func TestOverflow_QueryTextReadsSidecars(t *testing.T) {
 // body, so they must not pay to read one. A missing sidecar would surface as an
 // error if the query path read it, so removing it is a usable probe.
 func TestOverflow_QueryWithoutTextSkipsSidecars(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-skip")})
 
 	if err := s.fs.Remove(s.contentPath(iss.ID)); err != nil {
@@ -415,7 +415,7 @@ func TestOverflow_QueryWithoutTextSkipsSidecars(t *testing.T) {
 // appear as ready or blocked, through either the engine methods or the query
 // predicates that ask the same question.
 func TestDocs_ExcludedFromReadyAndBlocked(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	task := mustCreate(t, s, CreateInput{Title: "real work", Type: TypeTask})
 	doc := mustCreate(t, s, CreateInput{Title: "design page", Type: TypeDoc})
 
@@ -463,7 +463,7 @@ func TestDocs_ExcludedFromReadyAndBlocked(t *testing.T) {
 // TestDocs_StillListedAndSearchable: docs are excluded from work views only.
 // They remain ordinary issues everywhere else.
 func TestDocs_StillListedAndSearchable(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	doc := mustCreate(t, s, CreateInput{
 		Title:       "auth redesign",
 		Type:        TypeDoc,
@@ -501,7 +501,7 @@ func TestDocs_StillListedAndSearchable(t *testing.T) {
 // overflow in both — otherwise a bulk import would be the one way to get an
 // oversized file into the hot directory.
 func TestOverflow_ImportSplitsInBothPartitions(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	openID := "agt-imp001"
@@ -558,7 +558,7 @@ func TestOverflow_ImportSplitsInBothPartitions(t *testing.T) {
 func TestOverflow_ConcurrentWritesStayConsistent(t *testing.T) {
 	const workers = 12
 
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	shared := mustCreate(t, s, CreateInput{Title: "contended", Description: "seed"})
 
 	big := bigBody("concurrent-big")
@@ -625,7 +625,7 @@ func TestOverflow_ConcurrentWritesStayConsistent(t *testing.T) {
 // partition. Without this, superseded design docs — the exact thing a doc gets
 // closed for — would become unfindable by content the moment they are closed.
 func TestOverflow_ClosedIssueTextSearch(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	doc := mustCreate(t, s, CreateInput{
 		Title: "Auth redesign v1", Type: TypeDoc, Description: bigBody("supersededmarker"),
 	})
@@ -818,7 +818,7 @@ func TestOverflow_SidecarFailureLeavesIssueReadable(t *testing.T) {
 // TestComments_CapEnforcedThroughStore: the cap is enforced on the real write
 // path, not just in the pure validator.
 func TestComments_CapEnforcedThroughStore(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "issue"})
 
 	if _, err := s.AddComment(iss.ID, "hans", strings.Repeat("c", MaxCommentBody+1)); err == nil {

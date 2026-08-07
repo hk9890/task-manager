@@ -25,33 +25,9 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-// newMemStore creates a Store backed by vfs.Mem with a deterministic clock.
-// It mirrors the structure of newTestStore but uses in-memory storage instead
-// of real disk — this is the L2 layer.
-func newMemStore(t *testing.T) *Store {
-	t.Helper()
-	m := vfs.NewMem()
-
-	// Mem needs the data directory to exist before the store is used.
-	// MkdirAll is a no-op on Mem but sets up the directory entry so ReadDir
-	// works.
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-	return s
-}
-
 // TestMemStore_CreateAndGet verifies basic Create → Get round-trip on Mem.
 func TestMemStore_CreateAndGet(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "hello mem"}))
 	if err != nil {
@@ -72,7 +48,7 @@ func TestMemStore_CreateAndGet(t *testing.T) {
 
 // TestMemStore_UpdateAndClose verifies Update and Close work on Mem.
 func TestMemStore_UpdateAndClose(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "issue"}))
 	if err != nil {
@@ -99,7 +75,7 @@ func TestMemStore_UpdateAndClose(t *testing.T) {
 
 // TestMemStore_All verifies All returns all issues on Mem.
 func TestMemStore_All(t *testing.T) {
-	s := newMemStore(t)
+	s, _ := newMemStore(t)
 
 	mustCreate(t, s, CreateInput{Title: "a"})
 	mustCreate(t, s, CreateInput{Title: "b"})
@@ -245,17 +221,7 @@ func TestNextID_BothPartitionsPopulated(t *testing.T) {
 // rename), so we inject a fault on WriteAtomic directly to simulate the
 // atomic-write failure. The issue must remain in its previous state.
 func TestMemStore_FailOn_WriteAtomic_NoTornState(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
+	s, m := newMemStore(t)
 
 	// Create an issue in the open state.
 	iss, err := unwrap(s.Create(CreateInput{Title: "test issue"}))
@@ -282,5 +248,40 @@ func TestMemStore_FailOn_WriteAtomic_NoTornState(t *testing.T) {
 	}
 	if got.Status != StatusOpen {
 		t.Errorf("status after failed Close = %v, want open (no torn state)", got.Status)
+	}
+}
+
+// TestMemStore_FailOn_Lock_MutationFailsClosed verifies that a mutation whose
+// lock acquisition fails returns the error and writes nothing.
+//
+// Every mutating method funnels through withLock, which takes the store-wide
+// advisory lock before doing anything. In production that acquisition can fail
+// — a read-only filesystem, a mount without flock support (ENOLCK), .tasks
+// removed under an open handle — and the correct behaviour is to fail closed: a
+// writer proceeding without the lock would break the single-writer invariant the
+// whole write path assumes (ARCHITECTURE-SPEC §7). Before Mem honoured
+// FailOn("Lock", …) this path was unreachable from any test.
+func TestMemStore_FailOn_Lock_MutationFailsClosed(t *testing.T) {
+	s, m := newMemStore(t)
+
+	iss, err := unwrap(s.Create(CreateInput{Title: "before the lock fails"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	lockErr := errors.New("simulated lock acquisition failure")
+	m.FailOn("Lock", "/.tasks/.lock", lockErr)
+
+	newTitle := "should never be written"
+	if _, err := s.Update(iss.ID, UpdateInput{Title: &newTitle}); !errors.Is(err, lockErr) {
+		t.Fatalf("Update error = %v, want the injected lock error", err)
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get after failed Update: %v", err)
+	}
+	if got.Title != "before the lock fails" {
+		t.Errorf("title = %q — the mutation must write nothing when the lock cannot be taken", got.Title)
 	}
 }

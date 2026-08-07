@@ -51,7 +51,14 @@ L1/L2 are the default build (fast, no tag); L3/L4 are gated behind the
   model a partial write at the boundary of an OS append. L3 is required to prove
   `O_APPEND` durability on the comment sidecar.
 - **Cross-process locking**: `Mem.Lock` is an in-process mutex. `flock` behaviour
-  (advisory, per-fd, cross-process) is exclusively an L3 concern.
+  (advisory, per-fd, cross-process) is proven only by
+  `cmd/lock_cli_test.go`, which runs four real `taskmgr` processes at the same
+  issue. In-process goroutine tests cannot stand in for it — `flock` is
+  per-process, so they hold no lock against each other in the first place.
+
+  What `Mem.Lock` *does* model is the acquisition **failure** path, via
+  `FailOn("Lock", …)`: a mutation whose lock cannot be taken must return the
+  error and write nothing.
 
 ## Fixtures — one builder, two backends
 
@@ -69,6 +76,36 @@ store := st.TempDir(t)   // L3: materialized on real osFS
 
 `storetest` is internal, so only `sdk`-module tests can import it; L4 tests in
 `cmd/` use the public `Store` API or the built binary.
+
+## Which test package a file belongs in
+
+A `_test.go` file in `sdk/tasks` is either **black-box** (`package tasks_test`,
+sees only the exported API) or **white-box** (`package tasks`, sees unexported
+identifiers too). The rule:
+
+> **Default to black-box.** Write `package tasks` only when the test must reach
+> an unexported identifier — `s.cfg`, `s.now`, `s.fs`, `openWithFS`, path
+> helpers like `s.closedFilePath`, or a pure function such as `findCycle`.
+
+Black-box is the default because it tests what a consumer can actually call, and
+because a test that only compiles against the exported surface is proof that the
+surface is sufficient.
+
+Each package has **one** store fixture, and they are not interchangeable:
+
+| Test package | Fixture | Why |
+|---|---|---|
+| `tasks_test` (black-box) | `storetest.New(t).Mem()` / `.TempDir(t)` | `storetest` imports `tasks` |
+| `tasks` (white-box) | `newMemStore(t)` in `memstore_test.go` | importing `storetest` back would be a cycle |
+
+`newMemStore` returns the store **and** its `vfs.Mem`, so fault injection needs no
+second helper: `s, m := newMemStore(t)`, then `m.FailOn(…)`. Do not hand-roll
+another one — six near-identical copies accumulated before this rule was written.
+
+The one duplication the split does force is `unwrap`, which exists in both
+packages (`unwrap_white_test.go`, `unwrap_black_test.go`) because its signature
+names types that are spelled differently on each side. That pair is deliberate;
+nothing else should be.
 
 ## Conventions
 
