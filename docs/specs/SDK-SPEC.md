@@ -57,11 +57,13 @@ func WithLogger(l *slog.Logger) Option   // structured observability sink (MONIT
   `config.yaml` moves verbatim, so the prefix and hooks survive. Returns `ErrNoStore`
   when there is no local store to promote, and `ErrStoreExists` when the name or the
   subfolder is taken. The registry entry is written **before** the files move, so an
-  interrupted promote leaves the local store working (CONFIG-SPEC §5).
+  interrupted promote leaves the local store working, and it is **rolled back** when the
+  move returns an error, so the call can simply be retried (CONFIG-SPEC §5).
 - **`RenameCentral`** renames the central store `oldName` to `newName` — the subfolder
   under `stores/` and the registry entry both — and returns the new store directory.
-  Returns `ErrStoreNotRegistered` for an unknown `oldName` and `ErrStoreExists` when
-  `newName` is taken.
+  The folder moves first and is **moved back** if the registry write fails. Returns
+  `ErrStoreNotRegistered` for an unknown `oldName` and `ErrStoreExists` when `newName`
+  is taken.
 - **`RelinkCentral`** re-points the registry entry `name` at `projectPath`, for a
   project that moved on disk, and returns the canonical path recorded. It touches no
   files. `projectPath` must be **absolute** — a relative path is resolved against the

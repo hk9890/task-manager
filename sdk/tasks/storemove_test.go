@@ -109,10 +109,12 @@ func TestMoveToCentral_Rejections(t *testing.T) {
 	}
 }
 
-// TestMoveToCentral_RegistryBeforeMove pins the documented failure mode: when
-// the move fails, the entry is already written (dangling, so resolution ignores
-// it) and the local store is untouched and still wins.
-func TestMoveToCentral_RegistryBeforeMove(t *testing.T) {
+// TestMoveToCentral_RollsBackEntryOnMoveFailure pins the recovery path: the
+// entry is written before the move, but a move that *returns an error* undoes
+// it, so the promote can simply be run again. Without the rollback the entry
+// blocks every retry — under the same name and, because the project path is
+// taken, under any other.
+func TestMoveToCentral_RollsBackEntryOnMoveFailure(t *testing.T) {
 	m := vfs.NewMem()
 	makeStore(t, m, "/dev/myproj", "/dev/myproj/.tasks", "myp")
 	boom := errors.New("move failed")
@@ -122,16 +124,12 @@ func TestMoveToCentral_RegistryBeforeMove(t *testing.T) {
 		t.Fatalf("err = %v, want the injected move failure", err)
 	}
 
-	// The entry exists but its subfolder does not — a dangling entry.
 	entries, err := loadRegistry(m, testCentral, testHome)
 	if err != nil {
 		t.Fatalf("load registry: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Store != "myproj" {
-		t.Fatalf("entries = %+v, want the entry written before the move", entries)
-	}
-	if _, err := m.Stat(storeDirFor("myproj")); !vfs.IsNotExist(err) {
-		t.Errorf("store dir should not exist after a failed move: %v", err)
+	if len(entries) != 0 {
+		t.Errorf("entries = %+v, want the entry rolled back", entries)
 	}
 	// The local store is intact and still wins resolution, so the project works.
 	_, info, err := resolveWith(ResolveOptions{WorkDir: "/dev/myproj"}, m, fakeEnv(nil), nil)
@@ -140,6 +138,73 @@ func TestMoveToCentral_RegistryBeforeMove(t *testing.T) {
 	}
 	if info.Kind != ResolvedLocal || info.StorePath != "/dev/myproj/.tasks" {
 		t.Errorf("resolve = %v %q, want the local store to still win", info.Kind, info.StorePath)
+	}
+	// The retry (the fault is consumed) succeeds under the same name.
+	s, err := moveToCentralWith("/dev/myproj", "myproj", m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("retry after a rolled-back promote: %v", err)
+	}
+	if s.Dir() != storeDirFor("myproj") {
+		t.Errorf("retry landed at %q", s.Dir())
+	}
+}
+
+// TestRenameCentral_RollsBackFolderOnRegistryFailure pins the other half of the
+// recovery path: the folder moves first, so a registry write that fails must put
+// it back or the store is left with nothing naming it.
+func TestRenameCentral_RollsBackFolderOnRegistryFailure(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/myproj", "/dev/myproj/.tasks", "myp")
+	if _, err := moveToCentralWith("/dev/myproj", "old", m, fakeEnv(nil), nil); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	boom := errors.New("registry write failed")
+	m.FailOn("WriteAtomic", filepath.Join(testCentral, registryFileName), boom)
+
+	if _, err := renameCentralWith("old", "new", m, fakeEnv(nil)); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the injected registry failure", err)
+	}
+
+	if _, err := m.Stat(storeDirFor("new")); !vfs.IsNotExist(err) {
+		t.Errorf("the folder should have been moved back, but %s exists", storeDirFor("new"))
+	}
+	if _, err := m.ReadFile(filepath.Join(storeDirFor("old"), ConfigFileName)); err != nil {
+		t.Errorf("store not restored to its old name: %v", err)
+	}
+	// The project still resolves, unchanged.
+	_, info, err := resolveWith(ResolveOptions{WorkDir: "/dev/myproj"}, m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("resolve after failed rename: %v", err)
+	}
+	if info.StorePath != storeDirFor("old") {
+		t.Errorf("resolve = %q, want the store still at its old name", info.StorePath)
+	}
+}
+
+// TestResolve_SkipsIncompleteStore pins that a folder without a config.yaml —
+// what a failed promote leaves behind — is skipped like a missing one rather
+// than opened as a store.
+func TestResolve_SkipsIncompleteStore(t *testing.T) {
+	m := vfs.NewMem()
+	writeRegistry(t, m, testCentral, registryEntry{Path: "/dev/proj", Store: "half"})
+	// A folder with issue files but no config: a copy that died part-way.
+	if err := m.MkdirAll(storeDirFor("half"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := m.WriteAtomic(filepath.Join(storeDirFor("half"), "hlf-abc123.md"), []byte("---\nid: hlf-abc123\n---\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if _, _, err := resolveWith(ResolveOptions{WorkDir: "/dev/proj"}, m, fakeEnv(nil), nil); !errors.Is(err, ErrNoStore) {
+		t.Errorf("err = %v, want ErrNoStore for a half-built store", err)
+	}
+	// Named explicitly, the error says what is actually wrong.
+	_, _, err := resolveWith(ResolveOptions{StoreName: "half"}, m, fakeEnv(nil), nil)
+	if err == nil {
+		t.Fatal("--store-name on a half-built store should fail")
+	}
+	if !strings.Contains(err.Error(), "not a finished store") {
+		t.Errorf("err = %v, want it to name the incomplete store", err)
 	}
 }
 

@@ -129,6 +129,21 @@ func lockCentral(fs vfs.FS, croot string) (func() error, error) {
 	return fs.Lock(filepath.Join(croot, centralLockName))
 }
 
+// storeComplete reports whether dir is a finished store: a directory holding a
+// config.yaml. A registry entry pointing at anything else is treated like one
+// whose folder is missing — skipped by resolution (CONFIG-SPEC §3/§4). That
+// covers a folder left behind by a failed promote, and narrows (without
+// closing) the window in which a store still being copied could be opened: a
+// copy that has already written config.yaml but not the issue files still looks
+// complete.
+func storeComplete(fs vfs.FS, dir string) bool {
+	if fi, err := fs.Stat(dir); err != nil || !fi.IsDir() {
+		return false
+	}
+	_, err := fs.Stat(filepath.Join(dir, ConfigFileName))
+	return err == nil
+}
+
 // moveStoreDir moves a store directory from src to dst while holding the store's
 // own write lock, so a concurrent mutation in that store cannot be split across
 // the two locations.
@@ -166,6 +181,12 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 				continue
 			}
 			dir := filepath.Join(croot, storesSubdir, en.Store)
+			if !storeComplete(fs, dir) {
+				// Named explicitly, so say what is wrong rather than reporting
+				// it as unregistered: the entry is there, the store is not.
+				return nil, ResolveInfo{}, fmt.Errorf("central store %q is not a finished store at %s (no %s) — a move may have failed part-way",
+					en.Store, dir, ConfigFileName)
+			}
 			project := canonicalize(fs, en.Path, home, croot)
 			s, err := openData(project, dir, fs, sopts)
 			if err != nil {
@@ -201,8 +222,8 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	var kept []registryEntry
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
-		if fi, statErr := fs.Stat(dir); statErr != nil || !fi.IsDir() {
-			continue // dangling: store subfolder missing — skip (CONFIG-SPEC §3)
+		if !storeComplete(fs, dir) {
+			continue // dangling or half-built — skip (CONFIG-SPEC §3)
 		}
 		canonPaths = append(canonPaths, canonicalize(fs, en.Path, home, croot))
 		kept = append(kept, en)
@@ -319,12 +340,15 @@ func checkFree(entries []registryEntry, name, rawProject, project, home, croot s
 // <central_root>/stores/<name>, returning the opened central store
 // (CONFIG-SPEC §5).
 //
-// The registry entry is written *before* the files move. An interrupted promote
-// therefore leaves a dangling entry — which resolution ignores (CONFIG-SPEC §3)
-// — while the local store is still in place and still wins resolution, so the
-// project keeps working. The reverse order would leave the store unreachable.
-// The move itself is not rolled back on failure: a partial cross-filesystem copy
-// stays at the destination for inspection.
+// The registry entry is written *before* the files move, so a promote that dies
+// between the two leaves the local store in place and still winning resolution;
+// the reverse order would leave the store unreachable. When the move returns an
+// error the entry is rolled back, so the command can simply be run again. A hard
+// kill gets no such chance: it leaves the entry, which resolution ignores as
+// dangling (CONFIG-SPEC §3).
+//
+// The files are not rolled back: a partial cross-filesystem copy stays at the
+// destination for inspection, where resolution skips it for having no config.
 func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) {
 	return moveToCentralWith(projectPath, name, vfs.NewOS(), env.NewOS(), opts)
 }
@@ -368,6 +392,15 @@ func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, o
 		return nil, err
 	}
 	if err := moveStoreDir(fs, src, dst); err != nil {
+		// Undo the entry: it now points at files that are not there, and
+		// leaving it would block every retry — under this name (taken) and
+		// under any other (the project path is taken). Rolling back covers an
+		// ordinary failure; a crash between the two writes still leaves the
+		// entry, which resolution ignores as dangling (CONFIG-SPEC §3/§5).
+		if rbErr := saveRegistry(fs, croot, entries); rbErr != nil {
+			return nil, fmt.Errorf("%w (the registry entry %q could not be rolled back: %v — remove it from %s by hand)",
+				err, name, rbErr, filepath.Join(croot, registryFileName))
+		}
 		return nil, err
 	}
 	return openData(project, dst, fs, opts)
@@ -377,10 +410,12 @@ func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, o
 // under <central_root>/stores is renamed and the registry entry updated
 // (CONFIG-SPEC §5). It returns the new store directory.
 //
-// The folder moves before the registry is rewritten. Both orders leave the same
-// state if interrupted — an entry naming a subfolder that is not there, which
-// resolution ignores as dangling — and both steps are individually atomic, so
-// the window is a single rename wide.
+// The folder moves before the registry is rewritten; if the registry write
+// fails the folder is moved back, so the untouched entry keeps finding it. Both
+// steps are individually atomic, so only a hard kill can land in between — and
+// it leaves the issues at the new folder with the entry still naming the old
+// one, which resolution then skips as dangling. Recovering that means renaming
+// the folder back by hand.
 func RenameCentral(oldName, newName string) (string, error) {
 	return renameCentralWith(oldName, newName, vfs.NewOS(), env.NewOS())
 }
@@ -431,6 +466,12 @@ func renameCentralWith(oldName, newName string, fs vfs.FS, e env.Environment) (s
 
 	entries[idx].Store = newName
 	if err := saveRegistry(fs, croot, entries); err != nil {
+		// Put the folder back, so the entry that still names the old one keeps
+		// finding it. Both directories are under stores/, so this is a rename.
+		if rbErr := fs.MoveTree(dst, src); rbErr != nil {
+			return "", fmt.Errorf("%w (the store could not be moved back from %s to %s: %v — the registry still names %q)",
+				err, dst, src, rbErr, oldName)
+		}
 		return "", err
 	}
 	return dst, nil

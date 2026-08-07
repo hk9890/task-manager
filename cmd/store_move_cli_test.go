@@ -388,6 +388,66 @@ func TestL4_StoreMove_NoStoreHintsInit(t *testing.T) {
 	}
 }
 
+// TestL4_StoreMove_FailedPromoteIsRetryable pins the recovery path end to end:
+// when the move fails, the registry line is rolled back, so the project keeps
+// working and the promote can be run again. Without the rollback the entry would
+// block every retry — under the same name and, since the project path is taken,
+// under any other.
+//
+// The move is made to fail by taking write permission off <croot>/stores.
+func TestL4_StoreMove_FailedPromoteIsRetryable(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	id := seedLocal(t, proj, home)
+
+	stores := filepath.Join(home, "stores")
+	if err := os.MkdirAll(stores, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.Chmod(stores, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stores, 0o755) })
+	// Root ignores the permission bits, so confirm the failure is real first.
+	if probe, err := os.Create(filepath.Join(stores, ".probe")); err == nil {
+		_ = probe.Close()
+		t.Skip("cannot make a directory unwritable (running as root?)")
+	}
+
+	if _, errOut, code := taskmgrCentral(t, proj, home, "store", "move", "--central", "--to", "demo"); code == 0 {
+		t.Fatal("promote into an unwritable central root should fail")
+	} else if !strings.Contains(errOut, "move store to") {
+		t.Errorf("stderr = %q, want it to name the failed move", errOut)
+	}
+
+	// The registry line is gone, and the local store still serves the project.
+	out, _, code := taskmgrCentral(t, proj, home, "--json", "store", "list")
+	if code != 0 {
+		t.Fatalf("store list: code=%d", code)
+	}
+	var entries []storeListJSON
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("store list json: %v (%q)", err, out)
+	}
+	if len(entries) != 0 {
+		t.Errorf("registry = %+v, want the entry rolled back", entries)
+	}
+	if out, _, _ := taskmgrCentral(t, proj, home, "--json", "where"); !strings.Contains(out, `"local"`) {
+		t.Errorf("the local store must still serve the project: %q", out)
+	}
+
+	// Fix the cause; the same command now works, with the issues intact.
+	if err := os.Chmod(stores, 0o755); err != nil {
+		t.Fatalf("chmod back: %v", err)
+	}
+	if _, errOut, code := taskmgrCentral(t, proj, home, "store", "move", "--central", "--to", "demo"); code != 0 {
+		t.Fatalf("retry after a rolled-back promote: %s", errOut)
+	}
+	if out, _, code := taskmgrCentral(t, proj, home, "--json", "show", id); code != 0 || !strings.Contains(out, id) {
+		t.Errorf("issue %s unreadable after the retry: code=%d out=%q", id, code, out)
+	}
+}
+
 // TestL4_StorePathFlagRemoved pins the removal of --store-path / TASKMGR_DIR:
 // the flag is rejected and the environment variable has no effect.
 func TestL4_StorePathFlagRemoved(t *testing.T) {
