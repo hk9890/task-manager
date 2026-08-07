@@ -21,14 +21,46 @@ Each row is one `slog` record (`msg` in the first column):
 
 | `msg` | Level | Key fields |
 |---|---|---|
-| `write` — a committed mutation | debug | `op` (the transition), `issue` |
+| `write` — a committed lifecycle transition | debug | `op` (the transition), `issue` |
 | `hook` — a hook that **allowed** | debug | `event`, `hook`, `issue`, `decision=allow`, **`duration_ms`** |
-| `hook` — a hook that **denied** | info | `event`, `hook`, `issue`, `decision=deny`, `duration_ms` |
+| `hook` — a **pre**-hook that **denied**, blocking the write | info | `event`, `hook`, `issue`, `decision=deny`, `duration_ms` |
+| `hook` — a **post**-hook that **reported a failure** | info | `event`, `hook`, `issue`, `decision=warn`, `duration_ms` |
 | `hook` — a hook that **errored** (missing / timeout / signal) | warn | `event`, `hook`, `issue`, `decision=error`, `duration_ms` |
 | `io_error` — a failed store write | error | `op`, `issue`, `error` |
 
 Every hook invocation emits one `hook` record regardless of outcome — only the
-level and `decision` differ — so allow/deny/error are one query away from each other.
+level and `decision` differ — so allow/deny/warn/error are one query away from
+each other.
+
+### What `write` covers
+
+`write` is keyed on the **lifecycle transition** ([HOOK-SPEC](specs/HOOK-SPEC.md)
+§2.1), so `op` is always one of `create`, `update`, `close`, `reopen`. An import
+is a create and logs as one.
+
+Everything else that writes to the store — comment add/edit/delete, dependency
+and related-link edits — is **not** a transition: it fires no hooks and emits no
+`write` record. This is deliberate (those writes have no gate to measure), but it
+means **`write` is not a complete audit of what changed on disk**. Use the git
+history of `.tasks/` for that; it already records every committed change.
+
+A *failed* write is logged in every case, transition or not: `io_error` carries
+`op=create|update|close|reopen` for a transition and
+`op=comment_add|comment_edit|comment_delete|dep_add|dep_remove|rel_add|rel_remove`
+otherwise. Nothing fails silently.
+
+### `deny` vs `warn` vs `error`
+
+The three non-allow outcomes answer different questions, and conflating them
+corrupts the rates below:
+
+- **`deny`** — a pre-hook refused and **the write did not happen**. Only pre-hooks
+  can deny.
+- **`warn`** — a post-hook exited non-zero. The write **already committed** and
+  cannot be undone ([HOOK-SPEC](specs/HOOK-SPEC.md) §7); the message surfaces as a
+  warning on the result. Nothing was blocked.
+- **`error`** — the hook itself misbehaved (missing binary, timeout, signal),
+  in either phase. For a pre-hook this also blocks the write (fail-closed).
 
 ## Hook timing
 
@@ -40,6 +72,16 @@ answer "how long are my close gates holding the lock?" and to decide whether to 
 `hook_timeout`, move a check to a post-hook, or push it to CI. A hook that exceeds
 `hook_timeout` or errors is logged at `warn` with the same timing fields, so the timeout is
 never silent.
+
+**Only pre-hooks hold the lock.** Post-hooks run after the write, outside it
+(HOOK-SPEC §4), so a slow post-hook costs the caller latency but blocks no other
+writer. Any query about lock cost must filter on `event=pre-` — a ranking over
+all `duration_ms` values mixes in hooks that hold nothing.
+
+**The ceiling is `hook_timeout` + 2s, not `hook_timeout`.** A hook that ignores
+SIGTERM is SIGKILLed after a fixed 2s grace (HOOK-SPEC §7), and that grace is
+additive: with the 2s default, a hanging pre-close hook holds the lock for ~4s,
+and `duration_ms` will report it. Size `hook_timeout` accordingly.
 
 ## Format & configuration
 
@@ -71,14 +113,21 @@ Measuring means capturing stderr and aggregating the fields above:
 TASKMGR_LOG=debug taskmgr close <id> --reason done 2> run.log
 
 # Which hooks are holding the write lock, slowest first?
-grep 'msg=hook' run.log |
+# Filter to pre-hooks: post-hooks run outside the lock and would otherwise rank
+# in a list that claims to be about lock cost.
+grep 'msg=hook' run.log | grep 'event=pre-' |
   sed -n 's/.*hook=\([^ ]*\).*duration_ms=\([0-9]*\).*/\2 \1/p' |
   sort -rn | head
 
-# Deny/error rate across a batch run.
-grep -c 'decision=deny'  run.log
-grep -c 'decision=error' run.log
+# How many writes were actually blocked, and how many hooks broke?
+grep -c 'decision=deny'  run.log   # pre-hook refusals — these blocked a write
+grep -c 'decision=error' run.log   # missing binary / timeout / signal
+grep -c 'decision=warn'  run.log   # post-hook failures — nothing was blocked
 ```
+
+`decision=deny` counts blocked writes only. Counting `deny` and `warn` together
+inflates the deny rate with post-hook failures, which by definition arrive too
+late to block anything.
 
 ## Non-goals
 

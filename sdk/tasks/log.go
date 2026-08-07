@@ -52,19 +52,35 @@ func (s *Store) applyOptions(opts []Option) {
 	}
 }
 
-// logHook records one hook invocation with its wall-clock duration — the main
-// signal for the in-lock cost of pre-hooks (HOOK-SPEC §4/§8, MONITORING.md).
-// An allow logs at debug, a deny at info, a hook error at warn, so a timeout or
-// a failed gate is never silent.
-func (s *Store) logHook(event, hookID, issueID string, dec hookDecision, res exec.Result) {
-	level := slog.LevelDebug
-	decision := "allow"
+// hookLogOutcome maps a hook's decision to the level and `decision` value it is
+// logged with. An allow is debug, a refusal is info, a hook error is warn, so a
+// timeout or a failed gate is never silent.
+//
+// Only a pre-hook can deny: it runs before the write and aborts it. A post-hook
+// runs after the write committed, so a non-zero exit is a warning about a write
+// that already happened and can no longer be stopped (HOOK-SPEC §7) — it is
+// logged as `warn`, not `deny`. Logging both as `deny` would make the deny-rate
+// query in MONITORING.md count writes that were never blocked.
+func hookLogOutcome(event string, dec hookDecision) (slog.Level, string) {
 	switch dec {
 	case decDeny:
-		level, decision = slog.LevelInfo, "deny"
+		if isPostEvent(event) {
+			return slog.LevelInfo, "warn"
+		}
+		return slog.LevelInfo, "deny"
 	case decError:
-		level, decision = slog.LevelWarn, "error"
+		return slog.LevelWarn, "error"
+	default:
+		return slog.LevelDebug, "allow"
 	}
+}
+
+// logHook records one hook invocation with its wall-clock duration — the main
+// signal for the in-lock cost of pre-hooks (HOOK-SPEC §4/§8, MONITORING.md).
+// Post-hooks run outside the lock, so `event` is what separates lock cost from
+// the rest.
+func (s *Store) logHook(event, hookID, issueID string, dec hookDecision, res exec.Result) {
+	level, decision := hookLogOutcome(event, dec)
 	s.logger.LogAttrs(context.Background(), level, "hook",
 		slog.String("event", event),
 		slog.String("hook", hookID),
@@ -73,6 +89,20 @@ func (s *Store) logHook(event, hookID, issueID string, dec hookDecision, res exe
 		slog.Int64("duration_ms", res.Duration.Milliseconds()),
 	)
 }
+
+// Ops for store writes that are not lifecycle transitions. They fire no hooks
+// and emit no `write` record — `write` is keyed on transition (MONITORING.md) —
+// but a failure still has to be visible, so they carry these op names into
+// io_error.
+const (
+	opCommentAdd    = "comment_add"
+	opCommentEdit   = "comment_edit"
+	opCommentDelete = "comment_delete"
+	opDepAdd        = "dep_add"
+	opDepRemove     = "dep_remove"
+	opRelAdd        = "rel_add"
+	opRelRemove     = "rel_remove"
+)
 
 // logWrite records a committed write (MONITORING.md "Write committed", debug).
 func (s *Store) logWrite(trans transition, issueID string) {
@@ -83,10 +113,11 @@ func (s *Store) logWrite(trans transition, issueID string) {
 }
 
 // logIOError records a failed write through the store (MONITORING.md
-// "Store / IO error", error).
-func (s *Store) logIOError(trans transition, issueID string, err error) {
+// "Store / IO error", error). op is a transition name for a gated mutation and
+// one of the op* constants above for the writes that are not transitions.
+func (s *Store) logIOError(op, issueID string, err error) {
 	s.logger.LogAttrs(context.Background(), slog.LevelError, "io_error",
-		slog.String("op", string(trans)),
+		slog.String("op", op),
 		slog.String("issue", issueID),
 		slog.String("error", err.Error()),
 	)
