@@ -53,6 +53,14 @@ func (s Status) IsClosed() bool { return s == StatusClosed }
 
 // Type is the kind of work an issue represents. The set is fixed and small by
 // design: there are no custom or configurable types.
+//
+// doc is the one type that is not work: it carries a document (a design page, a
+// session note, a handover, a review) rather than something to be done. It is an
+// ordinary issue in every other respect — same ID namespace, same commands, same
+// lifecycle — but it is excluded from Ready and Blocked by construction
+// (TASK-STORAGE-SPEC §9). Its Status, Priority and Assignee are therefore
+// carried but meaningless. What kind of document it is lives in labels
+// (kind:design, kind:session, …), not in this enum.
 type Type string
 
 const (
@@ -61,10 +69,15 @@ const (
 	TypeFeature Type = "feature"
 	TypeEpic    Type = "epic"
 	TypeChore   Type = "chore"
+	TypeDoc     Type = "doc"
 )
 
 // Types lists every valid type in display order.
-var Types = []Type{TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore}
+var Types = []Type{TypeTask, TypeBug, TypeFeature, TypeEpic, TypeChore, TypeDoc}
+
+// IsWork reports whether t represents something that can be worked on. Only doc
+// is not work; Ready and Blocked filter on this (TASK-STORAGE-SPEC §9).
+func (t Type) IsWork() bool { return t != TypeDoc }
 
 // Valid reports whether t is a known type.
 func (t Type) Valid() bool {
@@ -122,6 +135,18 @@ type Issue struct {
 	CloseReason string
 
 	Description string // free-form markdown body of the file
+
+	// bodyExternal mirrors the on-disk body_external flag: the body lives in the
+	// content sidecar, not in this file (TASK-STORAGE-SPEC §4.6). It is
+	// deliberately unexported — it is a storage detail, not part of the model an
+	// SDK caller reasons about, and keeping it out of the public struct means a
+	// caller can never build an Issue whose flag disagrees with its Description.
+	//
+	// Get and ResolveBody clear it after reading the sidecar, so the issue they
+	// return is always safe to hand to Marshal. The bulk read paths leave it set
+	// (with an empty Description) — that is how the write path recovers the
+	// previous on-disk layout to apply hysteresis. Detail.BodyExternal reports it.
+	bodyExternal bool
 }
 
 // IsClosed reports whether the issue is in the closed state.
@@ -149,6 +174,12 @@ type Detail struct {
 	Blocks        []Ref     // derived: issues that list this one in their BlockedBy
 	Children      []Ref     // derived: issues whose Parent is this one
 	Comments      []Comment // resolved effective comment log (edits applied, tombstones omitted)
+
+	// BodyExternal reports that the body was read from the content sidecar
+	// rather than from the .md itself (TASK-STORAGE-SPEC §4.6). The embedded
+	// Issue.Description is fully resolved either way; this is informational, so a
+	// viewer can say where the bytes live or warn before rendering a large body.
+	BodyExternal bool
 }
 
 // ref builds a Ref from an issue.

@@ -71,13 +71,17 @@ type issueRow struct {
 // newIssueRow builds an issueRow for iss. ready and blocked are pre-computed
 // by the caller (List) using openBlockers so the evaluator doesn't need to
 // re-run that logic per-expression-node.
+// The ready/blocked predicates must agree with Store.Ready and Store.Blocked —
+// they are the same question asked through a different surface — so the
+// not-work exclusion for documents is applied here too (TASK-STORAGE-SPEC §9).
 func newIssueRow(iss *Issue, idx map[string]*Issue, closedStat func(string) bool) *issueRow {
 	var open []string
 	if !iss.Status.IsClosed() {
 		open = openBlockers(idx, closedStat, iss)
 	}
-	ready := iss.Status == StatusOpen && len(open) == 0
-	blocked := !iss.Status.IsClosed() && len(open) > 0
+	work := iss.Type.IsWork()
+	ready := work && iss.Status == StatusOpen && len(open) == 0
+	blocked := work && !iss.Status.IsClosed() && len(open) > 0
 	return &issueRow{iss: iss, isReady: ready, isBlocked: blocked}
 }
 

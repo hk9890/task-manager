@@ -372,8 +372,18 @@ func newCommentID() string {
 // Bodies containing control characters (NUL, ESC, etc.) force YAML to emit
 // a double-quoted, \n-escaped scalar and are therefore rejected.
 //
+// It also enforces the size cap. Comments never overflow to a content sidecar
+// the way issue bodies do (TASK-STORAGE-SPEC §4.6): one sidecar holds an issue's
+// whole comment stream, so an unbounded comment would be re-parsed on every read
+// of every comment on that issue, and an overflowing one would need a per-comment
+// file whose lifetime had to track edits and tombstones. A body too large for a
+// comment belongs in a doc issue, related to this one.
+//
 // This is a PURE function: no I/O, no os import.
 func validateCommentBody(body string) error {
+	if len(body) > MaxCommentBody {
+		return invalid("body", "must be at most %d bytes, got %d (large content belongs in a doc issue, not a comment)", MaxCommentBody, len(body))
+	}
 	for _, r := range body {
 		// Control characters other than HT (\t) and LF (\n) force double-quoting.
 		if r < 0x20 && r != '\t' && r != '\n' {

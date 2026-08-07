@@ -189,7 +189,14 @@ blocked-by, related, plus derived **blocks** and **children**), the description
 body, and comments (the **resolved** log — edits applied, deleted comments
 removed; see storage spec §4.4).
 
-- **Output (JSON):** `detailDTO` (§6).
+A body larger than 4096 bytes is **truncated in human output**, followed by a
+notice giving its full size and, when the body lives in the content sidecar
+(TASK-STORAGE-SPEC §4.6), its path. Truncation is a display choice only: `--json`
+always carries the complete body, because a script or an agent asked for all of
+it. Bodies are unbounded, so a doc holding a generated page would otherwise flood
+a terminal on every `show`.
+
+- **Output (JSON):** `detailDTO` (§6) — never truncated.
 
 ### `taskmgr list [-q <expr>] [options]`
 
@@ -244,6 +251,11 @@ semantic is `tasks.SearchExpr` (SDK-SPEC §3), so the CLI and any UI search
 identically. A `-q` expression, if given, is AND-ed with the text match. Accepts
 `--all`, `--sort`, `--reverse`, and `--limit`.
 
+The description is matched wherever it is stored: an issue whose body overflowed
+to the content sidecar is searched on its full content (QUERY-SPEC §2). Documents
+(`type: doc`) are searched like any other issue — they are excluded from `ready`
+and `blocked`, nothing else.
+
 For an exact **contiguous phrase** instead of AND-of-words, use the query form
 directly: `list -q 'text ~ "drill nav"'` (matches only where the words are adjacent
 and in order). This is the documented phrase escape hatch — `search` itself stays
@@ -285,7 +297,7 @@ Create a new issue and allocate its ID.
 | `--title <t>` | — | **Required.** Issue title. |
 | `--description <md>` | empty | Description (markdown body). |
 | `--description-file <path>` | — | Read the description from a file (`-` = stdin). |
-| `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore`. |
+| `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore` \| `doc`. `doc` carries a document rather than work: it is an ordinary issue but never appears in `ready` / `blocked` (TASK-STORAGE-SPEC §9). Use `--description-file` to load a page from disk; a large body is stored in the content sidecar automatically (§4.6). |
 | `--priority <n>` | `2` | `0` (critical) … `4` (trivial). |
 | `--assignee <a>` | empty | Assignee. |
 | `--creator <a>` | `$USER` | Creator — who filed the issue; recorded once at creation. |
@@ -484,9 +496,13 @@ comment's random token (`^[0-9a-z]{8}$`); `author`/`replaces` are omitted when
 empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
 `replaces`-chain collapsed to its newest revision, tombstoned comments omitted.
 
-**`detailDTO`** — `issueDTO` plus: `description`, `parent_ref` (`refDTO`),
-`blocked_by_refs`, `related_refs`, `blocks`, `children` (each `refDTO[]`), and
-`comments` (`commentDTO[]`). Emitted by `show`.
+**`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
+when false), `parent_ref` (`refDTO`), `blocked_by_refs`, `related_refs`,
+`blocks`, `children` (each `refDTO[]`), and `comments` (`commentDTO[]`). Emitted
+by `show`. `description` is always the complete body; `body_external` only says
+it was read from the content sidecar rather than the `.md`
+(TASK-STORAGE-SPEC §4.6). `issueDTO` carries no description, so list-shaped
+output is unaffected by body size.
 
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.

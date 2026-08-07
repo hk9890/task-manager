@@ -61,7 +61,7 @@ operator a field does not support is a parse error (§4).
 | Field | Type | Operators | Value syntax |
 |---|---|---|---|
 | `status` | enum | `==` `!=` | `open` / `in_progress` / `blocked` / `deferred` / `closed` |
-| `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` |
+| `type` | enum | `==` `!=` | `task` / `bug` / `feature` / `epic` / `chore` / `doc` |
 | `priority` | int | `==` `!=` `<` `<=` `>` `>=` | integer (`0`–`4` stored) |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |
 | `creator` | string | `==` `!=` `~` | quoted or bareword |
@@ -87,15 +87,25 @@ operator a field does not support is a parse error (§4).
   set contains exactly `"x"` (membership); `label != "x"` is its negation;
   `label ~ "x"` is true iff some label contains the case-insensitive substring `x`.
 - **`text`** — a virtual field: the case-insensitive concatenation of the issue's
-  `id`, `title`, and description body. Only `~` (substring) is defined.
+  `id`, `title`, and description body. Only `~` (substring) is defined. The body
+  is included **wherever it is stored**: an issue whose body overflowed to the
+  content sidecar (TASK-STORAGE-SPEC §4.6) matches on its full content, so a
+  large issue is never silently unsearchable. This is the one field that costs
+  extra I/O — an expression using `text` reads the content sidecar of every
+  overflowed issue in scope, while an expression that does not use it reads none.
+  There is exactly one definition of `text`, so `search` and `list -q 'text ~ …'`
+  always agree.
 - **`created` / `updated` / `closed`** — chronological comparison (§3). On an issue
   with no `closed` timestamp, every `closed` comparison is false. Likewise, on
   an issue with no `created` or `updated` value (absent or zero), every
   `created` / `updated` comparison is false — a missing timestamp has no value
   that can satisfy any ordering bound.
 - **`ready` / `blocked`** — computed predicates with the meanings fixed by the
-  storage spec ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §9): `ready` = open with no open blocker;
-  `blocked` = non-closed with ≥1 open blocker. These are derived from the
+  storage spec ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §9): `ready` = open
+  work with no open blocker; `blocked` = non-closed work with ≥1 open blocker.
+  Both exclude `type == "doc"`, which is not work, exactly as `Store.Ready` /
+  `Store.Blocked` do — the predicate and the method are one definition asked
+  through two surfaces. These are derived from the
   dependency graph and are **independent of the `status` field**: the `blocked`
   predicate is **not** the same as `status == "blocked"`. The `blocked` *status*
   is a manual label the engine never sets or clears automatically — an issue can

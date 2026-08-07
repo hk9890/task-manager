@@ -49,6 +49,17 @@ type frontmatter struct {
 	Updated     time.Time  `yaml:"updated"`
 	Closed      *time.Time `yaml:"closed,omitempty"`
 	CloseReason string     `yaml:"close_reason,omitempty"`
+
+	// BodyExternal, when true, means the body is NOT in this file — it lives in
+	// the content sidecar at content/<id> (TASK-STORAGE-SPEC §4.6). It is emitted
+	// last so the field order of every ordinary issue file is unchanged.
+	//
+	// This flag, not the mere presence of a sidecar file, is what makes the
+	// sidecar authoritative. That is deliberate: writes touch two files and are
+	// not a single transaction, so a crash can leave a sidecar behind. With the
+	// flag, such a leftover is inert garbage; without it, the leftover would
+	// silently override the .md and resurrect an older body.
+	BodyExternal bool `yaml:"body_external,omitempty"`
 }
 
 // legacyFrontmatter extends frontmatter to read (but not write) the old inline
@@ -79,20 +90,21 @@ func Marshal(iss *Issue) ([]byte, error) {
 	updated := iss.Updated.UTC().Truncate(time.Second)
 
 	fm := frontmatter{
-		ID:          iss.ID,
-		Title:       iss.Title,
-		Status:      iss.Status,
-		Type:        iss.Type,
-		Priority:    iss.Priority,
-		Assignee:    iss.Assignee,
-		Creator:     iss.Creator,
-		Labels:      iss.Labels,
-		Parent:      iss.Parent,
-		BlockedBy:   iss.BlockedBy,
-		Related:     iss.Related,
-		Created:     created,
-		Updated:     updated,
-		CloseReason: iss.CloseReason,
+		ID:           iss.ID,
+		Title:        iss.Title,
+		Status:       iss.Status,
+		Type:         iss.Type,
+		Priority:     iss.Priority,
+		Assignee:     iss.Assignee,
+		Creator:      iss.Creator,
+		Labels:       iss.Labels,
+		Parent:       iss.Parent,
+		BlockedBy:    iss.BlockedBy,
+		Related:      iss.Related,
+		Created:      created,
+		Updated:      updated,
+		CloseReason:  iss.CloseReason,
+		BodyExternal: iss.bodyExternal,
 	}
 	if !iss.Closed.IsZero() {
 		c := iss.Closed.UTC().Truncate(time.Second)
@@ -163,21 +175,22 @@ func unmarshalWithLegacy(data []byte) (*Issue, []legacyComment, error) {
 
 	fm := lfm.frontmatter
 	iss := &Issue{
-		ID:          fm.ID,
-		Title:       fm.Title,
-		Status:      fm.Status,
-		Type:        fm.Type,
-		Priority:    fm.Priority,
-		Assignee:    fm.Assignee,
-		Creator:     fm.Creator,
-		Labels:      fm.Labels,
-		Parent:      fm.Parent,
-		BlockedBy:   fm.BlockedBy,
-		Related:     fm.Related,
-		Created:     fm.Created,
-		Updated:     fm.Updated,
-		CloseReason: fm.CloseReason,
-		Description: strings.TrimSpace(body),
+		ID:           fm.ID,
+		Title:        fm.Title,
+		Status:       fm.Status,
+		Type:         fm.Type,
+		Priority:     fm.Priority,
+		Assignee:     fm.Assignee,
+		Creator:      fm.Creator,
+		Labels:       fm.Labels,
+		Parent:       fm.Parent,
+		BlockedBy:    fm.BlockedBy,
+		Related:      fm.Related,
+		Created:      fm.Created,
+		Updated:      fm.Updated,
+		CloseReason:  fm.CloseReason,
+		Description:  strings.TrimSpace(body),
+		bodyExternal: fm.BodyExternal,
 	}
 	if fm.Closed != nil {
 		iss.Closed = *fm.Closed

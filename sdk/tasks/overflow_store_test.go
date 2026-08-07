@@ -1,0 +1,562 @@
+// Copyright 2026 Hans Kohlreiter
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+package tasks
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// L2: overflow through the real Store write/read paths, on vfs.Mem.
+
+// bigBody returns a body guaranteed to overflow, with a findable marker in it so
+// text search can be exercised against content that only exists in the sidecar.
+func bigBody(marker string) string {
+	return marker + "\n" + strings.Repeat("padding line\n", MaxInlineBody/8)
+}
+
+// readRaw returns the raw bytes of a file in the mem store.
+func readRaw(t *testing.T, s *Store, path string) []byte {
+	t.Helper()
+	data, err := s.fs.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile %s: %v", path, err)
+	}
+	return data
+}
+
+func exists(s *Store, path string) bool {
+	_, err := s.fs.Stat(path)
+	return err == nil
+}
+
+// TestOverflow_CreateSplitsBody is the core storage claim: an oversized body
+// never lands in the hot directory. The .md keeps frontmatter only, the bytes go
+// to content/<id>, and the flag says so.
+func TestOverflow_CreateSplitsBody(t *testing.T) {
+	s := newMemStore(t)
+	body := bigBody("needle-alpha")
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: body})
+
+	md := readRaw(t, s, s.filePath(iss.ID))
+	if !strings.Contains(string(md), "body_external: true") {
+		t.Fatalf("md must carry the flag, got:\n%s", md)
+	}
+	if strings.Contains(string(md), "needle-alpha") {
+		t.Fatal("the body must not be in the hot .md")
+	}
+	if len(md) > MaxInlineBody {
+		t.Fatalf("hot file must stay bounded, got %d bytes", len(md))
+	}
+
+	sidecar := readRaw(t, s, s.contentPath(iss.ID))
+	if string(sidecar) != strings.TrimSpace(body) {
+		t.Fatalf("sidecar must hold the whole body: got %d bytes, want %d", len(sidecar), len(strings.TrimSpace(body)))
+	}
+	if filepath.Base(filepath.Dir(s.contentPath(iss.ID))) != contentDirName {
+		t.Fatal("sidecar must live under content/")
+	}
+}
+
+// TestOverflow_GetResolvesTransparently: the single-issue read path hides the
+// split entirely, and what it returns is safe to Marshal (the flag is cleared,
+// so a round-trip cannot produce a file that points at a sidecar while also
+// carrying an inline body).
+func TestOverflow_GetResolvesTransparently(t *testing.T) {
+	s := newMemStore(t)
+	body := bigBody("needle-beta")
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: body})
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Description != strings.TrimSpace(body) {
+		t.Fatalf("Get must resolve the body: got %d bytes, want %d", len(got.Description), len(strings.TrimSpace(body)))
+	}
+	if got.bodyExternal {
+		t.Fatal("Get must clear the flag so the result is safe to Marshal")
+	}
+	data, err := Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), "body_external") {
+		t.Fatal("marshalling a resolved issue must not claim the body is external")
+	}
+}
+
+// TestOverflow_BulkReadsDoNotResolve pins the deliberate contract break: list
+// paths return an empty Description for an overflowed issue so that listing a
+// thousand of them can never materialize gigabytes.
+func TestOverflow_BulkReadsDoNotResolve(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-gamma")})
+
+	all, err := s.All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("want 1 issue, got %d", len(all))
+	}
+	if all[0].Description != "" {
+		t.Fatalf("bulk read must not resolve the body, got %d bytes", len(all[0].Description))
+	}
+	if !all[0].bodyExternal {
+		t.Fatal("bulk read must report that the body is external")
+	}
+
+	// ResolveBody is the explicit way back to the content.
+	if err := s.ResolveBody(all[0]); err != nil {
+		t.Fatalf("ResolveBody: %v", err)
+	}
+	if !strings.Contains(all[0].Description, "needle-gamma") {
+		t.Fatal("ResolveBody must fill in the body")
+	}
+	if all[0].bodyExternal {
+		t.Fatal("ResolveBody must clear the flag")
+	}
+
+	// And it is a harmless no-op on an issue that was never overflowed.
+	small := mustCreate(t, s, CreateInput{Title: "small", Description: "inline"})
+	if err := s.ResolveBody(small); err != nil {
+		t.Fatalf("ResolveBody on an inline issue: %v", err)
+	}
+	if small.Description != "inline" {
+		t.Fatalf("ResolveBody must not disturb an inline body, got %q", small.Description)
+	}
+	_ = iss
+}
+
+// TestOverflow_DetailResolvesAndReports: Detail is a single-issue path, so it
+// resolves like Get, and it is the one public place that still says where the
+// bytes live.
+func TestOverflow_DetailResolvesAndReports(t *testing.T) {
+	s := newMemStore(t)
+	big := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-delta")})
+	small := mustCreate(t, s, CreateInput{Title: "small", Description: "stays inline"})
+
+	d, err := s.Detail(big.ID)
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+	if !d.BodyExternal {
+		t.Fatal("Detail must report an external body")
+	}
+	if !strings.Contains(d.Description, "needle-delta") {
+		t.Fatal("Detail must resolve the body")
+	}
+
+	d2, err := s.Detail(small.ID)
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+	if d2.BodyExternal {
+		t.Fatal("an inline issue must not report an external body")
+	}
+}
+
+// TestOverflow_UpdateHysteresis walks a body down through the band and out the
+// bottom, checking the layout changes only where it should — and that the stale
+// sidecar is actually removed on the way back inline.
+func TestOverflow_UpdateHysteresis(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-eps")})
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("setup: expected an external body")
+	}
+
+	// Shrink into the band (below the cap, above the floor): stays external.
+	inBand := strings.Repeat("b", (MaxInlineBody+joinInlineBody)/2)
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Description: &inBand})); err != nil {
+		t.Fatalf("Update into band: %v", err)
+	}
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("a body inside the hysteresis band must stay external")
+	}
+	md := readRaw(t, s, s.filePath(iss.ID))
+	if !strings.Contains(string(md), "body_external: true") {
+		t.Fatal("flag must still be set while in the band")
+	}
+
+	// Shrink below the floor: rejoins, and the sidecar is gone.
+	small := "small again"
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Description: &small})); err != nil {
+		t.Fatalf("Update below floor: %v", err)
+	}
+	if exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("the stale sidecar must be removed once the body is inline again")
+	}
+	md = readRaw(t, s, s.filePath(iss.ID))
+	if strings.Contains(string(md), "body_external") {
+		t.Fatal("flag must be cleared once the body is inline")
+	}
+	if !strings.Contains(string(md), "small again") {
+		t.Fatal("body must be back in the .md")
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Description != "small again" {
+		t.Fatalf("body after rejoin = %q", got.Description)
+	}
+}
+
+// TestOverflow_UpdateGrowsIntoSidecar covers the other direction: an ordinary
+// small issue that later grows past the cap.
+func TestOverflow_UpdateGrowsIntoSidecar(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "starts small", Description: "tiny"})
+	if exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("setup: a small issue must not have a sidecar")
+	}
+
+	body := bigBody("needle-grow")
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Description: &body})); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("growing past the cap must create the sidecar")
+	}
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !strings.Contains(got.Description, "needle-grow") {
+		t.Fatal("body must survive the split")
+	}
+}
+
+// TestOverflow_UpdateOtherFieldsKeepsBody guards the case that would silently
+// destroy data: touching an unrelated field on an overflowed issue must not
+// truncate its body or orphan its sidecar.
+func TestOverflow_UpdateOtherFieldsKeepsBody(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-keep")})
+
+	title := "renamed"
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &title})); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Title != "renamed" {
+		t.Fatalf("title = %q", got.Title)
+	}
+	if !strings.Contains(got.Description, "needle-keep") {
+		t.Fatal("body must survive an unrelated field update")
+	}
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("sidecar must still exist")
+	}
+}
+
+// TestOverflow_CloseKeepsSidecarInPlace: only the .md moves to closed/, exactly
+// like the comment sidecar rule. The body stays reachable afterwards.
+func TestOverflow_CloseKeepsSidecarInPlace(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-close")})
+
+	if _, err := unwrap(s.Close(iss.ID, "done")); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if exists(s, s.filePath(iss.ID)) {
+		t.Fatal("the .md must leave the hot directory")
+	}
+	if !exists(s, s.closedFilePath(iss.ID)) {
+		t.Fatal("the .md must land in closed/")
+	}
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("the content sidecar must stay in content/ (only the .md moves)")
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get after close: %v", err)
+	}
+	if !strings.Contains(got.Description, "needle-close") {
+		t.Fatal("a closed issue's body must still resolve")
+	}
+
+	// And back again.
+	if _, err := unwrap(s.Reopen(iss.ID)); err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	if !exists(s, s.contentPath(iss.ID)) {
+		t.Fatal("sidecar must survive a reopen")
+	}
+	got, err = s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !strings.Contains(got.Description, "needle-close") {
+		t.Fatal("body must survive a reopen")
+	}
+}
+
+// TestOverflow_OrphanSidecarIsInert is the crash-safety claim. A sidecar left
+// behind by an interrupted write must never override the .md — that is exactly
+// what the flag buys, and without it a stale file would silently resurrect an
+// older body.
+func TestOverflow_OrphanSidecarIsInert(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "inline", Description: "the real body"})
+
+	// Simulate the debris of a crash between the sidecar write and the .md write.
+	if err := s.fs.MkdirAll(s.contentDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := s.fs.WriteAtomic(s.contentPath(iss.ID), []byte("STALE ORPHAN CONTENT"), 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Description != "the real body" {
+		t.Fatalf("an orphan sidecar must be ignored, got %q", got.Description)
+	}
+
+	d, err := s.Detail(iss.ID)
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+	if d.BodyExternal || d.Description != "the real body" {
+		t.Fatal("Detail must ignore an orphan sidecar too")
+	}
+}
+
+// TestOverflow_QueryTextReadsSidecars: the text virtual field spans the body, so
+// an expression using it must see overflowed content — otherwise a large issue
+// is silently unmatchable.
+func TestOverflow_QueryTextReadsSidecars(t *testing.T) {
+	s := newMemStore(t)
+	big := mustCreate(t, s, CreateInput{Title: "big one", Description: bigBody("zebrafish")})
+	mustCreate(t, s, CreateInput{Title: "small one", Description: "nothing here"})
+
+	got, err := s.Query(`text ~ "zebrafish"`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != big.ID {
+		t.Fatalf("text query must match content only present in the sidecar, got %d matches", len(got))
+	}
+	// The match is returned unresolved: evaluating a predicate must not change
+	// what a bulk read hands back (SDK-SPEC §4).
+	if got[0].Description != "" {
+		t.Fatalf("a matched issue must still come back unresolved, got %d bytes", len(got[0].Description))
+	}
+
+	// The same search through the free-text entry point must agree exactly.
+	viaSearch, err := s.Query(SearchExpr("zebrafish"))
+	if err != nil {
+		t.Fatalf("Query(SearchExpr): %v", err)
+	}
+	if len(viaSearch) != 1 || viaSearch[0].ID != big.ID {
+		t.Fatalf("search and a raw text expression must agree, got %d matches", len(viaSearch))
+	}
+}
+
+// TestOverflow_QueryWithoutTextSkipsSidecars: structured filters never look at a
+// body, so they must not pay to read one. A missing sidecar would surface as an
+// error if the query path read it, so removing it is a usable probe.
+func TestOverflow_QueryWithoutTextSkipsSidecars(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-skip")})
+
+	if err := s.fs.Remove(s.contentPath(iss.ID)); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	got, err := s.Query(`status == "open"`)
+	if err != nil {
+		t.Fatalf("a structured query must not touch content sidecars: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 match, got %d", len(got))
+	}
+
+	// A text query, by contrast, genuinely needs the body and now cannot read it.
+	if _, err := s.Query(`text ~ "anything"`); err == nil {
+		t.Fatal("a text query must surface a missing sidecar rather than silently miss")
+	}
+}
+
+// TestDocs_ExcludedFromReadyAndBlocked: a document is not work. It must never
+// appear as ready or blocked, through either the engine methods or the query
+// predicates that ask the same question.
+func TestDocs_ExcludedFromReadyAndBlocked(t *testing.T) {
+	s := newMemStore(t)
+	task := mustCreate(t, s, CreateInput{Title: "real work", Type: TypeTask})
+	doc := mustCreate(t, s, CreateInput{Title: "design page", Type: TypeDoc})
+
+	ready, err := s.Ready()
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != task.ID {
+		t.Fatalf("Ready must contain only the task, got %d issues", len(ready))
+	}
+
+	// The `ready` query predicate must agree with Store.Ready.
+	viaQuery, err := s.Query("ready")
+	if err != nil {
+		t.Fatalf("Query(ready): %v", err)
+	}
+	if len(viaQuery) != 1 || viaQuery[0].ID != task.ID {
+		t.Fatalf("the ready predicate must agree with Ready(), got %d", len(viaQuery))
+	}
+
+	// Blocked: give both a blocker so only the type distinguishes them.
+	blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
+	if err := s.AddDep(task.ID, blocker.ID); err != nil {
+		t.Fatalf("AddDep: %v", err)
+	}
+	if err := s.AddDep(doc.ID, blocker.ID); err != nil {
+		t.Fatalf("AddDep: %v", err)
+	}
+	blocked, err := s.Blocked()
+	if err != nil {
+		t.Fatalf("Blocked: %v", err)
+	}
+	if len(blocked) != 1 || blocked[0].Issue.ID != task.ID {
+		t.Fatalf("Blocked must contain only the task, got %d", len(blocked))
+	}
+	viaQuery, err = s.Query("blocked")
+	if err != nil {
+		t.Fatalf("Query(blocked): %v", err)
+	}
+	if len(viaQuery) != 1 || viaQuery[0].ID != task.ID {
+		t.Fatalf("the blocked predicate must agree with Blocked(), got %d", len(viaQuery))
+	}
+}
+
+// TestDocs_StillListedAndSearchable: docs are excluded from work views only.
+// They remain ordinary issues everywhere else.
+func TestDocs_StillListedAndSearchable(t *testing.T) {
+	s := newMemStore(t)
+	doc := mustCreate(t, s, CreateInput{
+		Title:       "auth redesign",
+		Type:        TypeDoc,
+		Labels:      []string{"kind:design"},
+		Description: "the redesign covers token refresh",
+	})
+
+	all, err := s.All()
+	if err != nil {
+		t.Fatalf("All: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != doc.ID {
+		t.Fatal("a doc must still appear in All")
+	}
+
+	got, err := s.Query(`text ~ "refresh"`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatal("a doc must still be searchable")
+	}
+
+	got, err = s.Query(`type == "doc" && label ~ "kind:design"`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatal("a doc must be selectable by type and label")
+	}
+}
+
+// TestOverflow_ImportSplitsInBothPartitions: Import is a separate public write
+// path that lands an issue directly in either partition, so it must apply
+// overflow in both — otherwise a bulk import would be the one way to get an
+// oversized file into the hot directory.
+func TestOverflow_ImportSplitsInBothPartitions(t *testing.T) {
+	s := newMemStore(t)
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	openID := "agt-imp001"
+	if _, err := unwrap(s.Import(ImportInput{
+		ID: openID, Title: "imported open", Status: StatusOpen, Type: TypeDoc,
+		Description: bigBody("needle-imp-open"), Created: now, Updated: now,
+	})); err != nil {
+		t.Fatalf("Import open: %v", err)
+	}
+	if !exists(s, s.contentPath(openID)) {
+		t.Fatal("an imported open issue must overflow like any other")
+	}
+	if exists(s, s.filePath(openID)) {
+		md := readRaw(t, s, s.filePath(openID))
+		if len(md) > MaxInlineBody {
+			t.Fatalf("imported hot file must stay bounded, got %d bytes", len(md))
+		}
+	}
+
+	closedID := "agt-imp002"
+	if _, err := unwrap(s.Import(ImportInput{
+		ID: closedID, Title: "imported closed", Status: StatusClosed, Type: TypeTask,
+		Description: bigBody("needle-imp-closed"), Created: now, Updated: now, Closed: now,
+	})); err != nil {
+		t.Fatalf("Import closed: %v", err)
+	}
+	if !exists(s, s.contentPath(closedID)) {
+		t.Fatal("an imported closed issue must overflow too")
+	}
+	if !exists(s, s.closedFilePath(closedID)) {
+		t.Fatal("an imported closed issue must land in closed/")
+	}
+
+	for _, id := range []string{openID, closedID} {
+		got, err := s.Get(id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if !strings.Contains(got.Description, "needle-imp") {
+			t.Fatalf("imported body must resolve for %s", id)
+		}
+	}
+}
+
+// TestComments_CapEnforcedThroughStore: the cap is enforced on the real write
+// path, not just in the pure validator.
+func TestComments_CapEnforcedThroughStore(t *testing.T) {
+	s := newMemStore(t)
+	iss := mustCreate(t, s, CreateInput{Title: "issue"})
+
+	if _, err := s.AddComment(iss.ID, "hans", strings.Repeat("c", MaxCommentBody+1)); err == nil {
+		t.Fatal("an oversized comment must be rejected")
+	}
+	if _, err := s.AddComment(iss.ID, "hans", "a normal comment"); err != nil {
+		t.Fatalf("a normal comment must still be accepted: %v", err)
+	}
+	// The rejected comment must not have been written.
+	cs, err := s.Comments(iss.ID)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if len(cs) != 1 {
+		t.Fatalf("want exactly the accepted comment, got %d", len(cs))
+	}
+}

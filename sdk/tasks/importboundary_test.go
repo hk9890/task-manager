@@ -100,6 +100,7 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"comments.go": true,
 		"config.go":   true, // global config loader (env/vfs seams)
 		"registry.go": true, // central registry + Resolve/Stores/InitCentral
+		"content.go":  true, // body-overflow sidecar I/O (rule itself is in overflow.go)
 	}
 
 	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"

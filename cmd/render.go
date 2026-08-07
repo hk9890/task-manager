@@ -23,6 +23,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
@@ -103,7 +104,11 @@ type commentDTO struct {
 
 type detailDTO struct {
 	issueDTO
-	Description   string       `json:"description,omitempty"`
+	Description string `json:"description,omitempty"`
+	// BodyExternal reports that the body came from the content sidecar rather
+	// than the .md (TASK-STORAGE-SPEC §4.6). Description is fully resolved either
+	// way; this only says where the bytes live.
+	BodyExternal  bool         `json:"body_external,omitempty"`
 	ParentRef     *refDTO      `json:"parent_ref,omitempty"`
 	BlockedByRefs []refDTO     `json:"blocked_by_refs,omitempty"`
 	RelatedRefs   []refDTO     `json:"related_refs,omitempty"`
@@ -149,6 +154,7 @@ func toDetailDTO(d *tasks.Detail) detailDTO {
 	out := detailDTO{
 		issueDTO:      toIssueDTO(&d.Issue),
 		Description:   d.Description,
+		BodyExternal:  d.BodyExternal,
 		BlockedByRefs: toRefDTOs(d.BlockedByRefs),
 		RelatedRefs:   toRefDTOs(d.RelatedRefs),
 		Blocks:        toRefDTOs(d.Blocks),
@@ -207,9 +213,7 @@ func printDetail(d *tasks.Detail) {
 		}
 		fmt.Println()
 	}
-	if strings.TrimSpace(d.Description) != "" {
-		fmt.Printf("\n%s\n", d.Description)
-	}
+	printBody(d)
 	if len(d.Comments) > 0 {
 		fmt.Printf("\nComments (%d):\n", len(d.Comments))
 		for _, c := range d.Comments {
@@ -220,6 +224,43 @@ func printDetail(d *tasks.Detail) {
 			fmt.Printf("  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
 		}
 	}
+}
+
+// showBodyLimit bounds how much of a body the human renderer prints. Bodies are
+// unbounded — an issue may legitimately hold a generated HTML page or a long
+// migration plan — and dumping megabytes into a terminal is not a useful default.
+// JSON output is never truncated: a script or an agent asked for the whole thing.
+const showBodyLimit = 4096
+
+// printBody renders the issue body, truncated for humans. The truncation notice
+// says where the untruncated content is, so the output is a pointer rather than
+// a dead end.
+func printBody(d *tasks.Detail) {
+	body := d.Description
+	if strings.TrimSpace(body) == "" {
+		return
+	}
+	if len(body) <= showBodyLimit {
+		fmt.Printf("\n%s\n", body)
+		return
+	}
+	fmt.Printf("\n%s\n", truncateRunes(body, showBodyLimit))
+	where := "--json for the full body"
+	if d.BodyExternal {
+		where = fmt.Sprintf("full content in %s/%s, or --json", "content", d.ID)
+	}
+	fmt.Printf("\n[body is %d bytes; showing the first %d — %s]\n", len(body), showBodyLimit, where)
+}
+
+// truncateRunes cuts s to at most n bytes without splitting a UTF-8 rune.
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 func printRefLine(label string, refs []tasks.Ref) {

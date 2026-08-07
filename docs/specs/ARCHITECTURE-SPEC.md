@@ -116,7 +116,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 
 ### Imperative-shell files (may import `internal/vfs` / `internal/env`)
 
-A **closed set of four files**; every other non-test file in `sdk/tasks` is pure core
+A **closed set of five files**; every other non-test file in `sdk/tasks` is pure core
 by definition, so a new file is pure core unless it is added to the guard's
 `imperativeShell` map.
 
@@ -124,6 +124,7 @@ by definition, so a new file is pure core unless it is added to the guard's
 |---|---|
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+| `content.go` | Body-overflow sidecar I/O: the two-file write ordering, sidecar read/removal, `ResolveBody` (TASK-STORAGE-SPEC §4.6). The rule it applies is pure and lives in `overflow.go`. |
 | `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
 
 ### Pure-core files (no filesystem access)
@@ -137,6 +138,7 @@ enforces: no `os`, no `internal/vfs`. `hookrun.go` and `log.go` reach the
 | `model.go` | `Issue`, `Comment`, `Ref`, `Detail`; status/type enums; priority bounds. |
 | `ids.go` | `idStem` + `newIDFromNames`: collision-resistant base36 ID allocation over a name list. |
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
+| `overflow.go` | The body-overflow rule: the split/join watermarks (`layoutFor`) and rendering an issue into its `.md` and sidecar halves (`renderForWrite`). Decides from a byte count and a bool; the I/O is in `content.go`. |
 | `validate.go` | Single-issue field invariants. |
 | `ready.go` | Ready/blocked, cycle detection, listing (sort/limit), detail resolution. |
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
@@ -187,7 +189,11 @@ enforced:
    gates: the first hook that denies or errors aborts the mutation — the lock is
    released and nothing is written.
 5. **Write atomically**: temp file + `fsync` + `rename` over the target (the
-   append-only comment sidecar is the one exception — `O_APPEND` + `fsync`).
+   append-only comment sidecar is the one exception — `O_APPEND` + `fsync`). A
+   body that overflows writes a second file, the content sidecar; each write is
+   individually atomic but the pair is not a transaction, so the order is fixed
+   to make every crash point readable
+   ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §4.6).
 6. **Release the lock.**
 7. **Run post-hooks** outside the lock ([HOOK-SPEC.md](HOOK-SPEC.md) §4): non-vetoing
    notifications that cannot change the committed outcome.
@@ -208,6 +214,14 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 - **No counter file.** IDs are random base36 tokens checked against existing IDs,
   avoiding both a shared mutable counter (a git merge hotspot) and the
   parallel-branch ID collisions that sequential numbering caused.
+- **Bounded hot files.** Every issue file the engine writes stays under ~64 KiB:
+  a larger body moves to a content sidecar
+  ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §4.6). Since the hot scan reads
+  whole files, this makes its cost a function of how many issues are open, not of
+  what anyone pasted into one. A file written *before* overflow existed keeps its
+  inline body until its next mutation, which then splits it; the legacy
+  inline-comment migration rewrites such a file faithfully rather than reshaping
+  it, so nothing is silently rewritten on a read path.
 - **Hot/cold separation.** Active issues and closed history are physically
   separated so the common path stays proportional to open work, not total history.
   The partition axis is **open-vs-closed only** — deferred or long-parked issues
@@ -236,7 +250,11 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 
 Deliberately out of scope, because they are unused weight:
 
-- memories / notes-as-knowledge, "prime"-style context dumps;
+- a **knowledge base**: no retrieval layer, no indexing, no embedding, no
+  "prime"-style context assembly. `type: doc` stores a document *as an issue* —
+  it gets an ID, a lifecycle, `related` edges, and the same query language as
+  everything else, and nothing more. The store holds documents; it does not
+  interpret them, rank them, or feed them to anything;
 - external tracker integrations (Jira, Linear, GitHub);
 - a database or SQL backend; a sync engine or federation;
 - swarms, configurable status/type catalogs, and **policy baked into the core** — rules

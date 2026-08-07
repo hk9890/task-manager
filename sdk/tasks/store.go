@@ -374,15 +374,17 @@ func (s *Store) getMutable(id string) (*Issue, error) {
 
 // Get loads a single issue by ID. It first looks in the hot directory and
 // falls through to closed/ when the file is absent from the hot set.
+//
+// An overflowed body is resolved transparently: the returned issue always
+// carries its full Description, wherever the bytes were stored, and its internal
+// flag is cleared so the result is safe to hand to Marshal. This is the single-
+// issue path; the bulk read paths deliberately do not resolve (SDK-SPEC §4) —
+// use ResolveBody on an issue that came from one of those.
 func (s *Store) Get(id string) (*Issue, error) {
 	// Try the hot directory first.
 	data, err := s.fs.ReadFile(s.filePath(id))
 	if err == nil {
-		iss, err := Unmarshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", id, err)
-		}
-		return iss, nil
+		return s.parseAndResolve(id, data)
 	}
 	if !vfs.IsNotExist(err) {
 		return nil, err
@@ -395,9 +397,18 @@ func (s *Store) Get(id string) (*Issue, error) {
 		}
 		return nil, err
 	}
+	return s.parseAndResolve(id, data)
+}
+
+// parseAndResolve unmarshals an issue file and fills in an overflowed body from
+// the content sidecar.
+func (s *Store) parseAndResolve(id string, data []byte) (*Issue, error) {
 	iss, err := Unmarshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", id, err)
+	}
+	if err := s.resolveBody(iss); err != nil {
+		return nil, err
 	}
 	return iss, nil
 }
@@ -592,11 +603,9 @@ func (s *Store) writeIssue(iss *Issue) error {
 	if inClosed {
 		return fmt.Errorf("%w: %s", ErrImmutable, iss.ID)
 	}
-	data, err := Marshal(iss)
-	if err != nil {
-		return err
-	}
-	return s.fs.WriteAtomic(s.filePath(iss.ID), data, 0o644)
+	return s.writeFiles(iss, func(md []byte) error {
+		return s.fs.WriteAtomic(s.filePath(iss.ID), md, 0o644)
+	})
 }
 
 // withLock runs fn while holding both the in-process mutex and the advisory
@@ -960,12 +969,19 @@ func (s *Store) closeMove(iss *Issue) error {
 	if err := s.fs.MkdirAll(s.closedDir(), 0o755); err != nil {
 		return fmt.Errorf("create closed dir: %w", err)
 	}
-	// Step 2: write the closed-state content directly to closed/<id>.md.
-	data, err := Marshal(iss)
-	if err != nil {
-		return err
-	}
-	closedPath := s.closedFilePath(iss.ID)
+	// Steps 2-4 write the .md; the body sidecar, if any, is written first and
+	// stays in content/ regardless of partition — only the .md moves on close
+	// (TASK-STORAGE-SPEC §4.6, mirroring the comment sidecar rule in §4.4.6).
+	return s.writeFiles(iss, func(data []byte) error {
+		return s.closeMoveMD(iss.ID, data)
+	})
+}
+
+// closeMoveMD performs steps 2-4 of the close: write the closed-state content to
+// closed/<id>.md, write it to the hot path, then rename hot over closed so git
+// records a rename rather than a delete plus an add.
+func (s *Store) closeMoveMD(id string, data []byte) error {
+	closedPath := s.closedFilePath(id)
 	if err := s.fs.WriteAtomic(closedPath, data, 0o644); err != nil {
 		return err
 	}
@@ -975,7 +991,7 @@ func (s *Store) closeMove(iss *Issue) error {
 	// step 3 replaces it with the original-path-named file. To preserve both the
 	// updated content AND the git rename, we write the updated content to the
 	// hot-dir file first and then rename it over the closed/ file.
-	hotPath := s.filePath(iss.ID)
+	hotPath := s.filePath(id)
 	if err := s.fs.WriteAtomic(hotPath, data, 0o644); err != nil {
 		// Hot-dir write failed; closed/ already has the new content. Return the
 		// error; Get will fall through to closed/ and find the closed issue.
@@ -1037,14 +1053,12 @@ func (s *Store) Reopen(id string) (*MutationResult, error) {
 func (s *Store) reopenWrite(iss *Issue) error {
 	src := s.closedFilePath(iss.ID)
 	dst := s.filePath(iss.ID)
-	data, err := Marshal(iss)
-	if err != nil {
-		return err
-	}
-	if err := s.fs.WriteAtomic(src, data, 0o644); err != nil {
-		return err
-	}
-	return s.fs.Rename(src, dst)
+	return s.writeFiles(iss, func(data []byte) error {
+		if err := s.fs.WriteAtomic(src, data, 0o644); err != nil {
+			return err
+		}
+		return s.fs.Rename(src, dst)
+	})
 }
 
 // Comments returns the resolved effective comment log for an issue: each
