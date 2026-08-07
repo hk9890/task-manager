@@ -17,10 +17,15 @@
 package tasks
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // L2: overflow through the real Store write/read paths, on vfs.Mem.
@@ -536,6 +541,108 @@ func TestOverflow_ImportSplitsInBothPartitions(t *testing.T) {
 		if !strings.Contains(got.Description, "needle-imp") {
 			t.Fatalf("imported body must resolve for %s", id)
 		}
+	}
+}
+
+// TestOverflow_SidecarFailureLogsIOError: a body write now touches a second
+// file, so the MONITORING.md contract — "nothing fails silently", every failed
+// store write emits io_error with op and issue — has to hold for the content
+// sidecar too, not just the .md. The sidecar write happens inside the same
+// gated closure, so the existing call sites cover it; this pins that rather
+// than assuming it.
+func TestOverflow_SidecarFailureLogsIOError(t *testing.T) {
+	cases := []struct {
+		name   string
+		op     string
+		mutate func(s *Store, target *Issue) error
+	}{
+		{"create", "create", nil}, // handled inline below
+		{"update", "update", func(s *Store, target *Issue) error {
+			body := bigBody("needle-io-update")
+			_, err := unwrap(s.Update(target.ID, UpdateInput{Description: &body}))
+			return err
+		}},
+		{"dep add", "dep_add", nil}, // handled inline below
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			m := vfs.NewMem()
+			s, err := InitWithVFS("/", "x", m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.logger = lg
+
+			var target *Issue
+			var mutate func() error
+
+			switch c.op {
+			case "create":
+				mutate = func() error {
+					_, err := unwrap(s.Create(CreateInput{Title: "big", Description: bigBody("needle-io-create")}))
+					return err
+				}
+			case "update":
+				target = mustCreate(t, s, CreateInput{Title: "small", Description: "tiny"})
+				mutate = func() error { return c.mutate(s, target) }
+			case "dep_add":
+				// An overflowed issue whose sidecar is rewritten by a non-transition
+				// edit: the op must be dep_add, not a transition name.
+				target = mustCreate(t, s, CreateInput{Title: "big", Description: bigBody("needle-io-dep")})
+				other := mustCreate(t, s, CreateInput{Title: "other"})
+				mutate = func() error { return s.AddDep(target.ID, other.ID) }
+			}
+
+			buf.Reset()
+			m.FailOn("WriteAtomic", filepath.Join(s.contentDir(), "*"), errors.New("simulated disk full"))
+			if err := mutate(); err == nil {
+				t.Fatal("a failed content-sidecar write must fail the mutation")
+			}
+
+			rec := find(records(t, &buf), "io_error")
+			if rec == nil {
+				t.Fatal("a failed content-sidecar write must emit an io_error record")
+			}
+			if rec["op"] != c.op {
+				t.Errorf("op = %v, want %v", rec["op"], c.op)
+			}
+			if rec["error"] == nil || rec["error"] == "" {
+				t.Error("io_error must carry the underlying error")
+			}
+			if target != nil && rec["issue"] != target.ID {
+				t.Errorf("issue = %v, want %v", rec["issue"], target.ID)
+			}
+		})
+	}
+}
+
+// TestOverflow_SidecarFailureLeavesIssueReadable: when the sidecar write fails,
+// the .md is never written, so the issue keeps its previous body rather than
+// being left pointing at content that does not exist.
+func TestOverflow_SidecarFailureLeavesIssueReadable(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := InitWithVFS("/", "x", m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss := mustCreate(t, s, CreateInput{Title: "small", Description: "ORIGINAL BODY"})
+
+	body := bigBody("never-lands")
+	m.FailOn("WriteAtomic", filepath.Join(s.contentDir(), "*"), errors.New("simulated disk full"))
+	if _, err := unwrap(s.Update(iss.ID, UpdateInput{Description: &body})); err == nil {
+		t.Fatal("expected the injected fault to fail the update")
+	}
+
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("the issue must still be readable after a failed sidecar write: %v", err)
+	}
+	if got.Description != "ORIGINAL BODY" {
+		t.Fatalf("body = %q, want the previous body intact", got.Description)
 	}
 }
 
