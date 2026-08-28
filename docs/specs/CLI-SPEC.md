@@ -259,7 +259,7 @@ Append one hook to the file's `hooks` block.
 |---|---|---|
 | `--event <e>` | — | **Required.** One of the eight events (HOOK-SPEC §2). |
 | `--run <arg>` | — | **Required, repeatable.** One argv element per occurrence. |
-| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file. |
+| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file and must not contain `#` (HOOK-SPEC §3.2); either violation exits `1` and writes nothing. |
 | `--when <expr>` | — | Filter expression (QUERY-SPEC) scoping the hook to matching issues. |
 
 `--run` is repeatable rather than a single string because hooks are executed directly via
