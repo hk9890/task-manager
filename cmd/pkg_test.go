@@ -256,3 +256,156 @@ func TestPackageList_MarksAShadowedEntry(t *testing.T) {
 		t.Errorf("hook list = %q, want the shadowed package's hook to run once", chain)
 	}
 }
+
+// ── what the review reproduced ──────────────────────────────────────────────
+
+// CLI-SPEC §2.3 says the package is "loaded and checked before the entry is
+// written". It was written first, so a package that wedges every mutation was
+// added with exit 0 and no warning — and, from a store config, travelled to
+// every colleague in git.
+func TestPackageAdd_RefusesAnUnusablePackageBeforeWriting(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+	writeCmdPackage(t, storeDataDir(root), "bad", `hooks:
+  - id: nope
+    event: not-an-event
+    run: ["true"]
+`)
+
+	_, errOut, code := run(t, "--dir", root, "package", "add", "--path", "packages/bad")
+	if code == 0 {
+		t.Fatal("a package whose hooks do not compile must be refused")
+	}
+	if !strings.Contains(errOut, "not-an-event") {
+		t.Errorf("stderr = %q, want the reason", errOut)
+	}
+	out, _, _ := run(t, "--dir", root, "package", "list")
+	if !strings.Contains(out, "no packages configured") {
+		t.Errorf("package list = %q, want nothing written", out)
+	}
+	// The store is still writable, which is the point of refusing.
+	if _, _, code := run(t, "--dir", root, "create", "--title", "x"); code != 0 {
+		t.Errorf("create must still work, exit %d", code)
+	}
+}
+
+// A relative path entry promises the package travels with the file. One that
+// reaches outside breaks for every colleague the moment the file is committed.
+func TestPackageAdd_RefusesAPathThatLeavesTheStore(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+
+	_, errOut, code := run(t, "--dir", root, "package", "add", "--path", "../../outside")
+	if code == 0 {
+		t.Fatal("a relative path leaving the config directory must be refused")
+	}
+	if !strings.Contains(errOut, "leaves the directory") {
+		t.Errorf("stderr = %q, want it to say why", errOut)
+	}
+}
+
+// `package list` and `hook list` are what a reader reaches for when writes have
+// stopped, so they must not report a wedged store as healthy.
+func TestPackageList_ReportsAnUnusablePackageBroken(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+	writeCmdPackage(t, storeDataDir(root), "bad", `hooks:
+  - id: nope
+    event: not-an-event
+    run: ["true"]
+`)
+	// Written by hand, the way a bad entry actually arrives: in git, from a
+	// machine where it was fine, or from an edit.
+	cfg := filepath.Join(storeDataDir(root), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("prefix: tst\nuse:\n    - path: packages/bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "--dir", root, "package", "list")
+	if code != 0 {
+		t.Fatalf("package list must work when writes do not: exit %d", code)
+	}
+	if !strings.Contains(out, "broken") || !strings.Contains(out, "not-an-event") {
+		t.Errorf("package list = %q, want it broken and the reason shown", out)
+	}
+	if _, _, code := run(t, "--dir", root, "create", "--title", "x"); code == 0 {
+		t.Error("the bad package must still fail the write")
+	}
+}
+
+// A failing per-user entry used to truncate the listing, dropping every store
+// row — in exactly the state where the reader needs them.
+func TestPackageList_ShowsStoreRowsWhenAGlobalEntryFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	root := newStore(t)
+	writeCmdPackage(t, storeDataDir(root), "good", `hooks:
+  - id: g
+    event: pre-create
+    run: ["/bin/true"]
+`)
+	if _, _, code := run(t, "--dir", root, "package", "add", "--path", "packages/good"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+	// A per-user entry naming a package nobody installed.
+	gcfg := filepath.Join(home, "config.yaml")
+	if err := os.WriteFile(gcfg, []byte("version: 1\nuse:\n    - name: ghost\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := run(t, "--dir", root, "package", "list")
+	if code != 0 {
+		t.Fatalf("package list: exit %d", code)
+	}
+	if !strings.Contains(out, "ghost") {
+		t.Errorf("package list = %q, want the missing per-user entry", out)
+	}
+	if !strings.Contains(out, "good") {
+		t.Errorf("package list = %q, want the store row kept despite the failing global one", out)
+	}
+}
+
+// Several spellings of one directory are one package. Writing them all left
+// entries that contribute nothing, with no verb to remove them.
+func TestPackageAdd_RefusesTheSameDirectorySpeltDifferently(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+	writeCmdPackage(t, storeDataDir(root), "p", `hooks:
+  - id: g
+    event: pre-create
+    run: ["/bin/true"]
+`)
+	if _, _, code := run(t, "--dir", root, "package", "add", "--path", "packages/p"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+	for _, spelling := range []string{"./packages/p", "packages/p/"} {
+		_, errOut, code := run(t, "--dir", root, "package", "add", "--path", spelling)
+		if code == 0 {
+			t.Errorf("%q names the same directory and must be refused", spelling)
+		} else if !strings.Contains(errOut, "already") {
+			t.Errorf("%q: stderr = %q", spelling, errOut)
+		}
+	}
+}
+
+// A hand-edited `- doc-policy` is the obvious thing to write. Failing the decode
+// on it broke every command, including both documented recovery paths.
+func TestPackageList_ScalarUseEntryKeepsReadsWorking(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+	cfg := filepath.Join(storeDataDir(root), "config.yaml")
+	if err := os.WriteFile(cfg, []byte("prefix: tst\nuse:\n  - doc-policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, errOut, code := run(t, "--dir", root, "list"); code != 0 {
+		t.Errorf("list must still work: exit %d, stderr %q", code, errOut)
+	}
+	out, _, code := run(t, "--dir", root, "package", "list")
+	if code != 0 {
+		t.Fatalf("package list must still work: exit %d", code)
+	}
+	if !strings.Contains(out, "broken") || !strings.Contains(out, "name: doc-policy") {
+		t.Errorf("package list = %q, want it broken and the mapping form shown", out)
+	}
+}

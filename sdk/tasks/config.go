@@ -208,6 +208,16 @@ func SaveGlobalConfig(cfg GlobalConfig) error {
 	})
 }
 
+// InspectGlobalPackage reports what one `use:` entry would resolve to in the
+// per-user config, without writing it (CONFIG-SPEC §2). It needs no store.
+func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) {
+	home, err := taskmgrHome(env.NewOS())
+	if err != nil {
+		return PackageInfo{}, err
+	}
+	return inspectRef(vfs.NewOS(), ref, home, home, scopeGlobal), nil
+}
+
 // GlobalConfigPath returns the absolute path of the per-user config file
 // (CONFIG-SPEC §1/§2), whether or not it exists. Callers report it in errors and
 // in `taskmgr config list --global`.

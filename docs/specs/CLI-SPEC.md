@@ -186,12 +186,13 @@ required, and they are mutually exclusive.
   across a symlink). `--dir`/`-C` is made absolute against the working directory before
   it is recorded.
 - A store keeps its `config.yaml` verbatim across all three modes, so the ID prefix and
-  the hooks block travel with it and existing IDs stay valid. **Hook argv paths are not
-  rewritten**: hooks run with the working directory set to the project root
-  ([HOOK-SPEC](HOOK-SPEC.md) §3.2), which `--central` does not change, so a hook whose
-  argv points into `.tasks` stops resolving once the store leaves the project. Such
-  hooks must be rewritten to an absolute path or to `["sh", "-c",
-  "$TASKMGR_STORE/…"]`.
+  the `use:` list travel with it and existing IDs stay valid. A package the store holds
+  by path — under `.tasks/packages/` — moves with the tree, and its hooks' relative
+  `argv[0]` resolves against wherever the package now is
+  ([HOOK-SPEC](HOOK-SPEC.md) §3.6), so a gate that shipped with the repository keeps
+  working after a promote. What does **not** follow the store is a `name:` entry, which
+  resolves per machine, or an argv path a hook builds itself at run time from its working
+  directory — that is still the project root, which the move does not change.
 - **Output:** the store name, store path, and project path (`storeMoveDTO` in JSON, §6).
 
 ---

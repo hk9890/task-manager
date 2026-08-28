@@ -15,6 +15,7 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   list · mutation · transition · import · config · registry · resolve
   query · criteria · search  (query surface)
   hooks · hookrun · hookpayload  (lifecycle gates)
+  packages · packageload         (hook packages: the format, and reading one)
   log · doc
   internal/query/           pure filter-expression engine: lex · parse · ast · eval · errors
   internal/vfs/             the disk seam: FS interface · osFS (prod) · Mem (test + faults)

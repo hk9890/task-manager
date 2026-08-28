@@ -105,12 +105,12 @@ var storeMoveCmd = &cobra.Command{
   --relink    Re-point the registry entry named --to at this directory, for a
               project that moved on disk. No files are touched.
 
-The store's config.yaml moves verbatim, so its ID prefix and hooks block are
-kept and existing IDs stay valid. Note that hooks run with the working directory
-set to the *project* root, which --central does not change: a hook whose argv is
-a path into .tasks (["\.tasks/validators/check.sh"]) stops resolving once the
-store leaves the project, so rewrite such hooks to an absolute path or to
-["sh", "-c", "$TASKMGR_STORE/validators/check.sh"]. See CONFIG-SPEC §5.`,
+The store's config.yaml moves verbatim, so its ID prefix and use: list are kept
+and existing IDs stay valid. A hook package the store holds by path, under
+.tasks/packages/, moves with it and keeps working: a relative argv[0] resolves
+against the package wherever it now sits. Hooks still run with the working
+directory set to the *project* root, which --central does not change, so a path a
+hook builds at run time is the one thing to check. See CONFIG-SPEC §5.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate the mode here rather than with cobra's flag groups: those

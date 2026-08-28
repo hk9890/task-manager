@@ -22,6 +22,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,11 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
+
+// ErrPackageMissing reports a `use:` entry whose package directory is not there,
+// as opposed to one that is there but unusable. Callers match it with errors.Is
+// to tell "install this" apart from "repair this".
+var ErrPackageMissing = errors.New("package not installed")
 
 // Package status values, as reported by `taskmgr package list` (CLI-SPEC §2.3).
 // They mirror the registry's vocabulary (CONFIG-SPEC §3) so a listing and a
@@ -96,7 +102,7 @@ func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
 	if err != nil {
 		if vfs.IsNotExist(err) {
 			if _, serr := fs.Stat(dir); serr != nil && vfs.IsNotExist(serr) {
-				return nil, fmt.Errorf("package %q is not installed: nothing at %s", name, dir)
+				return nil, fmt.Errorf("package %q is not installed: nothing at %s: %w", name, dir, ErrPackageMissing)
 			}
 			return nil, fmt.Errorf("package %q at %s has no %s", name, dir, PackageManifestName)
 		}
@@ -106,7 +112,20 @@ func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
 	if err != nil {
 		return nil, err
 	}
-	return hooksFromManifest(m, name, dir)
+	hooks, err := hooksFromManifest(m, name, dir)
+	if err != nil {
+		return nil, err
+	}
+	// Compile every hook here, so "loaded" means "will run". Deferring the event,
+	// run and when checks to buildHookSet made `package list` and `hook list`
+	// report a package that wedges every mutation as ok — the two commands a
+	// reader reaches for precisely when writes have stopped.
+	for _, ph := range hooks {
+		if _, err := compileHook(ph.hook, ph.id); err != nil {
+			return nil, err
+		}
+	}
+	return hooks, nil
 }
 
 // collectUse resolves one config file's `use:` list into the hooks it
@@ -120,7 +139,7 @@ func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
 // The []PackageInfo is complete whether or not an error is returned, so
 // `package list` can report every entry while a mutation stops at the first one
 // that will not load.
-func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, seen map[string]bool) ([]packageHook, []PackageInfo, error) {
+func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, seen map[string]string) ([]packageHook, []PackageInfo, error) {
 	var (
 		hooks []packageHook
 		infos []PackageInfo
@@ -129,26 +148,41 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 	for _, ref := range refs {
 		dir, name, err := packageDir(ref, home, configDir)
 		if err != nil {
-			infos = append(infos, PackageInfo{Name: ref.Name, Path: ref.Path, Scope: scope, Status: PackageBroken, Detail: err.Error()})
+			// Name the entry the way the file spells it, so the row points at a
+			// line the reader can find — including an entry that is not a
+			// mapping at all and therefore has neither name nor path.
+			label := ref.Name
+			if label == "" {
+				label = ref.Path
+			}
+			if label == "" {
+				label = ref.malformed
+			}
+			infos = append(infos, PackageInfo{Name: label, Path: ref.Path, Scope: scope, Status: PackageBroken, Detail: err.Error()})
 			if first == nil {
 				first = err
 			}
 			continue
 		}
 		info := PackageInfo{Name: name, Path: dir, Scope: scope}
-		if seen[name] {
+
+		// Identity is the resolved directory, not the name. Keying on the name
+		// let a per-user package silently disable a *different* store package
+		// that merely shared a directory name — the exact inversion of §3.5
+		// rule 5, which says a store cannot suppress an inherited package.
+		if at, dup := seen[dir]; dup {
 			info.Status = PackageOK
 			info.Shadowed = true
-			info.Detail = "already provided by an earlier use entry"
+			info.Detail = "the same directory is already used by an earlier entry"
+			_ = at
 			infos = append(infos, info)
 			continue
 		}
-		seen[name] = true
 
 		phs, err := loadPackage(fs, dir, name)
 		if err != nil {
 			info.Status = PackageBroken
-			if _, serr := fs.Stat(dir); serr != nil && vfs.IsNotExist(serr) {
+			if errors.Is(err, ErrPackageMissing) {
 				info.Status = PackageMissing
 			}
 			info.Detail = err.Error()
@@ -156,8 +190,27 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 			if first == nil {
 				first = err
 			}
+			// Not marked seen: an entry that did not load provides nothing, so a
+			// later entry for the same package must still get its chance rather
+			// than being reported "already provided" by one that failed.
 			continue
 		}
+
+		// Two different directories contributing the same package name would
+		// mint the same effective ids, so a denial could not say which one
+		// refused. That is a configuration error, not a silent winner.
+		if other, clash := seen[name]; clash {
+			err := fmt.Errorf("package name %q is claimed by two different directories, %s and %s: effective hook ids would collide", name, other, dir)
+			info.Status = PackageBroken
+			info.Detail = err.Error()
+			infos = append(infos, info)
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		seen[dir], seen[name] = dir, dir
+
 		info.Status = PackageOK
 		info.Hooks = len(phs)
 		infos = append(infos, info)
@@ -172,62 +225,40 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 //
 // A home that cannot be located is not an error — there is then simply nothing
 // machine-wide to inherit, exactly as before packages existed.
-func (s *Store) packageChain(global GlobalConfig, cfg Config) ([]packageHook, []PackageInfo, error) {
-	home, err := taskmgrHome(s.env)
-	if err != nil {
-		home = ""
-	}
-	seen := make(map[string]bool)
+func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalConfig, cfg Config) ([]packageHook, []PackageInfo, error) {
+	// A home that cannot be located is not an error in itself — there is then
+	// nothing machine-wide to inherit. It only becomes one for an entry that
+	// needs it, which packageDir reports per entry rather than by substituting a
+	// directory that resolves somewhere unintended.
+	home, _ := taskmgrHome(e)
 
+	seen := make(map[string]string)
 	var (
 		hooks []packageHook
 		infos []PackageInfo
 	)
-	if home != "" {
-		gh, gi, gerr := collectUse(s.fs, global.Use, home, home, scopeGlobal, seen)
-		hooks, infos = append(hooks, gh...), append(infos, gi...)
-		if gerr != nil {
-			return hooks, infos, gerr
-		}
-	}
-	sh, si, serr := collectUse(s.fs, cfg.Use, home, s.dir, scopeStore, seen)
+
+	gh, gi, gerr := collectUse(fs, global.Use, home, home, scopeGlobal, seen)
+	hooks, infos = append(hooks, gh...), append(infos, gi...)
+
+	// Both lists are always walked. Returning at the first failing per-user entry
+	// dropped every store row from the listing — in exactly the state where a
+	// reader needs them, since that listing is the documented way out.
+	sh, si, serr := collectUse(fs, cfg.Use, home, storeDir, scopeStore, seen)
 	hooks, infos = append(hooks, sh...), append(infos, si...)
+
+	if gerr != nil {
+		return hooks, infos, gerr
+	}
 	return hooks, infos, serr
 }
 
-// Packages reports every `use:` entry that applies to this store — the per-user
-// config's first, then the store's — with what each one resolves to on this
-// machine (CONFIG-SPEC §2, TASK-STORAGE-SPEC §4.2).
-//
-// It never fails on an entry that will not load: an unusable package is reported
-// as its status, because the whole point of the listing is to show the entries a
-// mutation would refuse.
-func (s *Store) Packages() ([]PackageInfo, error) {
-	global, err := s.globalConfig()
-	if err != nil {
-		return nil, err
-	}
-	_, infos, _ := s.packageChain(global, s.Config())
-	return infos, nil
-}
-
-// HookChain returns the effective hook chain for this store, in the order the
-// hooks run (HOOK-SPEC §3.5). It is the reading of the two config files plus the
-// manifests they name, which is what makes the order inspectable rather than
-// merely specified.
-func (s *Store) HookChain() ([]HookInfo, error) {
-	global, err := s.globalConfig()
-	if err != nil {
-		return nil, err
-	}
-	cfg := s.Config()
-	hooks, infos, err := s.packageChain(global, cfg)
-	if err != nil {
-		return nil, err
-	}
+// hookInfos turns a resolved chain into the reportable form, tagging each hook
+// with the config file whose `use:` list brought its package in.
+func hookInfos(hooks []packageHook, infos []PackageInfo) []HookInfo {
 	scopeOf := make(map[string]string, len(infos))
 	for _, in := range infos {
-		if !in.Shadowed {
+		if !in.Shadowed && in.Status == PackageOK {
 			scopeOf[in.Name] = in.Scope
 		}
 	}
@@ -243,7 +274,7 @@ func (s *Store) HookChain() ([]HookInfo, error) {
 			Scope:   scopeOf[pkg],
 		})
 	}
-	return out, nil
+	return out
 }
 
 // packageOfID pulls the package name out of an effective id "pkg:<package>:<hook>".
@@ -271,6 +302,17 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, infos, _ := collectUse(fs, cfg.Use, home, home, scopeGlobal, make(map[string]bool))
+	_, infos, _ := collectUse(fs, cfg.Use, home, home, scopeGlobal, make(map[string]string))
 	return infos, nil
+}
+
+// inspectRef resolves one `use:` entry and reports what it is, without writing
+// anything. It is what lets a command check a package *before* it adds the entry
+// that depends on it.
+func inspectRef(fs vfs.FS, ref PackageRef, home, configDir, scope string) PackageInfo {
+	_, infos, _ := collectUse(fs, []PackageRef{ref}, home, configDir, scope, make(map[string]string))
+	if len(infos) == 1 {
+		return infos[0]
+	}
+	return PackageInfo{Name: ref.Name, Path: ref.Path, Scope: scope, Status: PackageBroken}
 }

@@ -385,7 +385,7 @@ Notes:
   | Variable | Value |
   |---|---|
   | `TASKMGR_HOOK_EVENT` | the event, e.g. `pre-close` / `post-close` |
-  | `TASKMGR_HOOK_ID` | the hook's `id` |
+  | `TASKMGR_HOOK_ID` | the hook's **effective** id, `pkg:<package>:<hook>` (§3.2) |
   | `TASKMGR_ISSUE_ID` | the issue's id |
   | `TASKMGR_STORE` | absolute path to the `.tasks/` directory |
   | `TASKMGR_PAYLOAD_SCHEMA` | the input-payload schema version (§5) |
@@ -515,7 +515,7 @@ onto the issue — hooks never change tasks.
   exit `1`, a `taskmgr: ` message on stderr, and with `--json` a structured error:
 
   ```json
-  { "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
+  { "error": "hook_denied", "event": "pre-close", "hook": "pkg:repo-policy:tests-before-close",
     "issue_id": "proj-0042", "exit": 1,
     "reason": "3 unit tests failing; HEAD not clean",
     "hints": ["run `make fmt` before retrying"] }

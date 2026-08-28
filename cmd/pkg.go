@@ -54,7 +54,7 @@ type hookDTO struct {
 	ID      string   `json:"id"`
 	Event   string   `json:"event"`
 	When    string   `json:"when,omitempty"`
-	Run     []string `json:"run"`
+	Run     []string `json:"run,omitempty"`
 	Package string   `json:"package"`
 	Scope   string   `json:"scope"`
 }
@@ -109,16 +109,32 @@ could never run is refused here rather than at the next unrelated mutation.`,
 // "state it explicitly" rule from reading as two different commands.
 var packageAddPath bool
 
-// addPackage appends ref to the target file's use list, refusing a duplicate and
-// refusing a package that does not load.
+// addPackage appends ref to the target file's use list.
+//
+// The package is inspected **before** the entry is written. A package that is
+// present but unusable is refused outright: writing it would stop every mutation
+// in this store — and, from a store config, in every colleague's clone — with
+// nothing to show for it. A package that is merely not installed *is* written,
+// with a warning, because a store config travels in git and legitimately names a
+// package the machine writing it does not have.
 func addPackage(ref tasks.PackageRef, global bool) error {
 	t, err := loadConfigTarget(global)
 	if err != nil {
 		return err
 	}
+
+	info, err := inspectPackage(t, ref)
+	if err != nil {
+		return err
+	}
+	if info.Status == tasks.PackageBroken {
+		return fmt.Errorf("package %s is not usable, so it was not added to %s: %s",
+			refLabel(ref), t.path, info.Detail)
+	}
+
 	if err := t.update(func(t *configTarget) error {
 		for _, cur := range t.use() {
-			if cur == ref {
+			if sameRefTarget(cur, ref) {
 				return fmt.Errorf("package %s is already in %s", refLabel(ref), t.path)
 			}
 		}
@@ -127,17 +143,41 @@ func addPackage(ref tasks.PackageRef, global bool) error {
 	}); err != nil {
 		return err
 	}
-	// Report what the entry resolves to now that it is written, so a name that
-	// is not installed yet is visible immediately rather than at the next write.
-	info, ferr := findPackage(t, ref)
+
 	if flagJSON {
 		return printJSON(packageInfoDTO(info))
 	}
 	_, _ = fmt.Fprintf(stdout, "Added package %s to %s\n", refLabel(ref), t.path)
-	if ferr == nil && info.Status != tasks.PackageOK {
+	if info.Status != tasks.PackageOK {
 		_, _ = fmt.Fprintf(stdout, "warning: %s is %s — %s\n", info.Name, info.Status, info.Detail)
 	}
+	if info.Shadowed {
+		_, _ = fmt.Fprintf(stdout, "warning: %s contributes no hooks — %s\n", info.Name, info.Detail)
+	}
 	return nil
+}
+
+// inspectPackage asks the engine what ref would resolve to, without writing it.
+func inspectPackage(t *configTarget, ref tasks.PackageRef) (tasks.PackageInfo, error) {
+	if t.global {
+		return tasks.InspectGlobalPackage(ref)
+	}
+	return t.store.InspectPackage(ref), nil
+}
+
+// sameRefTarget reports whether two entries name the same package. It compares
+// what they resolve to rather than the bytes: `packages/p`, `./packages/p` and
+// `packages/p/` are one directory, and writing all three leaves two entries that
+// contribute nothing and no verb to remove them.
+func sameRefTarget(a, b tasks.PackageRef) bool {
+	if a == b {
+		return true
+	}
+	an, bn := strings.TrimSpace(a.Name), strings.TrimSpace(b.Name)
+	if an != "" || bn != "" {
+		return an == bn
+	}
+	return filepath.Clean(strings.TrimSpace(a.Path)) == filepath.Clean(strings.TrimSpace(b.Path))
 }
 
 var packageListCmd = &cobra.Command{
@@ -181,7 +221,7 @@ store.`,
 			return err
 		}
 		for _, p := range out {
-			if p.Detail != "" && p.Status != tasks.PackageOK {
+			if p.Detail != "" {
 				_, _ = fmt.Fprintf(stdout, "\n%s: %s\n", p.Name, p.Detail)
 			}
 		}
@@ -270,33 +310,6 @@ func refLabel(ref tasks.PackageRef) string {
 		return "path " + ref.Path
 	}
 	return ref.Name
-}
-
-// findPackage locates the freshly written entry in the target file's listing, so the
-// command can report what the reference resolves to on this machine.
-//
-// It matches on the package name within the scope that was written, and takes the last
-// such entry: the write appended, and the store listing also carries the per-user file's
-// entries, so matching forwards would report a different package that shares the name.
-func findPackage(t *configTarget, ref tasks.PackageRef) (tasks.PackageInfo, error) {
-	infos, err := listPackages(t.global)
-	if err != nil {
-		return tasks.PackageInfo{}, err
-	}
-	want := strings.TrimSpace(ref.Name)
-	if ref.Path != "" {
-		want = filepath.Base(filepath.Clean(ref.Path))
-	}
-	scope := scopeStore
-	if t.global {
-		scope = scopeGlobal
-	}
-	for i := len(infos) - 1; i >= 0; i-- {
-		if infos[i].Name == want && infos[i].Scope == scope {
-			return infos[i], nil
-		}
-	}
-	return tasks.PackageInfo{}, fmt.Errorf("entry not found after write")
 }
 
 func init() {

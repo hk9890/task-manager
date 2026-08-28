@@ -216,10 +216,12 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
   **and** add its registry entry in one step (the `init --central` command, CLI-SPEC §2).
 - **Promote local → central** — move an existing `<project>/.tasks` to
   `<central_root>/stores/<store>` and register it (`store move --central`, CLI-SPEC §2.1).
-  The store moves whole, `config.yaml` included, so its prefix and hooks block survive
-  and existing IDs stay valid. Hook **argv** is not rewritten: hooks run with the
-  project root as their working directory (HOOK-SPEC §3.2), which the promote does not
-  change, so a hook whose argv points into `.tasks` must be rewritten by hand.
+  The store moves whole, `config.yaml` included, so its prefix and `use:` list survive
+  and existing IDs stay valid. A package held by path under `.tasks/packages/` moves with
+  the tree and keeps working: its hooks' relative `argv[0]` resolves against the package's
+  new location (HOOK-SPEC §3.6). The working directory is still the project root, which
+  the promote does not change, so a path a hook builds at run time is the one thing to
+  check by hand.
   The **registry entry is written before the files move**, so a promote that dies in
   between leaves a dangling entry (ignored by resolution, §3) plus the local store,
   which still exists and still wins step 2 — the project keeps working. The reverse

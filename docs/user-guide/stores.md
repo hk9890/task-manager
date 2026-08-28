@@ -97,17 +97,17 @@ taskmgr store move --rename  --to new-name     # rename the central store here
 taskmgr store move --relink  --to my-project   # this directory is where that store's project moved to
 ```
 
-The store travels whole, `config.yaml` included, so the ID prefix and any hooks survive and
-every existing ID stays valid.
+The store travels whole, `config.yaml` included, so the ID prefix and the list of hook
+packages survive and every existing ID stays valid.
 
 Two things to know before promoting:
 
 - **The local `.tasks/` is gone afterwards.** There is no confirmation prompt, and nothing
   touches git — committing the removal is yours to do.
-- **Hook commands are not rewritten.** Hooks run with the project root as their working
-  directory, which the move does not change, so a hook whose command points into `.tasks/`
-  stops resolving. Rewrite it to an absolute path, or use `$TASKMGR_STORE`
-  ([Hooks](hooks.md)).
+- **A package kept inside the store moves with it.** A hook that runs a script from its own
+  package keeps working, because the script is found relative to the package
+  ([Hooks](hooks.md)). A package named by name lives under your taskmgr home instead, so it
+  is per machine and unaffected either way.
 
 There is no `unlink` command. The registry is one short YAML file at
 `~/.taskmgr/mapping.yaml`; delete an entry by hand.
@@ -117,10 +117,10 @@ There is no `unlink` command. The registry is one short YAML file at
 | What | Where |
 |---|---|
 | Your taskmgr home | `~/.taskmgr/`, or `$TASKMGR_HOME` if set (must be an absolute path) |
-| Global config | `<home>/config.yaml` — `central_root`, a fallback `hook_timeout`, and hooks applied to every store on this machine |
+| Global config | `<home>/config.yaml` — `central_root`, a fallback `hook_timeout`, and the hook packages applied to every store on this machine |
 | The registry | `<central_root>/mapping.yaml` |
 | Central stores | `<central_root>/stores/<name>/` |
-| A store's own config | `<store>/config.yaml` — the ID prefix, `hook_timeout`, and this project's hooks |
+| A store's own config | `<store>/config.yaml` — the ID prefix, `hook_timeout`, and this project's hook packages |
 | Log level | `$TASKMGR_LOG` = `debug` / `info` / `warn` (default) / `error`, always to stderr |
 
 Both config files are editable by hand and through `taskmgr config`:
@@ -133,7 +133,8 @@ taskmgr config set hook_timeout 5m
 ```
 
 `--global` selects the per-user file and resolves no store, so it works from any directory.
-Hooks are a list rather than a value and have their own verbs — see [Hooks](hooks.md).
+The list of hook packages is a list rather than a value and has its own verbs,
+`taskmgr package` — see [Hooks](hooks.md).
 
 There is no home to create up front: everything has a built-in default, and the files are
 written only by a command that needs to persist central state.

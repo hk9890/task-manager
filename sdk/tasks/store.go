@@ -190,7 +190,7 @@ func (s *Store) hooks() (*hookSet, error) {
 		s.hookErr = err
 		return nil, s.hookErr
 	}
-	chain, _, err := s.packageChain(global, s.cfg)
+	chain, _, err := packageChain(s.fs, s.env, s.dir, global, s.cfg)
 	if err != nil {
 		s.hookErr = err
 		return nil, s.hookErr
@@ -437,6 +437,47 @@ func (s *Store) SetConfig(cfg Config) error {
 		*c = cfg
 		return nil
 	})
+}
+
+// Packages reports every `use:` entry that applies to this store — the per-user
+// config's first, then the store's — with what each one resolves to on this
+// machine (CONFIG-SPEC §2, TASK-STORAGE-SPEC §4.2).
+//
+// It never fails on an entry that will not load: an unusable package is reported
+// as its status, because the whole point of the listing is to show the entries a
+// mutation would refuse.
+func (s *Store) Packages() ([]PackageInfo, error) {
+	global, err := s.globalConfig()
+	if err != nil {
+		return nil, err
+	}
+	_, infos, _ := packageChain(s.fs, s.env, s.dir, global, s.Config())
+	return infos, nil
+}
+
+// HookChain returns the effective hook chain for this store, in the order the
+// hooks run (HOOK-SPEC §3.5). It is the reading of the two config files plus the
+// manifests they name, which is what makes the order inspectable rather than
+// merely specified.
+func (s *Store) HookChain() ([]HookInfo, error) {
+	global, err := s.globalConfig()
+	if err != nil {
+		return nil, err
+	}
+	hooks, infos, err := packageChain(s.fs, s.env, s.dir, global, s.Config())
+	if err != nil {
+		return nil, err
+	}
+	return hookInfos(hooks, infos), nil
+}
+
+// InspectPackage reports what one `use:` entry would resolve to for this store,
+// without writing it. A command adds an entry only after this says the package
+// is usable, so a package that could never run is refused where it was named
+// rather than at the next unrelated mutation (HOOK-SPEC §3.4).
+func (s *Store) InspectPackage(ref PackageRef) PackageInfo {
+	home, _ := taskmgrHome(s.env)
+	return inspectRef(s.fs, ref, home, s.dir, scopeStore)
 }
 
 // globalConfig loads the per-user configuration through the store's seams,

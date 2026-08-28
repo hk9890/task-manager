@@ -123,9 +123,17 @@ its job over plain values.
 
 Importing `internal/vfs` / `internal/env` is a **second, narrower** exemption
 (`mayImportVFS`: `store.go`, `comments.go`, `content.go`, `config.go`,
-`registry.go`). The two lists are separate because the two rules exempt different
-files: one list short-circuited both checks, so a file added for its `*Store`
-methods silently stopped having its imports checked as well.
+`registry.go`, `packageload.go`). The two lists are separate because the two rules
+exempt different files: one list short-circuited both checks, so a file added for
+its `*Store` methods silently stopped having its imports checked as well.
+
+`packageload.go` is the case that shows the split working. It reads package
+directories through the seam, so it needs the import exemption — but it does its
+work over plain values (`collectUse`, `packageChain`, `inspectRef` all take the
+`FS`, the environment and the directories as parameters), so it needs no `*Store`
+method and is not on the first list. The three entry points that do have a
+receiver — `Packages`, `HookChain`, `InspectPackage` — sit in `store.go`, which is
+already on both.
 
 | File | Responsibility |
 |---|---|
@@ -138,6 +146,7 @@ methods silently stopped having its imports checked as well.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
+| `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)
 
@@ -163,7 +172,6 @@ call.
 | `criteria.go` | The `Criteria` builder and `Build`, which compiles it to a filter expression. The two `*Store` methods that take one, `Find` and `FindPage`, are in `list.go`. |
 | `hooks.go` | Hook types (`Hook`) and their compilation into the runnable chain (HOOK-SPEC §3). Pure: it takes a resolved chain and returns a validated one. |
 | `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
-| `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
 | `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
 | `doc.go` | Package documentation. |
