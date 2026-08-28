@@ -31,7 +31,7 @@ func mustCreate(t *testing.T, s *Store, in CreateInput) *Issue {
 	return iss
 }
 
-func TestCreateAllocatesUniqueIDs(t *testing.T) {
+func TestCreate_AllocatesUniqueIDs(t *testing.T) {
 	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "first"})
 	b := mustCreate(t, s, CreateInput{Title: "second"})
@@ -49,10 +49,10 @@ func TestCreateAllocatesUniqueIDs(t *testing.T) {
 	}
 }
 
-// TestCreateExplicitID covers the CreateInput.ID escape hatch (at-2fb): a
+// TestCreate_ExplicitID covers the CreateInput.ID escape hatch (at-2fb): a
 // caller-supplied ID is honoured when valid, and rejected when malformed,
 // carrying the wrong prefix, or already in use.
-func TestCreateExplicitID(t *testing.T) {
+func TestCreate_ExplicitID(t *testing.T) {
 	s, _ := newMemStore(t)
 
 	// Valid explicit ID (incl. legacy numeric form) is used verbatim.
@@ -77,7 +77,7 @@ func TestCreateExplicitID(t *testing.T) {
 	}
 }
 
-func TestCreateValidates(t *testing.T) {
+func TestCreate_Validates(t *testing.T) {
 	s, _ := newMemStore(t)
 	if _, err := s.Create(CreateInput{Title: "  "}); err == nil {
 		t.Error("empty title should fail")
@@ -91,7 +91,7 @@ func TestCreateValidates(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsMissingRefs(t *testing.T) {
+func TestCreate_RejectsMissingRefs(t *testing.T) {
 	s, _ := newMemStore(t)
 	if _, err := s.Create(CreateInput{Title: "x", BlockedBy: []string{"agt-9999"}}); err == nil {
 		t.Error("missing blocker should fail")
@@ -101,14 +101,14 @@ func TestCreateRejectsMissingRefs(t *testing.T) {
 	}
 }
 
-func TestGetNotFound(t *testing.T) {
+func TestGet_NotFound(t *testing.T) {
 	s, _ := newMemStore(t)
 	if _, err := s.Get("agt-0001"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestUpdatePartial(t *testing.T) {
+func TestUpdate_Partial(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "orig"})
 
@@ -132,7 +132,7 @@ func TestUpdatePartial(t *testing.T) {
 	}
 }
 
-func TestUpdateLabels(t *testing.T) {
+func TestUpdate_Labels(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x", Labels: []string{"a", "b"}})
 
@@ -152,7 +152,7 @@ func TestUpdateLabels(t *testing.T) {
 	}
 }
 
-func TestStatusClosedStampsAndClears(t *testing.T) {
+func TestStatusClosed_StampsAndClears(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 
@@ -168,33 +168,7 @@ func TestStatusClosedStampsAndClears(t *testing.T) {
 	}
 }
 
-func TestCloseIdempotent(t *testing.T) {
-	s, _ := newMemStore(t)
-	iss := mustCreate(t, s, CreateInput{Title: "x"})
-
-	first, err := unwrap(s.Close(iss.ID, "done"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Status != StatusClosed || first.CloseReason != "done" {
-		t.Errorf("close wrong: %+v", first)
-	}
-	// CLI-SPEC §"taskmgr close" says Close is idempotent. Re-closing an
-	// already-closed issue must succeed (nil error) and return the existing
-	// closed issue unchanged. The new reason is ignored; original is preserved.
-	second, err := unwrap(s.Close(iss.ID, "again"))
-	if err != nil {
-		t.Errorf("re-close must succeed (idempotent), got: %v", err)
-	}
-	if second == nil || second.Status != StatusClosed {
-		t.Errorf("re-close must return closed issue, got: %+v", second)
-	}
-	if second.CloseReason != "done" {
-		t.Errorf("re-close must preserve original close_reason %q, got %q", "done", second.CloseReason)
-	}
-}
-
-func TestAddComment(t *testing.T) {
+func TestAddComment_SanitizesBody(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	// sanitizeCommentBody strips trailing whitespace per line, not leading.
@@ -219,7 +193,7 @@ func TestAddComment(t *testing.T) {
 	}
 }
 
-func TestAddDepAndCycle(t *testing.T) {
+func TestAddDep_RejectsCycle(t *testing.T) {
 	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
@@ -245,7 +219,7 @@ func TestAddDepAndCycle(t *testing.T) {
 }
 
 // TestAddDep_TransitiveCycle covers the multi-hop cycle that the direct 2-node
-// case in TestAddDepAndCycle never reaches: a -> b -> c -> a. Closing the loop
+// case in TestAddDep_RejectsCycle never reaches: a -> b -> c -> a. Closing the loop
 // must exercise findCycle's gray back-edge / stack-slicing branch.
 func TestAddDep_TransitiveCycle(t *testing.T) {
 	s, _ := newMemStore(t)
@@ -271,7 +245,7 @@ func TestAddDep_TransitiveCycle(t *testing.T) {
 	}
 }
 
-func TestRemoveDep(t *testing.T) {
+func TestRemoveDep_DropsTheEdge(t *testing.T) {
 	s, _ := newMemStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})

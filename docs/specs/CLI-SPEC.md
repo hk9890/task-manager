@@ -568,7 +568,9 @@ self-dependency and any edge that would create a cycle.
 
 ### `taskmgr dep rm <dependent> <blocker>`
 
-Remove a blocking dependency.
+Remove a blocking dependency. Removing one that is not present succeeds and
+writes nothing — the file is not rewritten and `updated` is not bumped
+(SDK-SPEC §4, the shared no-op contract of the four edge commands).
 
 ### `taskmgr rel add <a> <b>`
 
@@ -581,7 +583,8 @@ from both issues. (No cycle check — related is non-blocking.)
 
 Remove the related link between `<a>` and `<b>`. Removes the edge from **both**
 sides so the link is fully severed (the primary `<a>` must be writable; the
-inverse side is best-effort and skipped if `<b>` is closed).
+inverse side is best-effort and skipped if `<b>` is closed). Removing a link that
+is not present writes nothing, as for `dep rm`.
 
 ### `taskmgr comment add <id> [body] [options]`
 
@@ -717,6 +720,23 @@ resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `
 `hooks` counts what the package contributes, and `shadowed` marks an entry whose name an
 earlier one already took (HOOK-SPEC §3.5).
 
+**`edgeResultDTO`** — emitted by `dep add`, `dep rm`, `rel add` and `rel rm`:
+`{op, from, to}`. `op` is one of `dep_add` | `dep_remove` | `rel_add` |
+`rel_remove`, and `from`/`to` name the two issues: a dependency reads from the
+dependent to its blocker, a related link from the side the edge is stored on to
+its peer.
+
+**`commentDeleteDTO`** — emitted by `comment rm`: `{op, issue, comment_id}` with
+`op` always `comment_delete`.
+
+The `op` values of both are the engine's own log operation names
+([MONITORING.md](../MONITORING.md)), so one operation carries one name in the
+JSON and in the records. These five shapes were undocumented and untested until
+v0.9.0, and printed three different key vocabularies — `dependent`/`blocker` for
+one pair, `a`/`b` for the other, and an `op` of `add`/`rm` that did not match the
+log. Nothing held those keys in place, so a rename during ordinary work would
+have changed released output with no gate to catch it.
+
 **`hookDTO`** — emitted by `hook list` (an array): `{id, event, when, run, package,
 scope}`. `id` is the **effective** id `pkg:<package>:<hook>` (HOOK-SPEC §3.2), so it is
 the value a `hook_denied` error reports and the logs record. `when` is omitted when
@@ -725,7 +745,11 @@ empty. The array is in run order.
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
 `"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
-(post-hook failures, which never fail the write). A pre-hook **denial** exits non-zero and
+(post-hook failures, which never fail the write). This holds for **every** mutation
+that runs hooks, `import --run-hooks` included, in both its single-envelope and
+`--batch` forms — `--json` is the contract for the adapter driving an import, and
+a post-hook that failed on an imported issue must not leave exit 0 and a result
+object with no trace of it. A pre-hook **denial** exits non-zero and
 prints a structured error:
 
 ```json

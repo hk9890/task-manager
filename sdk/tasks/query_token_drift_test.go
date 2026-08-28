@@ -23,7 +23,7 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
-// TestQueryTokensMatchModel is the anti-drift guard for issue #22.
+// TestQuery_TokensMatchModel is the anti-drift guard for issue #22.
 //
 // Criteria.Build validates enum values against the model (Status.Valid /
 // Type.Valid) and then emits a filter expression that the query parser must
@@ -35,7 +35,7 @@ import (
 //
 // Iterating tasks.Statuses / tasks.Types means a newly added enum value is
 // covered automatically, with no second list to remember to update here.
-func TestQueryTokensMatchModel(t *testing.T) {
+func TestQuery_TokensMatchModel(t *testing.T) {
 	t.Run("status", func(t *testing.T) {
 		for _, s := range tasks.Statuses {
 			expr, err := tasks.Criteria{Statuses: []tasks.Status{s}}.Build()

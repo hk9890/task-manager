@@ -53,15 +53,14 @@ import (
 func setupLifecycleStore(t *testing.T, prefix string) *tasks.Store {
 	t.Helper()
 	m := vfs.NewMem()
-	s, err := tasks.InitWithVFS("/", prefix, m)
+	tick := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s, err := tasks.InitWithVFS("/", prefix, m, tasks.WithClock(func() time.Time {
+		tick = tick.Add(time.Second)
+		return tick
+	}))
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
-	tick := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	return s
 }
 
@@ -117,9 +116,9 @@ func prepareSubject(t *testing.T, s *tasks.Store, state lifecycleState) (subject
 	return subjectID, blockerID, commentID
 }
 
-// TestLifecycleMatrix drives each mutating operation against each lifecycle
+// TestLifecycleMatrix_EveryOperationInEveryState drives each mutating operation against each lifecycle
 // state and asserts the expected outcome plus AssertStoreInvariants.
-func TestLifecycleMatrix(t *testing.T) {
+func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 	type opResult struct {
 		wantErrImmutable bool // expect ErrImmutable
 		wantOtherErr     bool // expect some other error (not ErrImmutable, not nil)

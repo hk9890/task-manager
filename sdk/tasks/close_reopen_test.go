@@ -23,7 +23,6 @@ package tasks
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
@@ -300,17 +299,7 @@ func TestReopen_NotFound(t *testing.T) {
 // WriteAtomic to closed/ fails during Close, no torn state is left: the issue
 // is still readable from the hot dir and still open.
 func TestClose_FaultInjection_WriteAtomicToClosedDir(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
+	s, m := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "fault test"}))
 	if err != nil {
@@ -341,17 +330,7 @@ func TestClose_FaultInjection_WriteAtomicToClosedDir(t *testing.T) {
 // the issue is still findable (in either partition) and is closed.
 // This tests that there is no data loss even when the Rename step fails.
 func TestClose_FaultInjection_RenameAfterWrite(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
+	s, m := newMemStore(t)
 
 	iss, err := unwrap(s.Create(CreateInput{Title: "rename fault test"}))
 	if err != nil {

@@ -55,17 +55,14 @@ import (
 func queryFixture(t *testing.T) (root string, ids map[string]string) {
 	t.Helper()
 	root = t.TempDir()
-	s, err := tasks.Init(root, "qfx")
+	// Deterministic clock; each Create advances by 1s. The fixture pins it
+	// later to reach close timestamps either side of 2026-01-01, so the test
+	// keeps the clock rather than handing it away.
+	clock := newTestClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	s, err := tasks.Init(root, "qfx", tasks.WithClock(clock.Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-
-	// Deterministic clock; each Create advances by 1s.
-	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 
 	create := func(in tasks.CreateInput) *tasks.Issue {
 		t.Helper()
@@ -128,14 +125,14 @@ func queryFixture(t *testing.T) (root string, ids map[string]string) {
 	closedOld := create(tasks.CreateInput{Title: "closed old"})
 	// Rewind clock to before 2026-01-01 for the close timestamp.
 	beforeDate := time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time { return beforeDate })
+	clock.Set(beforeDate)
 	if _, err := s.Close(closedOld.ID, "old"); err != nil {
 		t.Fatalf("Close old: %v", err)
 	}
 
 	closedNew := create(tasks.CreateInput{Title: "closed new"})
 	afterDate := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time { return afterDate })
+	clock.Set(afterDate)
 	if _, err := s.Close(closedNew.ID, "new"); err != nil {
 		t.Fatalf("Close new: %v", err)
 	}

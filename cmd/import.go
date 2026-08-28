@@ -70,6 +70,15 @@ type importResult struct {
 	ID       string `json:"id,omitempty"`
 	Store    string `json:"store,omitempty"`
 	Error    string `json:"error,omitempty"`
+
+	// Hints and Warnings carry hook output, as every other mutation's JSON does
+	// (CLI-SPEC §6, HOOK-SPEC §6.2). They matter most here: the caller of
+	// `import --run-hooks` is a migration adapter reading JSON, and without
+	// these a post-hook that failed on an imported issue left exit 0 and a
+	// result object with no trace of it. In --batch there is no human branch to
+	// fall back on, so the loss was total.
+	Hints    []string `json:"hints,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func parseImportTime(field, s string) (time.Time, error) {
@@ -171,7 +180,13 @@ emitted per record.`,
 			return mutationError(err)
 		}
 		if flagJSON {
-			return printJSON(importResult{SourceID: e.SourceID, ID: res.Issue.ID, Store: s.Name()})
+			return printJSON(importResult{
+				SourceID: e.SourceID,
+				ID:       res.Issue.ID,
+				Store:    s.Name(),
+				Hints:    res.Hints,
+				Warnings: res.Warnings,
+			})
 		}
 		_, _ = fmt.Fprintf(stdout, "Imported %s\n", res.Issue.ID)
 		printNotes(res.Hints, res.Warnings)
@@ -198,7 +213,13 @@ func runImportBatch(s *tasks.Store, data []byte) error {
 			var res *tasks.MutationResult
 			res, err = s.Import(in)
 			if err == nil {
-				results = append(results, importResult{SourceID: e.SourceID, ID: res.Issue.ID, Store: s.Name()})
+				results = append(results, importResult{
+					SourceID: e.SourceID,
+					ID:       res.Issue.ID,
+					Store:    s.Name(),
+					Hints:    res.Hints,
+					Warnings: res.Warnings,
+				})
 				continue
 			}
 		}

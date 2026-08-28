@@ -199,24 +199,6 @@ func (s *Store) hooks() (*hookSet, error) {
 	return s.hookSet, s.hookErr
 }
 
-// openWithFS is an unexported test hook that constructs a Store rooted at
-// root using the provided FS implementation. It does NOT read or create the
-// config — the caller must set s.cfg directly (or call readConfig through s.fs
-// after construction). This hook exists so tests can inject vfs.Mem or other
-// FS implementations without going through Init/Open.
-func openWithFS(root string, fs vfs.FS) *Store {
-	absRoot, _ := filepath.Abs(root)
-	return &Store{
-		root:   absRoot,
-		dir:    filepath.Join(absRoot, DataDirName),
-		fs:     fs,
-		env:    env.NewOS(),
-		runner: exec.NewOS(),
-		logger: discardLogger,
-		now:    defaultNow,
-	}
-}
-
 // InitWithVFS creates an initialised store at root using the provided FS seam
 // with the given ID prefix. It is intended for test helpers that need to
 // supply a custom FS (e.g. vfs.Mem) without going through the OS-backed Init.
@@ -489,11 +471,6 @@ func (s *Store) globalConfig() (GlobalConfig, error) {
 	}
 	return loadGlobalConfig(s.fs, home)
 }
-
-// SetNow overrides the store's clock with fn. Intended for test helpers that
-// need deterministic timestamps across the store-creation boundary (e.g.
-// internal/storetest). Production code uses defaultNow.
-func (s *Store) SetNow(fn func() time.Time) { s.now = fn }
 
 // writeConfig persists cfg, editing the existing document rather than
 // regenerating it, so unknown keys and comments survive (configdoc.go).
@@ -1274,222 +1251,79 @@ func (s *Store) reopenWrite(iss *Issue) error {
 	})
 }
 
-// Comments returns the resolved effective comment log for an issue: each
-// replaces-chain collapsed to its newest document, tombstoned comments omitted.
-// The on-disk stream keeps full history; this returns the current view.
-// All() / Ready() / List() never read sidecars; Comments() loads it lazily.
-func (s *Store) Comments(id string) ([]Comment, error) {
-	// Verify the issue exists first. Existence only: the comment log is a
-	// separate sidecar, so the issue body is never looked at.
-	if _, err := s.getUnresolved(id); err != nil {
-		return nil, err
+// edgeList selects the stored edge slice an edge mutation operates on. The four
+// edge methods differ only in which slice they touch, what a self-edge is
+// called, and which op name an I/O failure logs — everything else is addEdge
+// and removeEdge below.
+type edgeList func(*Issue) *[]string
+
+func blockedByOf(iss *Issue) *[]string { return &iss.BlockedBy }
+func relatedOf(iss *Issue) *[]string   { return &iss.Related }
+
+// dropEdge removes every occurrence of target from *l in place, reporting
+// whether it removed anything. The report is what keeps a no-op removal from
+// bumping Updated and rewriting the file (SDK-SPEC §6).
+func dropEdge(l *[]string, target string) bool {
+	kept := (*l)[:0]
+	changed := false
+	for _, v := range *l {
+		if v == target {
+			changed = true
+			continue
+		}
+		kept = append(kept, v)
 	}
-	stream, err := readCommentStream(s.fs, s.commentsPath(id))
-	if err != nil {
-		return nil, err
-	}
-	return resolveComments(stream), nil
+	*l = kept
+	return changed
 }
 
-// migrateInlineComments checks whether the issue .md at issueFilePath still
-// contains old-style inline comments in its frontmatter. If it does, it
-// appends them to the sidecar and rewrites the issue .md without the
-// comments field. This is a one-time migration run on first sidecar touch.
-// The caller must hold the store lock.
-//
-// issueFilePath is the actual on-disk path to the .md file (hot or closed/).
-func (s *Store) migrateInlineComments(issueFilePath string) error {
-	data, err := s.fs.ReadFile(issueFilePath)
-	if err != nil {
-		return err
-	}
-	iss, legacy, err := unmarshalWithLegacy(data)
-	if err != nil {
-		return err
-	}
-	if len(legacy) == 0 {
-		return nil // nothing to migrate
-	}
-
-	// Append legacy comments to the sidecar, in order.
-	sidecarPath := s.commentsPath(iss.ID)
-	for _, lc := range legacy {
-		created, tsErr := parseTimestamp(lc.Created)
-		if tsErr != nil {
-			// Use a fallback time if the timestamp is unparseable.
-			created = s.now()
-		}
-		c := Comment{
-			ID:      newCommentID(),
-			Author:  lc.Author,
-			Created: created,
-			Body:    sanitizeCommentBody(lc.Body),
-		}
-		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
-			return fmt.Errorf("migrate comment to sidecar: %w", err)
-		}
-	}
-
-	// Rewrite the issue .md to the same path (hot or closed/) without the
-	// inline comments field (Marshal now omits it). For closed files this is
-	// an internal migration-only rewrite, not a user mutation.
-	migrated, err := Marshal(iss)
-	if err != nil {
-		return err
-	}
-	return s.fs.WriteAtomic(issueFilePath, migrated, 0o644)
-}
-
-// issueFilePath returns the actual on-disk path for an issue's .md file,
-// checking the hot directory first and falling through to closed/.
-// Returns ErrNotFound if the issue does not exist in either partition.
-func (s *Store) issueFilePath(id string) (string, error) {
-	hotPath := s.filePath(id)
-	if _, err := s.fs.Stat(hotPath); err == nil {
-		return hotPath, nil
-	}
-	closedPath := s.closedFilePath(id)
-	if _, err := s.fs.Stat(closedPath); err == nil {
-		return closedPath, nil
-	}
-	return "", errNotFound(id)
-}
-
-// prepareCommentMutation verifies the issue exists, migrates any legacy inline
-// comments, and returns the issue plus its sidecar path (keyed on iss.ID, not
-// the input id). Caller must hold the store lock.
-func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
-	// Unresolved: only iss.ID is used, to key the sidecar. A comment append never
-	// rewrites the issue .md (TASK-STORAGE-SPEC §4.4), so the body is not needed
-	// — and reading it would make commenting on a large doc cost the whole body.
-	iss, err := s.getUnresolved(id)
-	if err != nil {
-		return nil, "", err
-	}
-	issPath, err := s.issueFilePath(id)
-	if err != nil {
-		return nil, "", err
-	}
-	if err := s.migrateInlineComments(issPath); err != nil {
-		return nil, "", fmt.Errorf("migrate inline comments: %w", err)
-	}
-	return iss, s.commentsPath(iss.ID), nil
-}
-
-// requireReplaceTarget verifies commentID names an earlier comment in the
-// sidecar stream at sidecarPath. Caller must hold the store lock.
-//
-// The empty check is not redundant with validateReplaces: that helper answers
-// "is this document's optional replaces field valid?", for which empty means
-// "this is not a revision" and is correct. Edit and Delete are the opposite
-// case — the id is the whole point of the call — so an empty one has to be
-// rejected here, or `EditComment(id, "", …)` silently appends a fresh comment
-// instead of revising anything.
-func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
-	if commentID == "" {
-		return invalid("comment_id", "comment id is required")
-	}
-	stream, err := readCommentStream(s.fs, sidecarPath)
-	if err != nil {
-		return err
-	}
-	return validateReplaces(commentID, stream)
-}
-
-// AddComment appends a new comment to the issue sidecar and returns the new
-// comment (including its freshly allocated random ID). The issue .md file is
-// NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
-// Comment appends are allowed on closed issues (TASK-STORAGE-SPEC §4.4.6).
-func (s *Store) AddComment(id, author, body string) (*Comment, error) {
-	var out *Comment
-	err := s.withLock(func() error {
-		iss, sidecarPath, err := s.prepareCommentMutation(id)
-		if err != nil {
-			return err
-		}
-
-		body = sanitizeCommentBody(body)
-		c := Comment{
-			ID:      newCommentID(),
-			Author:  author,
-			Created: s.now(),
-			Body:    body,
-		}
-		if err := validateCommentDoc(c); err != nil {
-			return err
-		}
-
-		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
-			s.logIOError(opCommentAdd, iss.ID, err)
-			return err
-		}
-		out = &c
-		return nil
-	})
-	return out, err
-}
-
-// EditComment appends a revision to the issue sidecar with Replaces set to
-// commentID, and returns the new effective comment. The issue .md file is NOT
-// rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
-func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
-	var out *Comment
-	err := s.withLock(func() error {
-		iss, sidecarPath, err := s.prepareCommentMutation(id)
-		if err != nil {
-			return err
-		}
-
-		// Validate that the target comment exists.
-		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
-			return err
-		}
-
-		body = sanitizeCommentBody(body)
-		c := Comment{
-			ID:       newCommentID(),
-			Author:   author,
-			Created:  s.now(),
-			Replaces: commentID,
-			Body:     body,
-		}
-		if err := validateCommentDoc(c); err != nil {
-			return err
-		}
-
-		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
-			s.logIOError(opCommentEdit, iss.ID, err)
-			return err
-		}
-		out = &c
-		return nil
-	})
-	return out, err
-}
-
-// DeleteComment appends a tombstone to the issue sidecar with Replaces set to
-// commentID and Deleted: true. The issue .md file is NOT rewritten.
-func (s *Store) DeleteComment(id, commentID, author string) error {
+// addEdge appends target to the edge list selected by list on issue id, then
+// validates and writes. Adding an edge that is already present is a no-op and
+// succeeds. field and selfMsg name the *ValidationError for a self-edge; op is
+// the log op for an I/O failure. The caller must not hold the lock.
+func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, op string) error {
 	return s.withLock(func() error {
-		iss, sidecarPath, err := s.prepareCommentMutation(id)
+		iss, err := s.getMutable(id)
 		if err != nil {
 			return err
 		}
-
-		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
+		if id == target {
+			return invalid(field, "%s", selfMsg)
+		}
+		cur := list(iss)
+		for _, existing := range *cur {
+			if existing == target {
+				return nil // already present; idempotent
+			}
+		}
+		*cur = append(*cur, target)
+		iss.Updated = s.now()
+		if err := s.checkRefs(iss); err != nil {
 			return err
 		}
-
-		c := Comment{
-			ID:       newCommentID(),
-			Author:   author,
-			Created:  s.now(),
-			Replaces: commentID,
-			Deleted:  true,
+		if err := s.writeIssue(iss); err != nil {
+			s.logIOError(op, iss.ID, err)
+			return err
 		}
+		return nil
+	})
+}
 
-		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
-			s.logIOError(opCommentDelete, iss.ID, err)
+// removeEdge drops target from the edge list selected by list on issue id.
+// Removing an edge that is not present writes nothing: no Updated bump, no
+// file rewrite, no log record. The caller must not hold the lock.
+func (s *Store) removeEdge(id, target string, list edgeList, op string) error {
+	return s.withLock(func() error {
+		iss, err := s.getMutable(id)
+		if err != nil {
+			return err
+		}
+		if !dropEdge(list(iss), target) {
+			return nil // absent; nothing to write
+		}
+		iss.Updated = s.now()
+		if err := s.writeIssue(iss); err != nil {
+			s.logIOError(op, iss.ID, err)
 			return err
 		}
 		return nil
@@ -1498,53 +1332,13 @@ func (s *Store) DeleteComment(id, commentID, author string) error {
 
 // AddDep records that dependent is blocked by blocker.
 func (s *Store) AddDep(dependent, blocker string) error {
-	return s.withLock(func() error {
-		iss, err := s.getMutable(dependent)
-		if err != nil {
-			return err
-		}
-		if dependent == blocker {
-			return invalid("blocked_by", "issue cannot block itself")
-		}
-		for _, b := range iss.BlockedBy {
-			if b == blocker {
-				return nil // already present; idempotent
-			}
-		}
-		iss.BlockedBy = append(iss.BlockedBy, blocker)
-		iss.Updated = s.now()
-		if err := s.checkRefs(iss); err != nil {
-			return err
-		}
-		if err := s.writeIssue(iss); err != nil {
-			s.logIOError(opDepAdd, iss.ID, err)
-			return err
-		}
-		return nil
-	})
+	return s.addEdge(dependent, blocker, blockedByOf, "blocked_by", "issue cannot block itself", opDepAdd)
 }
 
-// RemoveDep removes a blocker from dependent.
+// RemoveDep removes a blocker from dependent. Removing a blocker that is not
+// present is a no-op: nothing is written and Updated is not bumped.
 func (s *Store) RemoveDep(dependent, blocker string) error {
-	return s.withLock(func() error {
-		iss, err := s.getMutable(dependent)
-		if err != nil {
-			return err
-		}
-		kept := iss.BlockedBy[:0]
-		for _, b := range iss.BlockedBy {
-			if b != blocker {
-				kept = append(kept, b)
-			}
-		}
-		iss.BlockedBy = kept
-		iss.Updated = s.now()
-		if err := s.writeIssue(iss); err != nil {
-			s.logIOError(opDepRemove, iss.ID, err)
-			return err
-		}
-		return nil
-	})
+	return s.removeEdge(dependent, blocker, blockedByOf, opDepRemove)
 }
 
 // AddRelated records a non-blocking "related" reference from issueID to otherID.
@@ -1553,30 +1347,7 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 // on issueID; the inverse is derived on read (Detail.RelatedRefs is the symmetric
 // union), so the link surfaces from both issues.
 func (s *Store) AddRelated(issueID, otherID string) error {
-	return s.withLock(func() error {
-		iss, err := s.getMutable(issueID)
-		if err != nil {
-			return err
-		}
-		if issueID == otherID {
-			return invalid("related", "issue cannot relate to itself")
-		}
-		for _, r := range iss.Related {
-			if r == otherID {
-				return nil // already present; idempotent
-			}
-		}
-		iss.Related = append(iss.Related, otherID)
-		iss.Updated = s.now()
-		if err := s.checkRefs(iss); err != nil {
-			return err
-		}
-		if err := s.writeIssue(iss); err != nil {
-			s.logIOError(opRelAdd, iss.ID, err)
-			return err
-		}
-		return nil
-	})
+	return s.addEdge(issueID, otherID, relatedOf, "related", "issue cannot relate to itself", opRelAdd)
 }
 
 // RemoveRelated severs the related link between issueID and otherID. Because the
@@ -1586,25 +1357,11 @@ func (s *Store) AddRelated(issueID, otherID string) error {
 // inverse side is best-effort (skipped if otherID is absent or closed/immutable).
 func (s *Store) RemoveRelated(issueID, otherID string) error {
 	return s.withLock(func() error {
-		removeRef := func(it *Issue, target string) bool {
-			kept := it.Related[:0]
-			changed := false
-			for _, r := range it.Related {
-				if r == target {
-					changed = true
-					continue
-				}
-				kept = append(kept, r)
-			}
-			it.Related = kept
-			return changed
-		}
-
 		iss, err := s.getMutable(issueID)
 		if err != nil {
 			return err
 		}
-		if removeRef(iss, otherID) {
+		if dropEdge(relatedOf(iss), otherID) {
 			iss.Updated = s.now()
 			if err := s.writeIssue(iss); err != nil {
 				s.logIOError(opRelRemove, iss.ID, err)
@@ -1628,7 +1385,7 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 		if otherClosed {
 			return nil
 		}
-		if removeRef(other, issueID) {
+		if dropEdge(relatedOf(other), issueID) {
 			other.Updated = s.now()
 			if err := s.writeIssue(other); err != nil {
 				s.logIOError(opRelRemove, other.ID, err)

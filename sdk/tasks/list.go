@@ -16,7 +16,7 @@
 
 // list.go — the imperative shell over the pure rules in ready.go.
 //
-// These are the *Store methods behind Ready, Blocked, Detail, Query, List and
+// These are the *Store methods behind Ready, Blocked, Detail, List and
 // ListPage. Each one does the same two things: read what it needs through the
 // s.fs seam (the hot index, the closed/ partition, a comment sidecar), then hand
 // values to the pure functions in ready.go to decide the answer.
@@ -60,10 +60,7 @@ func (s *Store) Ready() ([]*Issue, error) {
 	closedStat := s.closedStatFn()
 	var ready []*Issue
 	for _, iss := range all {
-		if iss.Status != StatusOpen || !iss.Type.IsWork() {
-			continue
-		}
-		if len(openBlockers(idx, closedStat, iss)) == 0 {
+		if isReady(iss, openBlockers(idx, closedStat, iss)) {
 			ready = append(ready, iss)
 		}
 	}
@@ -85,11 +82,8 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 	closedStat := s.closedStatFn()
 	var blocked []BlockedIssue
 	for _, iss := range all {
-		if iss.Status.IsClosed() || !iss.Type.IsWork() {
-			continue
-		}
 		open := openBlockers(idx, closedStat, iss)
-		if len(open) == 0 {
+		if !isBlocked(iss, open) {
 			continue
 		}
 		bi := BlockedIssue{Issue: iss}
@@ -234,23 +228,6 @@ func (s *Store) Detail(id string) (*Detail, error) {
 	return d, nil
 }
 
-// Query selects issues using a filter expression (QUERY-SPEC.md §1).
-//
-// Scope semantics (QUERY-SPEC.md §5):
-//   - The closed/ partition is included automatically when the expression
-//     references closed work: a status == "closed" comparison, or any
-//     comparison against the closed field (e.g. closed > "2026-01-01").
-//   - All other expressions operate on the hot (active) set only.
-//
-// An empty or whitespace-only expression matches every issue in scope (the
-// always-true predicate — see QUERY-SPEC.md §1).
-//
-// This method is equivalent to List(Filter{Expr: expr}); callers that also
-// need sort/limit control should use List with an Expr set in the Filter.
-func (s *Store) Query(expr string) ([]*Issue, error) {
-	return s.List(Filter{Expr: expr})
-}
-
 // listMatches returns all matching issues for the filter after selection,
 // sort, and reverse — but before offset/limit are applied. It is the shared
 // core used by both List and ListPage. A *ParseError is returned for a
@@ -264,11 +241,10 @@ func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 		return nil, err
 	}
 
-	// Decide whether to include the closed partition.
-	needClosed := f.IncludeClosed
-	if !needClosed && f.Expr != "" {
-		needClosed = query.ReferencesClosedWork(f.Expr)
-	}
+	// Decide whether to include the closed partition. The expression's own
+	// answer rides along on the compiled predicate (query.Compiled), so it
+	// cannot disagree with the predicate that is about to be evaluated.
+	needClosed := f.IncludeClosed || pred.NeedsClosed
 
 	_, all, err := s.index()
 	if err != nil {
@@ -313,7 +289,7 @@ func (s *Store) listMatches(f Filter) ([]*Issue, error) {
 	// that uses it must see overflowed bodies too — otherwise a large issue would
 	// be silently unmatchable. Sidecars are read ONLY for such an expression:
 	// structured filters never look at a body, and neither should they pay to.
-	needText := f.Expr != "" && query.ReferencesText(f.Expr)
+	needText := pred.NeedsText
 
 	var matches []*Issue
 	for _, iss := range all {
@@ -389,66 +365,4 @@ func (s *Store) ListPage(f Filter) (Page, error) {
 	}
 	total := len(matches)
 	return Page{Issues: window(matches, f.Offset, f.Limit), Total: total}, nil
-}
-
-// ---------------------------------------------------------------------------
-// FindOptions and Store.Find / Store.FindPage
-//
-// The Criteria they take is pure (criteria.go); these two are *Store methods, so
-// they live on this side of the split.
-// ---------------------------------------------------------------------------
-
-// FindOptions is the presentation subset of Filter used with a Criteria. The
-// selection comes from the Criteria (via Build), not from an Expr. Offset/Limit
-// behave exactly as on Filter (SDK-SPEC §3): negatives clamp to 0, Limit 0 = no limit.
-type FindOptions struct {
-	IncludeClosed bool
-	Sort          SortField
-	Reverse       bool
-	Offset        int
-	Limit         int
-}
-
-// Find compiles c to a filter expression and calls List with the resulting
-// Filter. It is equivalent to List(Filter{Expr: c.Build(), …}).
-//
-// Cold scope is derived by applying the cold-scope predicate (QUERY-SPEC §5)
-// to the built expression — the same detector List uses — so a Criteria and
-// its hand-written Expr always scope identically. FindOptions.IncludeClosed is
-// the explicit override.
-//
-// If Criteria.Build fails (unknown Status/Type, or negative priority bound),
-// that *ValidationError is returned and no scan runs.
-func (s *Store) Find(c Criteria, opt FindOptions) ([]*Issue, error) {
-	expr, err := c.Build()
-	if err != nil {
-		return nil, err
-	}
-	return s.List(Filter{
-		Expr:          expr,
-		IncludeClosed: opt.IncludeClosed,
-		Sort:          opt.Sort,
-		Reverse:       opt.Reverse,
-		Offset:        opt.Offset,
-		Limit:         opt.Limit,
-	})
-}
-
-// FindPage compiles c to a filter expression and calls ListPage with the
-// resulting Filter. It is equivalent to ListPage(Filter{Expr: c.Build(), …}).
-//
-// Cold scope and error semantics are the same as Find.
-func (s *Store) FindPage(c Criteria, opt FindOptions) (Page, error) {
-	expr, err := c.Build()
-	if err != nil {
-		return Page{}, err
-	}
-	return s.ListPage(Filter{
-		Expr:          expr,
-		IncludeClosed: opt.IncludeClosed,
-		Sort:          opt.Sort,
-		Reverse:       opt.Reverse,
-		Offset:        opt.Offset,
-		Limit:         opt.Limit,
-	})
 }

@@ -11,8 +11,8 @@ file wins.
   [CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync) maps the area to its spec.
   The `spec_*_conformance_test.go` suites cover the sections named in their own headers and
   nothing more, so an un-updated spec is a review finding, not a test failure.
-- **A file added to `mayDeclareStoreMethods` or `mayImportVFS` in
-  `sdk/tasks/importboundary_test.go`.** The guard passes either way — that is the point of
+- **A file added to `mayDeclareStoreMethods`, `mayImportVFS`, `mayImportEnv` or
+  `mayImportExec` in `sdk/tasks/importboundary_test.go`.** The guard passes either way — that is the point of
   the maps — so this is where the pure-core boundary erodes. A file belongs on a list only
   when it genuinely cannot do its job over plain values, and being on one list is not a
   reason to add it to the other;
@@ -29,8 +29,10 @@ file wins.
 
 - **Test layer.** Pure logic tests at L1 — which means it declares no `*Store` method, or
   it cannot be tested there at all. Fixtures come from `sdk/tasks/internal/storetest`;
-  a hand-rolled `.tasks/` tree in a test is a finding. Time is `Store.SetNow`, never the
-  wall clock ([TESTING.md § Conventions](TESTING.md#conventions)).
+  a hand-rolled `.tasks/` tree in a test is a finding. Time is `tasks.WithClock` at
+  construction, never the wall clock and never a setter afterwards
+  ([TESTING.md § Conventions](TESTING.md#conventions)). A test that touches a real
+  disk without the `integration` tag is a finding: it puts L3 in the fast suite.
 - **User-facing docs, in the same PR.** A new or changed command, flag, or JSON field
   reaches [user-guide/](user-guide/); a new package reaches
   [OVERVIEW.md § Repository layout](OVERVIEW.md#repository-layout). `check:docs` only

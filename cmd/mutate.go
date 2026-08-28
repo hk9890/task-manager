@@ -183,7 +183,7 @@ var depAddCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "add"})
+			return printJSON(edgeResultDTO{Op: opDepAdd, From: args[0], To: args[1]})
 		}
 		_, _ = fmt.Fprintf(stdout, "%s now blocked by %s\n", args[0], args[1])
 		return nil
@@ -203,7 +203,7 @@ var depRmCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"dependent": args[0], "blocker": args[1], "op": "rm"})
+			return printJSON(edgeResultDTO{Op: opDepRemove, From: args[0], To: args[1]})
 		}
 		_, _ = fmt.Fprintf(stdout, "%s no longer blocked by %s\n", args[0], args[1])
 		return nil
@@ -228,7 +228,7 @@ var relAddCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "add"})
+			return printJSON(edgeResultDTO{Op: opRelAdd, From: args[0], To: args[1]})
 		}
 		_, _ = fmt.Fprintf(stdout, "%s related to %s\n", args[0], args[1])
 		return nil
@@ -248,7 +248,7 @@ var relRmCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"a": args[0], "b": args[1], "op": "rm"})
+			return printJSON(edgeResultDTO{Op: opRelRemove, From: args[0], To: args[1]})
 		}
 		_, _ = fmt.Fprintf(stdout, "%s no longer related to %s\n", args[0], args[1])
 		return nil
@@ -391,7 +391,7 @@ var commentRmCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"op": "rm", "issue": args[0], "comment_id": args[1]})
+			return printJSON(commentDeleteDTO{Op: opCommentDelete, Issue: args[0], CommentID: args[1]})
 		}
 		_, _ = fmt.Fprintf(stdout, "Deleted comment %s from %s\n", args[1], args[0])
 		return nil

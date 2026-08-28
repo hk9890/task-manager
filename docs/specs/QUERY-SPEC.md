@@ -5,7 +5,7 @@ its grammar, the fields and operators, precedence, value syntax, and evaluation 
 error semantics.
 
 The language is an **engine-level** concern. The SDK owns parsing and evaluation
-(`Store.Query` / `Filter.Expr`, see [SDK-SPEC.md](SDK-SPEC.md)); the `taskmgr` CLI is
+(`Filter.Expr`, see [SDK-SPEC.md](SDK-SPEC.md)); the `taskmgr` CLI is
 a thin pass-through that forwards its `-q/--query` string to the engine unchanged
 (see [CLI-SPEC.md](CLI-SPEC.md)). Both front ends therefore share one grammar — the
 one defined here — and there is exactly one implementation of it.
@@ -166,8 +166,7 @@ partitions are scanned. By default only the hot (active) set is evaluated.
 **Cold-scope predicate (normative).** The cold (`closed/`) partition is scanned iff
 *any* of these holds:
 
-1. the caller opts in — `taskmgr --all`, `Filter.IncludeClosed`, or
-   `FindOptions.IncludeClosed`;
+1. the caller opts in — `taskmgr --all` or `Filter.IncludeClosed`;
 2. the parsed expression contains a `status == "closed"` atom (positive equality
    only); or
 3. the parsed expression contains any `closed`-field comparison (any operator).

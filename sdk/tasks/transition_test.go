@@ -23,7 +23,7 @@ import (
 
 // L1: classify, cloneIssue, and the no-op predicate are pure. HOOK-SPEC §2.1.
 
-func TestClassify(t *testing.T) {
+func TestClassify_TransitionFromInput(t *testing.T) {
 	open := &Issue{Status: StatusOpen}
 	inProg := &Issue{Status: StatusInProgress}
 	closed := &Issue{Status: StatusClosed}
@@ -50,7 +50,7 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-func TestTransitionEventNames(t *testing.T) {
+func TestTransition_EventNames(t *testing.T) {
 	if transClose.preEvent() != "pre-close" || transClose.postEvent() != "post-close" {
 		t.Errorf("close events = %q/%q", transClose.preEvent(), transClose.postEvent())
 	}
@@ -80,7 +80,7 @@ func TestCloneIssue_IsDeep(t *testing.T) {
 	}
 }
 
-func TestIssuesEqualIgnoringUpdated(t *testing.T) {
+func TestIssuesEqualIgnoringUpdated_ComparesFieldsNotTimestamps(t *testing.T) {
 	base := func() *Issue {
 		return &Issue{
 			ID: "x-1", Title: "t", Status: StatusOpen, Type: TypeTask, Priority: 2,
@@ -128,7 +128,9 @@ func TestUpdate_NoOpWritesNothing(t *testing.T) {
 	iss := mustCreate(t, s, CreateInput{Title: "orig", Description: "body"})
 
 	// Advance the clock so a write, if it happened, would visibly bump Updated.
-	s.SetNow(func() time.Time { return iss.Updated.Add(time.Hour) })
+	// This test is inside package tasks, so it sets the field directly; an
+	// external caller injects a clock with tasks.WithClock at construction.
+	s.now = func() time.Time { return iss.Updated.Add(time.Hour) }
 
 	sameTitle := "orig"
 	out, err := unwrap(s.Update(iss.ID, UpdateInput{Title: &sameTitle}))

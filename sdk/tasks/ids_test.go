@@ -21,9 +21,9 @@ import (
 	"testing"
 )
 
-// TestIDStem covers the pure stem parser for both legacy numeric IDs and the
+// TestIDStem_ParsesLegacyAndToken covers the pure stem parser for both legacy numeric IDs and the
 // new base36 tokens. L1: no FS, no store.
-func TestIDStem(t *testing.T) {
+func TestIDStem_ParsesLegacyAndToken(t *testing.T) {
 	tests := []struct {
 		name     string
 		prefix   string
@@ -50,8 +50,8 @@ func TestIDStem(t *testing.T) {
 	}
 }
 
-// TestRandToken checks length and alphabet.
-func TestRandToken(t *testing.T) {
+// TestRandToken_LengthAndAlphabet checks length and alphabet.
+func TestRandToken_LengthAndAlphabet(t *testing.T) {
 	for _, n := range []int{1, 6, 12} {
 		tok := randToken(n)
 		if len(tok) != n {
@@ -65,10 +65,10 @@ func TestRandToken(t *testing.T) {
 	}
 }
 
-// TestNewIDFromNames covers the collision-resistant allocator: every ID is
+// TestNewID_FromNames covers the collision-resistant allocator: every ID is
 // well-formed, carries the prefix, and never collides with an existing entry
 // (including legacy numeric IDs already on disk — back-compat).
-func TestNewIDFromNames(t *testing.T) {
+func TestNewID_FromNames(t *testing.T) {
 	t.Run("format and prefix", func(t *testing.T) {
 		id := newIDFromNames("agt", nil)
 		if !strings.HasPrefix(id, "agt-") || !idRe.MatchString(id) {

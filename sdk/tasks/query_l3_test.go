@@ -39,7 +39,7 @@ func TestQuery_MalformedExpr_L3(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, queryErr := store.Query(`foobar == "x"`)
+	_, queryErr := store.List(tasks.Filter{Expr: `foobar == "x"`})
 	if queryErr == nil {
 		t.Fatal("Query with malformed expression: expected error, got nil")
 	}

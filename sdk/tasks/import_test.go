@@ -32,7 +32,7 @@ var (
 	tComment = time.Date(2025, 2, 1, 12, 0, 0, 0, time.UTC)
 )
 
-func TestImportOpenPreservesTimestamps(t *testing.T) {
+func TestImport_OpenPreservesTimestamps(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Import(ImportInput{
 		Title: "an imported task", Type: TypeBug, Priority: ptr(1),
@@ -57,7 +57,7 @@ func TestImportOpenPreservesTimestamps(t *testing.T) {
 	}
 }
 
-func TestImportClosedLandsInClosedPartition(t *testing.T) {
+func TestImport_ClosedLandsInClosedPartition(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Import(ImportInput{
 		Title: "old closed task", Status: StatusClosed,
@@ -82,7 +82,7 @@ func TestImportClosedLandsInClosedPartition(t *testing.T) {
 	}
 }
 
-func TestImportClosedDefaultsClosedTimestamp(t *testing.T) {
+func TestImport_ClosedDefaultsClosedTimestamp(t *testing.T) {
 	s, _ := newMemStore(t)
 	// No Closed provided → defaults to Updated so the closed invariant holds.
 	iss, err := unwrap(s.Import(ImportInput{
@@ -97,7 +97,7 @@ func TestImportClosedDefaultsClosedTimestamp(t *testing.T) {
 	}
 }
 
-func TestImportComments(t *testing.T) {
+func TestImport_Comments(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Import(ImportInput{
 		Title: "with comments", Status: StatusOpen, Created: tCreated,
@@ -124,7 +124,7 @@ func TestImportComments(t *testing.T) {
 	}
 }
 
-func TestImportEdgesResolveInDependencyOrder(t *testing.T) {
+func TestImport_EdgesResolveInDependencyOrder(t *testing.T) {
 	s, _ := newMemStore(t)
 	parent, err := unwrap(s.Import(ImportInput{ID: "agt-epic1", Title: "epic", Type: TypeEpic, Status: StatusOpen}))
 	if err != nil {
@@ -147,7 +147,7 @@ func TestImportEdgesResolveInDependencyOrder(t *testing.T) {
 	}
 }
 
-func TestImportMissingRefRejected(t *testing.T) {
+func TestImport_MissingRefRejected(t *testing.T) {
 	s, _ := newMemStore(t)
 	_, err := s.Import(ImportInput{Title: "child", Status: StatusOpen, Parent: "agt-nope"})
 	var ve *ValidationError
@@ -156,7 +156,7 @@ func TestImportMissingRefRejected(t *testing.T) {
 	}
 }
 
-func TestImportCallerSuppliedID(t *testing.T) {
+func TestImport_CallerSuppliedID(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss, err := unwrap(s.Import(ImportInput{ID: "agt-keepme", Title: "x", Status: StatusOpen}))
 	if err != nil || iss.ID != "agt-keepme" {
@@ -169,7 +169,7 @@ func TestImportCallerSuppliedID(t *testing.T) {
 	}
 }
 
-func TestImportControlCharCommentRejectedAtomically(t *testing.T) {
+func TestImport_ControlCharCommentRejectedAtomically(t *testing.T) {
 	s, _ := newMemStore(t)
 	before, _ := s.All()
 	_, err := s.Import(ImportInput{
@@ -186,7 +186,7 @@ func TestImportControlCharCommentRejectedAtomically(t *testing.T) {
 	}
 }
 
-func TestImportRejectsUnknownStatus(t *testing.T) {
+func TestImport_RejectsUnknownStatus(t *testing.T) {
 	s, _ := newMemStore(t)
 	// An unrecognized status is rejected; the model stays strict.
 	_, err := s.Import(ImportInput{Title: "x", Status: Status("wontfix"), Created: tCreated})

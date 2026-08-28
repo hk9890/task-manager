@@ -228,7 +228,7 @@ func TestCreator_QueryEquality(t *testing.T) {
 		Issue("tst-0003").
 		Mem()
 
-	results, err := s.Query(`creator == "alice"`)
+	results, err := s.List(tasks.Filter{Expr: `creator == "alice"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestCreator_QueryContains(t *testing.T) {
 		Issue("tst-0002", storetest.Creator("bob")).
 		Mem()
 
-	results, err := s.Query(`creator ~ "alice"`)
+	results, err := s.List(tasks.Filter{Expr: `creator ~ "alice"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestCreator_QueryNotEqual(t *testing.T) {
 		Issue("tst-0002", storetest.Creator("bob")).
 		Mem()
 
-	results, err := s.Query(`creator != "alice"`)
+	results, err := s.List(tasks.Filter{Expr: `creator != "alice"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -335,21 +335,5 @@ func TestCreator_BuilderCreatorAndAssignee(t *testing.T) {
 	}
 	if got.Assignee != "bob" {
 		t.Errorf("Assignee = %q, want %q", got.Assignee, "bob")
-	}
-}
-
-// TestCreator_BuilderCreatorPersistsTempDir verifies the builder creator opt
-// works on a real temp-dir store (L3 durability).
-func TestCreator_BuilderCreatorPersistsTempDir(t *testing.T) {
-	s := storetest.New(t).
-		Issue("tst-0001", storetest.Creator("carol")).
-		TempDir(t)
-
-	got, err := s.Get("tst-0001")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.Creator != "carol" {
-		t.Errorf("Creator = %q, want %q (L3 round-trip)", got.Creator, "carol")
 	}
 }

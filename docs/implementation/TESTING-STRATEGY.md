@@ -101,8 +101,8 @@ sees only the exported API) or **white-box** (`package tasks`, sees unexported
 identifiers too). The rule:
 
 > **Default to black-box.** Write `package tasks` only when the test must reach
-> an unexported identifier — `s.cfg`, `s.now`, `s.fs`, `openWithFS`, path
-> helpers like `s.closedFilePath`, or a pure function such as `findCycle`.
+> an unexported identifier — `s.cfg`, `s.now`, `s.fs`, path helpers like
+> `s.closedFilePath`, or a pure function such as `findCycle`.
 
 Black-box is the default because it tests what a consumer can actually call, and
 because a test that only compiles against the exported surface is proof that the
@@ -115,6 +115,14 @@ Each package has **one** store fixture, and they are not interchangeable:
 | `tasks_test` (black-box) | `storetest.New(t).Mem()` / `.TempDir(t)` | `storetest` imports `tasks` |
 | `tasks` (white-box) | `newMemStore(t)` in `memstore_test.go` | importing `storetest` back would be a cycle |
 
+`storetest` has a **third** form, for the states no builder can express:
+`NewRawFixture(t, root)` creates a `.tasks/` skeleton and writes raw bytes
+straight into it — `WriteIssue("closed/tst-0099.md", …)`, `WriteSidecar(…)` — so a
+test can produce input the store would never write itself: malformed frontmatter,
+a truncated document, a hand-seeded `closed/` entry. It is how "never hand-roll a
+real `.tasks/`" stays followable when the point of the test is a broken tree. Like
+the builder, it reaches disk through the `vfs` seam.
+
 `newMemStore` returns the store **and** its `vfs.Mem`, so fault injection needs no
 second helper: `s, m := newMemStore(t)`, then `m.FailOn(…)`. Do not hand-roll
 another one — six near-identical copies accumulated before this rule was written.
@@ -126,9 +134,15 @@ nothing else should be.
 
 ## Conventions
 
-- Tests sit next to the code (`*_test.go`). Never hand-roll a real `.tasks/`.
+- Tests sit next to the code (`*_test.go`). Never hand-roll a real `.tasks/` —
+  `storetest.NewRawFixture` is the way to write raw bytes into one.
+- A test that touches a real disk is L3 wherever its subject lives: it goes in an
+  `_l3_test.go` file behind `//go:build integration`, so the default run stays
+  disk-free.
 - Deterministic time only; never assert the wall clock. `Store.now` inside package
-  `tasks`, `Store.SetNow` from `cmd/` and external consumers.
+  `tasks`, `tasks.WithClock` at construction from `cmd/` and external consumers.
+  There is no post-construction setter: a test that must move time owns the state
+  its `WithClock` closure reads.
 - Assert sentinels with `errors.Is`; field failures are `*ValidationError` (`Field`);
   query parse failures are `*ParseError` (`Pos`).
 - **TDD:** with the harness in place, write the layer-appropriate failing test

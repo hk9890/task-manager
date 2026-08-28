@@ -16,7 +16,7 @@
 
 package tasks
 
-// configwrite_test.go — L2: the configuration write path of both files. The
+// config_write_test.go — L2: the configuration write path of both files. The
 // property under test is that the read happens inside the lock, so two writers
 // editing different keys keep both edits (TASK-STORAGE-SPEC §4.2, CONFIG-SPEC §2).
 

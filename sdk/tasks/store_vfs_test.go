@@ -20,35 +20,27 @@ package tasks
 
 import (
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-func fixedClock() func() time.Time {
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	return func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	}
-}
-
-// TestOpenWithFS verifies that the openWithFS hook routes all Store
-// operations through the provided FS, and that a real osFS produces
-// the same behaviour as the existing Store.
-func TestOpenWithFS_RealOsFS(t *testing.T) {
+// TestStoreOnRealFS_ReopenRoundTrips verifies that a store re-opened from disk
+// routes every operation through the disk seam and sees what the first handle
+// wrote.
+//
+// It used to build the second handle with openWithFS, an unexported fixture
+// constructor that skipped the config read and left the caller to set s.cfg and
+// s.now by hand — so the test exercised a store shape production never builds.
+// Open is the real path and reads the config itself.
+func TestStoreOnRealFS_ReopenRoundTrips(t *testing.T) {
 	dir := t.TempDir()
 
-	// Init using the standard path (still uses os directly for bootstrap).
-	s, err := Init(dir, "tst")
-	if err != nil {
+	if _, err := Init(dir, "tst"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Re-open via the seam.
-	s2 := openWithFS(dir, vfs.NewOS())
-	s2.cfg = s.cfg
-	s2.now = s.now
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 
 	// Create an issue through the seam-routed store.
 	iss, err := unwrap(s2.Create(CreateInput{Title: "seam test"}))
@@ -66,18 +58,18 @@ func TestOpenWithFS_RealOsFS(t *testing.T) {
 	}
 }
 
-// TestOpenWithFS_AllOpsRouteThrough verifies that every Store mutation
-// works end-to-end when routed through a real osFS.
-func TestOpenWithFS_AllOps(t *testing.T) {
+// TestStoreOnRealFS_AllOps verifies that every Store mutation works end-to-end
+// against a real osFS.
+func TestStoreOnRealFS_AllOps(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Init(dir, "tst")
-	if err != nil {
+	if _, err := Init(dir, "tst"); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 
-	s2 := openWithFS(dir, vfs.NewOS())
-	s2.cfg = s.cfg
-	s2.now = fixedClock()
+	s2, err := Open(dir, WithClock(monotonicClock()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 
 	a, err := unwrap(s2.Create(CreateInput{Title: "a"}))
 	if err != nil {

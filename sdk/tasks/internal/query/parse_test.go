@@ -785,27 +785,40 @@ func TestParse_Priority_NegativeStillRejected(t *testing.T) {
 	}
 }
 
-// TestReferencesClosedWork_StatusEq verifies that status == "closed" is
+// needsClosed compiles expr and returns the scope answer that rides along on
+// the compiled predicate. A malformed expression fails the test: the scope
+// question no longer has a bool-returning entry point that could swallow the
+// parse error.
+func needsClosed(t *testing.T, expr string) bool {
+	t.Helper()
+	c, err := query.Compile(expr)
+	if err != nil {
+		t.Fatalf("Compile(%q): %v", expr, err)
+	}
+	return c.NeedsClosed
+}
+
+// TestCompiled_NeedsClosed_StatusEq verifies that status == "closed" is
 // recognized as referencing closed work (QUERY-SPEC §5).
-func TestReferencesClosedWork_StatusEq(t *testing.T) {
-	if !query.ReferencesClosedWork(`status == "closed"`) {
-		t.Error(`ReferencesClosedWork("status == \"closed\"") want true`)
+func TestCompiled_NeedsClosed_StatusEq(t *testing.T) {
+	if !needsClosed(t, `status == "closed"`) {
+		t.Error(`Compile("status == \"closed\"").NeedsClosed want true`)
 	}
 }
 
-// TestReferencesClosedWork_StatusNeq verifies that status != "closed" does
+// TestCompiled_NeedsClosed_StatusNeq verifies that status != "closed" does
 // NOT count as referencing closed work (QUERY-SPEC §5: != selects active work
 // and must not auto-scan the cold partition).
-func TestReferencesClosedWork_StatusNeq(t *testing.T) {
-	if query.ReferencesClosedWork(`status != "closed"`) {
-		t.Error(`ReferencesClosedWork("status != \"closed\"") want false`)
+func TestCompiled_NeedsClosed_StatusNeq(t *testing.T) {
+	if needsClosed(t, `status != "closed"`) {
+		t.Error(`Compile("status != \"closed\"").NeedsClosed want false`)
 	}
 }
 
-// TestReferencesClosedWork_ClosedDateAnyOp verifies that any comparison
+// TestCompiled_NeedsClosed_ClosedDateAnyOp verifies that any comparison
 // against the "closed" date field (any operator) counts as referencing closed
 // work (QUERY-SPEC §5).
-func TestReferencesClosedWork_ClosedDateAnyOp(t *testing.T) {
+func TestCompiled_NeedsClosed_ClosedDateAnyOp(t *testing.T) {
 	cases := []string{
 		`closed > "2026-01-01"`,
 		`closed < "2026-01-01"`,
@@ -815,8 +828,37 @@ func TestReferencesClosedWork_ClosedDateAnyOp(t *testing.T) {
 	}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {
-			if !query.ReferencesClosedWork(expr) {
-				t.Errorf("ReferencesClosedWork(%q) want true (closed date field)", expr)
+			if !needsClosed(t, expr) {
+				t.Errorf("Compile(%q).NeedsClosed want true (closed date field)", expr)
+			}
+		})
+	}
+}
+
+// TestCompiled_NeedsText verifies that only a comparison against the virtual
+// "text" field asks for issue bodies to be read. A bareword or a quoted string
+// that merely contains the word "text" must not trigger it.
+func TestCompiled_NeedsText(t *testing.T) {
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{`text ~ "hello"`, true},
+		{`status == "open" && text ~ "hello"`, true},
+		{`!(text ~ "hello")`, true},
+		{`status == "open"`, false},
+		{`assignee == "text"`, false},
+		{`priority <= 2`, false},
+		{``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.expr, func(t *testing.T) {
+			c, err := query.Compile(tc.expr)
+			if err != nil {
+				t.Fatalf("Compile(%q): %v", tc.expr, err)
+			}
+			if c.NeedsText != tc.want {
+				t.Errorf("Compile(%q).NeedsText = %v, want %v", tc.expr, c.NeedsText, tc.want)
 			}
 		})
 	}

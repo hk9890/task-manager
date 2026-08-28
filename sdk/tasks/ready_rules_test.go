@@ -16,7 +16,7 @@
 
 package tasks
 
-// readyrules_test.go — L1 tests for the graph rules in ready.go.
+// ready_rules_test.go — L1 tests for the graph rules in ready.go.
 //
 // No store, no filesystem, no fixture: an index literal and a closure standing
 // in for "is this ID closed?". This is what the layer model always promised for

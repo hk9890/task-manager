@@ -164,12 +164,16 @@ var readyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		issues, err := s.Ready()
+		// The limit goes through the engine, as it does for `list` and `search`,
+		// rather than being applied by slicing the result here. That leaves one
+		// implementation of limiting for every list-shaped command, and it puts
+		// this command on the `ready` query predicate — which is required to
+		// agree with Store.Ready anyway (they share isReady in ready.go), and
+		// now shares the call as well. The ordering is unchanged: Filter.Sort is
+		// empty, whose default is the same priority-then-age order Ready uses.
+		issues, err := s.List(tasks.Filter{Expr: "ready", Limit: readyFlags.limit})
 		if err != nil {
 			return err
-		}
-		if readyFlags.limit > 0 && len(issues) > readyFlags.limit {
-			issues = issues[:readyFlags.limit]
 		}
 		return emitIssues(s.Name(), issues)
 	},

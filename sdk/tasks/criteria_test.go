@@ -14,13 +14,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// criteria_test.go — Tests for Criteria.Build, Find, FindPage, and FindOptions.
+// criteria_test.go — Tests for Criteria.Build and the listing it feeds.
 //
-// SDK-SPEC §3 (Criteria/Build), §4 (Find/FindPage/FindOptions).
-// QUERY-SPEC §5/§7.
+// SDK-SPEC §3 (Criteria/Build). QUERY-SPEC §5/§7.
 //
 // L1 (pure): Build() table tests — each field, combinations, escaping, empty.
-// L2 (Mem): Find/FindPage against storetest fixture; cold-scope parity.
+// L2 (Mem): a built Criteria listed against a storetest fixture; cold-scope
+// parity.
+//
+// Store.Find, Store.FindPage and FindOptions were removed: they forwarded to
+// List/ListPage, had no caller outside these tests, and made FindOptions a
+// second copy of five of Filter's six fields. What they verified is a property
+// of Criteria, not of the forwarders, so the cases below keep it and go through
+// the surface that remains — Build() to an expression, then List/ListPage.
 package tasks_test
 
 import (
@@ -37,12 +43,33 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
+// listByCriteria compiles c to a filter expression and lists with it, with f
+// supplying the presentation options. A Build failure is returned unlisted, so
+// an invalid Criteria still surfaces its *ValidationError and no scan runs.
+func listByCriteria(t *testing.T, s *tasks.Store, c tasks.Criteria, f tasks.Filter) ([]*tasks.Issue, error) {
+	t.Helper()
+	expr, err := c.Build()
+	if err != nil {
+		return nil, err
+	}
+	f.Expr = expr
+	return s.List(f)
+}
+
+// pageByCriteria is listByCriteria's paged peer.
+func pageByCriteria(t *testing.T, s *tasks.Store, c tasks.Criteria, f tasks.Filter) (tasks.Page, error) {
+	t.Helper()
+	expr, err := c.Build()
+	if err != nil {
+		return tasks.Page{}, err
+	}
+	f.Expr = expr
+	return s.ListPage(f)
+}
+
 // sortIssueIDs returns the IDs of the given issues, sorted.
 func sortIssueIDs(issues []*tasks.Issue) []string {
-	ids := make([]string, len(issues))
-	for i, iss := range issues {
-		ids[i] = iss.ID
-	}
+	ids := issueIDs(issues)
 	sort.Strings(ids)
 	return ids
 }
@@ -627,7 +654,7 @@ func TestCriteria_Build_RoundTrip_ValidInputAlwaysParses(t *testing.T) {
 			continue
 		}
 		// Round-trip: Query the store with the built expression — must not be *ParseError.
-		_, queryErr := s.Query(expr)
+		_, queryErr := s.List(tasks.Filter{Expr: expr})
 		if queryErr != nil {
 			var pe *tasks.ParseError
 			if errors.As(queryErr, &pe) {
@@ -642,15 +669,15 @@ func TestCriteria_Build_RoundTrip_ValidInputAlwaysParses(t *testing.T) {
 
 // ── L2: Find/FindPage against storetest fixture ──────────────────────────────
 
-// TestFind_ByStatus returns only issues matching the requested status.
-func TestFind_ByStatus(t *testing.T) {
+// TestCriteria_ListByStatus returns only issues matching the requested status.
+func TestCriteria_ListByStatus(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Open).
 		Issue("tst-0002", storetest.InProgress).
 		Issue("tst-0003", storetest.Open).
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{Statuses: []tasks.Status{tasks.StatusOpen}}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{Statuses: []tasks.Status{tasks.StatusOpen}}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find: %v", err)
 	}
@@ -663,15 +690,15 @@ func TestFind_ByStatus(t *testing.T) {
 	}
 }
 
-// TestFind_ByCreator selects only issues with the matching creator.
-func TestFind_ByCreator(t *testing.T) {
+// TestCriteria_ListByCreator selects only issues with the matching creator.
+func TestCriteria_ListByCreator(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Creator("alice")).
 		Issue("tst-0002", storetest.Creator("bob")).
 		Issue("tst-0003", storetest.Creator("alice")).
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{Creator: "alice"}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{Creator: "alice"}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find by creator: %v", err)
 	}
@@ -684,14 +711,14 @@ func TestFind_ByCreator(t *testing.T) {
 	}
 }
 
-// TestFind_ByAssignee selects only issues with the matching assignee.
-func TestFind_ByAssignee(t *testing.T) {
+// TestCriteria_ListByAssignee selects only issues with the matching assignee.
+func TestCriteria_ListByAssignee(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Assignee("alice")).
 		Issue("tst-0002", storetest.Assignee("bob")).
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{Assignee: "alice"}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{Assignee: "alice"}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find by assignee: %v", err)
 	}
@@ -700,15 +727,15 @@ func TestFind_ByAssignee(t *testing.T) {
 	}
 }
 
-// TestFind_ByType selects only issues with the matching type.
-func TestFind_ByType(t *testing.T) {
+// TestCriteria_ListByType selects only issues with the matching type.
+func TestCriteria_ListByType(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.IssueType(tasks.TypeBug)).
 		Issue("tst-0002", storetest.IssueType(tasks.TypeTask)).
 		Issue("tst-0003", storetest.IssueType(tasks.TypeBug)).
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{Types: []tasks.Type{tasks.TypeBug}}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{Types: []tasks.Type{tasks.TypeBug}}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find by type: %v", err)
 	}
@@ -721,15 +748,15 @@ func TestFind_ByType(t *testing.T) {
 	}
 }
 
-// TestFind_ByLabel selects issues with the given label (LabelMatchAll default).
-func TestFind_ByLabel(t *testing.T) {
+// TestCriteria_ListByLabel selects issues with the given label (LabelMatchAll default).
+func TestCriteria_ListByLabel(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Label("area:db")).
 		Issue("tst-0002", storetest.Label("area:ui")).
 		Issue("tst-0003", storetest.Label("area:db")).
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{Labels: []string{"area:db"}}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{Labels: []string{"area:db"}}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find by label: %v", err)
 	}
@@ -739,15 +766,15 @@ func TestFind_ByLabel(t *testing.T) {
 	}
 }
 
-// TestFind_EmptyCriteria_ReturnsAll returns all hot issues for empty Criteria.
-func TestFind_EmptyCriteria_ReturnsAll(t *testing.T) {
+// TestCriteria_Empty_ReturnsAll returns all hot issues for empty Criteria.
+func TestCriteria_Empty_ReturnsAll(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001").
 		Issue("tst-0002").
 		Issue("tst-0003").
 		Mem()
 
-	issues, err := s.Find(tasks.Criteria{}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find empty: %v", err)
 	}
@@ -756,12 +783,12 @@ func TestFind_EmptyCriteria_ReturnsAll(t *testing.T) {
 	}
 }
 
-// TestFind_ValidationError_NoScan returns *ValidationError on bad Criteria
+// TestCriteria_ValidationError_NoScan returns *ValidationError on bad Criteria
 // and runs NO scan (no issues are returned).
-func TestFind_ValidationError_NoScan(t *testing.T) {
+func TestCriteria_ValidationError_NoScan(t *testing.T) {
 	s := storetest.New(t).Issue("tst-0001").Mem()
 
-	_, err := s.Find(tasks.Criteria{PriorityMin: ptr(-1)}, tasks.FindOptions{})
+	_, err := listByCriteria(t, s, tasks.Criteria{PriorityMin: ptr(-1)}, tasks.Filter{})
 	if err == nil {
 		t.Fatal("negative PriorityMin: expected error, got nil")
 	}
@@ -771,9 +798,9 @@ func TestFind_ValidationError_NoScan(t *testing.T) {
 	}
 }
 
-// TestFindPage_ReturnsWindowAndTotal verifies that FindPage returns correct
+// TestCriteria_Page_ReturnsWindowAndTotal verifies that FindPage returns correct
 // windowed results and the total count.
-func TestFindPage_ReturnsWindowAndTotal(t *testing.T) {
+func TestCriteria_Page_ReturnsWindowAndTotal(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Priority(0), storetest.Creator("alice")).
 		Issue("tst-0002", storetest.Priority(1), storetest.Creator("alice")).
@@ -782,9 +809,9 @@ func TestFindPage_ReturnsWindowAndTotal(t *testing.T) {
 		Mem()
 
 	// Find alice's issues, page 1 (Offset=0, Limit=2).
-	p, err := s.FindPage(
+	p, err := pageByCriteria(t, s,
 		tasks.Criteria{Creator: "alice"},
-		tasks.FindOptions{Offset: 0, Limit: 2},
+		tasks.Filter{Offset: 0, Limit: 2},
 	)
 	if err != nil {
 		t.Fatalf("FindPage: %v", err)
@@ -797,9 +824,9 @@ func TestFindPage_ReturnsWindowAndTotal(t *testing.T) {
 	}
 }
 
-// TestFind_CriteriaAndExpr_IdenticalResults verifies that a Criteria and its
+// TestCriteria_AndExpr_IdenticalResults verifies that a Criteria and its
 // equivalent hand-written Expr produce identical results.
-func TestFind_CriteriaAndExpr_IdenticalResults(t *testing.T) {
+func TestCriteria_AndExpr_IdenticalResults(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Creator("alice"), storetest.Priority(1)).
 		Issue("tst-0002", storetest.Creator("bob"), storetest.Priority(2)).
@@ -808,7 +835,7 @@ func TestFind_CriteriaAndExpr_IdenticalResults(t *testing.T) {
 
 	// Using Criteria.
 	criteria := tasks.Criteria{Creator: "alice"}
-	criteriaIssues, err := s.Find(criteria, tasks.FindOptions{})
+	criteriaIssues, err := listByCriteria(t, s, criteria, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find(criteria): %v", err)
 	}
@@ -838,13 +865,13 @@ func TestFind_CriteriaAndExpr_IdenticalResults(t *testing.T) {
 	}
 }
 
-// TestFind_ColdScope_StatusClosed_AutoScansClosedPartition verifies that a
+// TestCriteria_ColdScope_StatusClosed_AutoScansClosedPartition verifies that a
 // Criteria with Statuses including StatusClosed causes the cold partition to be
 // scanned automatically (same as a hand-written Expr with status == "closed").
 //
 // This tests QUERY-SPEC §5: cold scope is derived from the BUILT expression by
 // List, not from inspecting the Criteria struct.
-func TestFind_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
+func TestCriteria_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001").  // hot (open)
 		Closed("tst-0002"). // cold (closed)
@@ -852,9 +879,9 @@ func TestFind_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
 
 	// Find only closed issues. No IncludeClosed override needed — the expression
 	// `status == "closed"` triggers auto-scan of the cold partition.
-	issues, err := s.Find(
+	issues, err := listByCriteria(t, s,
 		tasks.Criteria{Statuses: []tasks.Status{tasks.StatusClosed}},
-		tasks.FindOptions{},
+		tasks.Filter{},
 	)
 	if err != nil {
 		t.Fatalf("Find closed status: %v", err)
@@ -875,10 +902,10 @@ func TestFind_ColdScope_StatusClosed_AutoScansClosedPartition(t *testing.T) {
 	}
 }
 
-// TestFind_ColdScope_ClosedField_AutoScansClosedPartition verifies that a
+// TestCriteria_ColdScope_ClosedField_AutoScansClosedPartition verifies that a
 // Criteria with ClosedFrom/ClosedTo triggers the cold partition scan, matching
 // QUERY-SPEC §5 (any closed-field comparison triggers cold scope).
-func TestFind_ColdScope_ClosedField_AutoScansClosedPartition(t *testing.T) {
+func TestCriteria_ColdScope_ClosedField_AutoScansClosedPartition(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001").  // hot
 		Closed("tst-0002"). // cold
@@ -886,9 +913,9 @@ func TestFind_ColdScope_ClosedField_AutoScansClosedPartition(t *testing.T) {
 
 	// Use a ClosedFrom bound far in the past so it matches any closed issue.
 	epoch := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	issues, err := s.Find(
+	issues, err := listByCriteria(t, s,
 		tasks.Criteria{ClosedFrom: &epoch},
-		tasks.FindOptions{},
+		tasks.Filter{},
 	)
 	if err != nil {
 		t.Fatalf("Find ClosedFrom: %v", err)
@@ -920,9 +947,9 @@ func TestFind_ColdScope_ClosedField_AutoScansClosedPartition(t *testing.T) {
 	}
 }
 
-// TestFind_FindOptions_Offset_Limit verifies that FindOptions.Offset and Limit
+// TestCriteria_Filter_OffsetLimit verifies that Filter.Offset and Limit
 // behave the same as Filter.Offset and Filter.Limit.
-func TestFind_FindOptions_Offset_Limit(t *testing.T) {
+func TestCriteria_Filter_OffsetLimit(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001", storetest.Priority(0)).
 		Issue("tst-0002", storetest.Priority(1)).
@@ -931,7 +958,7 @@ func TestFind_FindOptions_Offset_Limit(t *testing.T) {
 		Mem()
 
 	// Offset=1, Limit=2 → skip tst-0001, take tst-0002 and tst-0003.
-	issues, err := s.Find(tasks.Criteria{}, tasks.FindOptions{Offset: 1, Limit: 2})
+	issues, err := listByCriteria(t, s, tasks.Criteria{}, tasks.Filter{Offset: 1, Limit: 2})
 	if err != nil {
 		t.Fatalf("Find with Offset+Limit: %v", err)
 	}
@@ -943,15 +970,15 @@ func TestFind_FindOptions_Offset_Limit(t *testing.T) {
 	}
 }
 
-// TestFind_FindOptions_IncludeClosed overrides cold scope explicitly.
-func TestFind_FindOptions_IncludeClosed(t *testing.T) {
+// TestCriteria_Filter_IncludeClosed overrides cold scope explicitly.
+func TestCriteria_Filter_IncludeClosed(t *testing.T) {
 	s := storetest.New(t).
 		Issue("tst-0001").
 		Closed("tst-0002").
 		Mem()
 
 	// Without IncludeClosed: should only see hot issue.
-	issues, err := s.Find(tasks.Criteria{}, tasks.FindOptions{})
+	issues, err := listByCriteria(t, s, tasks.Criteria{}, tasks.Filter{})
 	if err != nil {
 		t.Fatalf("Find without IncludeClosed: %v", err)
 	}
@@ -960,7 +987,7 @@ func TestFind_FindOptions_IncludeClosed(t *testing.T) {
 	}
 
 	// With IncludeClosed: should see both.
-	issues, err = s.Find(tasks.Criteria{}, tasks.FindOptions{IncludeClosed: true})
+	issues, err = listByCriteria(t, s, tasks.Criteria{}, tasks.Filter{IncludeClosed: true})
 	if err != nil {
 		t.Fatalf("Find with IncludeClosed: %v", err)
 	}
@@ -969,12 +996,12 @@ func TestFind_FindOptions_IncludeClosed(t *testing.T) {
 	}
 }
 
-// TestFind_FindPage_ValidationError_NoScan verifies FindPage also returns
+// TestCriteria_Page_ValidationError_NoScan verifies FindPage also returns
 // *ValidationError on bad Criteria without scanning.
-func TestFind_FindPage_ValidationError_NoScan(t *testing.T) {
+func TestCriteria_Page_ValidationError_NoScan(t *testing.T) {
 	s := storetest.New(t).Issue("tst-0001").Mem()
 
-	_, err := s.FindPage(tasks.Criteria{Statuses: []tasks.Status{"invalid"}}, tasks.FindOptions{})
+	_, err := pageByCriteria(t, s, tasks.Criteria{Statuses: []tasks.Status{"invalid"}}, tasks.Filter{})
 	if err == nil {
 		t.Fatal("invalid Criteria: expected error, got nil")
 	}

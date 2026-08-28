@@ -55,7 +55,7 @@ type fieldCase struct {
 	wantField string // only checked when wantErr == true
 }
 
-func TestValidateFieldConstraints(t *testing.T) {
+func TestValidateFields_Constraints(t *testing.T) {
 	cases := []fieldCase{
 		// ── title ──────────────────────────────────────────────────────────────
 		{

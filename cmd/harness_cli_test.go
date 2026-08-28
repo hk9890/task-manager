@@ -139,16 +139,54 @@ func newStoreWithOpenAndClosed(t *testing.T, prefix string) (root, openID, close
 // shared body of the fixtures above; tests that only need a path call initStore.
 func initStoreAt(t *testing.T, root, prefix string) *tasks.Store {
 	t.Helper()
-	s, err := tasks.Init(root, prefix)
+	s, err := tasks.Init(root, prefix, tasks.WithClock(newTestClock(defaultFixtureStart).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	return s
+}
+
+// defaultFixtureStart is the instant every CLI fixture store starts its clock
+// at, unless a test needs its own.
+var defaultFixtureStart = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+// testClock is the deterministic clock a fixture store is built with. Now
+// advances one second per call so ordering is visible; Set pins it to an
+// instant, which is how a test reaches a timestamp it cannot get by advancing —
+// closing an issue "before" the fixture started, for instance.
+//
+// It replaces the former Store.SetNow. A clock is injected once, at
+// construction (tasks.WithClock), so anything a test wants to change later has
+// to be state the test still owns — this value. That is the point: SetNow wrote
+// an unsynchronised field on a store documented as safe for concurrent use,
+// and the mutex here is on the test's own object instead.
+type testClock struct {
+	mu     sync.Mutex
+	at     time.Time
+	frozen bool
+}
+
+func newTestClock(start time.Time) *testClock {
+	return &testClock{at: start}
+}
+
+// Now returns the next instant: one second on from the last, or the pinned
+// instant while the clock is frozen.
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.frozen {
+		c.at = c.at.Add(time.Second)
+	}
+	return c.at
+}
+
+// Set pins the clock to at. Every later read returns it until the next Set.
+func (c *testClock) Set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = at
+	c.frozen = true
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

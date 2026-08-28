@@ -93,3 +93,11 @@ jobs:
       # the go mise already pins. docs/DOCUMENTING.md owns what it rejects.
       - name: check:docs
         run: mise run check:docs
+
+      # The vulnerability scan. The `vuln` task and its govulncheck pin existed
+      # in .mise.toml but no gate, workflow or document ran them, so every
+      # contributor downloaded the scanner and nothing ever scanned — assurance
+      # with nothing behind it. It runs here rather than in the pre-commit gate
+      # because it reaches the network for the vulnerability database.
+      - name: vuln (both modules)
+        run: mise run vuln

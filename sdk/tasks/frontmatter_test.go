@@ -26,7 +26,7 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-func TestMarshalUnmarshalRoundTrip(t *testing.T) {
+func TestFrontmatter_MarshalUnmarshalRoundTrip(t *testing.T) {
 	created := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	updated := time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC)
 	closed := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
@@ -87,7 +87,7 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUnmarshalOpenIssueNoClosed(t *testing.T) {
+func TestUnmarshal_OpenIssueNoClosed(t *testing.T) {
 	data, err := Marshal(&Issue{
 		ID: "agt-0001", Title: "open one", Status: StatusOpen, Type: TypeTask, Priority: 2,
 		Created: time.Now(), Updated: time.Now(),
@@ -171,7 +171,7 @@ func TestMarshal_TruncatesSubSecondTimestamps(t *testing.T) {
 	}
 }
 
-func TestUnmarshalErrors(t *testing.T) {
+func TestUnmarshal_Errors(t *testing.T) {
 	cases := map[string]string{
 		"no frontmatter": "just some text",
 		"unterminated":   "---\nid: x\ntitle: y",

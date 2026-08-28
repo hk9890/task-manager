@@ -20,9 +20,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // TestMemStore_CreateAndGet verifies basic Create → Get round-trip on Mem.
@@ -98,7 +95,7 @@ func TestMemStore_All(t *testing.T) {
 //
 // This is an L2 test: it uses vfs.Mem so no real disk is touched.
 func TestNextID_ScansClosedPartition(t *testing.T) {
-	m := vfs.NewMem()
+	s, m := newMemStore(t)
 	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
 		t.Fatalf("MkdirAll hot: %v", err)
 	}
@@ -111,14 +108,6 @@ func TestNextID_ScansClosedPartition(t *testing.T) {
 	// Write a fake closed issue file with a high number.
 	if err := m.WriteAtomic(closedDir+"/agt-0042.md", []byte("fake"), 0o644); err != nil {
 		t.Fatalf("WriteAtomic closed file: %v", err)
-	}
-
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
 	}
 
 	// The hot directory has no issues; closed/ has agt-0042. nextID must read
@@ -141,21 +130,10 @@ func TestNextID_ScansClosedPartition(t *testing.T) {
 //
 // This is an L2 test: uses vfs.Mem.
 func TestNextID_ClosedDirAbsent(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	s, m := newMemStore(t)
 	// Write one issue in the hot dir; closed/ does not exist.
 	if err := m.WriteAtomic("/.tasks/agt-0005.md", []byte("fake"), 0o644); err != nil {
 		t.Fatalf("WriteAtomic: %v", err)
-	}
-
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
 	}
 
 	id, err := s.nextID()
@@ -176,10 +154,7 @@ func TestNextID_ClosedDirAbsent(t *testing.T) {
 //
 // This is an L2 test: uses vfs.Mem.
 func TestNextID_BothPartitionsPopulated(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	s, m := newMemStore(t)
 	if err := m.MkdirAll("/.tasks/closed", 0o755); err != nil {
 		t.Fatalf("MkdirAll closed: %v", err)
 	}
@@ -189,14 +164,6 @@ func TestNextID_BothPartitionsPopulated(t *testing.T) {
 	}
 	if err := m.WriteAtomic("/.tasks/closed/agt-0042.md", []byte("fake"), 0o644); err != nil {
 		t.Fatalf("WriteAtomic closed: %v", err)
-	}
-
-	s := openWithFS("/", m)
-	s.cfg = Config{Prefix: "agt"}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.now = func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
 	}
 
 	id, err := s.nextID()
