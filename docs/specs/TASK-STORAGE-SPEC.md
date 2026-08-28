@@ -120,7 +120,16 @@ concrete example.
 |---|---|
 | **Path** | `.tasks/` |
 | **Role** | Marker directory that anchors store discovery and holds the project. |
-| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/`, `content/` and `closed/` subdirectories. |
+| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/`, `content/` and `closed/` subdirectories. A store may also hold `packages/`, described below. |
+
+`packages/` holds hook packages committed with the store, which a `use:` entry reaches by
+path (§4.2). The engine neither creates nor reads it as store data: it is a directory the
+project puts there, whose format is [HOOK-SPEC.md](HOOK-SPEC.md) §3.6, and it sits inside
+`.tasks/` so that a package travels with the store — `store move --central` moves the tree
+whole, executable bits included ([CONFIG-SPEC.md](CONFIG-SPEC.md) §5).
+
+A directory the engine does not know is ignored rather than rejected, exactly as an
+unknown key in `config.yaml` is: a listing reads the root's `*.md` files and nothing else.
 
 ### 4.2 Project config — `config.yaml`
 
