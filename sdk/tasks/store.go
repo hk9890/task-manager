@@ -146,12 +146,19 @@ type Store struct {
 	// configures level/destination from TASKMGR_LOG and injects the logger here.
 	logger *slog.Logger
 
-	// hookOnce guards the lazy compile of the hook configuration. Built on the
+	// cfgMu guards cfg and the compiled hook set below. withLock's mu is held by
+	// writers only, so it cannot serialize Config/Prefix/hooks against the write
+	// that replaces both — those run on any goroutine, and the s.mu comment above
+	// promises one embedder's goroutines never interleave.
+	cfgMu sync.Mutex
+
+	// hookBuilt guards the lazy compile of the hook configuration. Built on the
 	// first write (via hooks()); never on a read, so a malformed hooks block
-	// fails mutations closed (HOOK-SPEC §3.4) without affecting queries.
-	hookOnce sync.Once
-	hookSet  *hookSet
-	hookErr  error
+	// fails mutations closed (HOOK-SPEC §3.4) without affecting queries. A
+	// configuration write clears it, so a long-lived handle runs what it wrote.
+	hookBuilt bool
+	hookSet   *hookSet
+	hookErr   error
 }
 
 // hooks returns the compiled, validated hook configuration, building it once on
@@ -166,14 +173,18 @@ type Store struct {
 // config (CONFIG-SPEC §4). A home that cannot be located is not an error — there
 // is then simply nothing to inherit.
 func (s *Store) hooks() (*hookSet, error) {
-	s.hookOnce.Do(func() {
-		global, err := s.globalConfig()
-		if err != nil {
-			s.hookErr = err
-			return
-		}
-		s.hookSet, s.hookErr = buildHookSet(global, s.cfg)
-	})
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	if s.hookBuilt {
+		return s.hookSet, s.hookErr
+	}
+	s.hookBuilt = true
+	global, err := s.globalConfig()
+	if err != nil {
+		s.hookErr = err
+		return nil, s.hookErr
+	}
+	s.hookSet, s.hookErr = buildHookSet(global, s.cfg)
 	return s.hookSet, s.hookErr
 }
 
@@ -321,51 +332,85 @@ func (s *Store) Dir() string { return s.dir }
 func (s *Store) Name() string { return s.name }
 
 // Prefix returns the configured ID prefix.
-func (s *Store) Prefix() string { return s.cfg.Prefix }
+func (s *Store) Prefix() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.cfg.Prefix
+}
 
 // Config returns a copy of the store's configuration (TASK-STORAGE-SPEC §4.2).
-// The Hooks slice is copied too, so a caller editing the result cannot reach the
-// hook configuration this store is already running with.
+// The Hooks are deep-copied, argv slices included, so a caller editing the
+// result cannot reach the hook configuration this store is already running with
+// — a compiled hook holds the very []string a Hook carries, so copying only the
+// Hook structs would leave `cfg.Hooks[0].Run[0] = …` rewriting the next
+// mutation's gate.
 func (s *Store) Config() Config {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
 	cfg := s.cfg
-	cfg.Hooks = append([]Hook(nil), s.cfg.Hooks...)
+	cfg.Hooks = cloneHooks(s.cfg.Hooks)
 	return cfg
 }
 
-// SetConfig replaces the store's configuration, writing config.yaml under the
-// store lock.
+// UpdateConfig applies mutate to the store's configuration and writes the
+// result (TASK-STORAGE-SPEC §4.2). The read, the mutation and the write all
+// happen inside one hold of the store lock, so two processes editing different
+// keys cannot discard each other's work — which is what a caller doing
+// Config/edit/SetConfig around the lock does.
+//
+// mutate receives the configuration as it is on disk right now, not the snapshot
+// the Store was opened with. Returning an error from it abandons the write.
 //
 // Prefix is immutable: it is baked into every filename and into every stored
 // reference to an issue, so changing it would orphan the whole store. An empty
 // or differing Prefix is a validation error rather than a silent no-op.
-//
-// The hooks block is compiled before anything is written. A malformed one fails
-// every subsequent mutation (HOOK-SPEC §3.4), so refusing here keeps the failure
-// at the command that caused it instead of at the next unrelated write.
-func (s *Store) SetConfig(cfg Config) error {
-	if strings.TrimSpace(cfg.Prefix) == "" {
-		return invalid("prefix", "config prefix must not be empty")
-	}
-	if cfg.Prefix != s.cfg.Prefix {
-		return invalid("prefix", "prefix is immutable: %q is baked into every issue ID in this store, so it cannot be changed to %q", s.cfg.Prefix, cfg.Prefix)
-	}
-	global, err := s.globalConfig()
-	if err != nil {
-		return err
-	}
-	if _, err := buildHookSet(global, cfg); err != nil {
-		return err
-	}
+func (s *Store) UpdateConfig(mutate func(*Config) error) error {
 	return s.withLock(func() error {
-		if err := s.writeConfig(cfg); err != nil {
+		cur, err := s.readConfig()
+		if err != nil {
 			return err
 		}
-		s.cfg = cfg
-		// The compiled set is built once per Store (hookOnce). Drop it so a
-		// long-lived handle runs the hooks it just wrote, not the ones it opened
-		// with.
-		s.hookOnce = sync.Once{}
+		next := cur
+		next.Hooks = cloneHooks(cur.Hooks)
+		if err := mutate(&next); err != nil {
+			return err
+		}
+		if strings.TrimSpace(next.Prefix) == "" {
+			return invalid("prefix", "config prefix must not be empty")
+		}
+		if next.Prefix != cur.Prefix {
+			return invalid("prefix", "prefix is immutable: %q is baked into every issue ID in this store, so it cannot be changed to %q", cur.Prefix, next.Prefix)
+		}
+		// Only what this write introduces is compiled. A malformed hook fails
+		// every later mutation (HOOK-SPEC §3.4), so refusing to add one keeps the
+		// failure at the command that caused it — but refusing to write while one
+		// is already on disk would also block the command that removes it.
+		if err := checkHookChange(cur.HookTimeout, cur.Hooks, next.HookTimeout, next.Hooks, ""); err != nil {
+			return err
+		}
+		if err := s.writeConfig(next); err != nil {
+			return err
+		}
+		s.cfgMu.Lock()
+		defer s.cfgMu.Unlock()
+		s.cfg = next
+		// The compiled set is built once per Store. Drop it so a long-lived
+		// handle runs the hooks it just wrote, not the ones it opened with.
+		s.hookBuilt = false
 		s.hookSet, s.hookErr = nil, nil
+		return nil
+	})
+}
+
+// SetConfig replaces the store's configuration wholesale, writing config.yaml
+// under the store lock.
+//
+// It is last-writer-wins by construction: cfg was built from a read that happened
+// outside the lock, so a concurrent edit made between that read and this call is
+// overwritten. Use UpdateConfig to change one key without discarding the rest.
+func (s *Store) SetConfig(cfg Config) error {
+	return s.UpdateConfig(func(c *Config) error {
+		*c = cfg
 		return nil
 	})
 }

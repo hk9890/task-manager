@@ -34,6 +34,9 @@
 //     docs/specs/ on a page written for someone who never opens this repository
 //     (docs/DOCUMENTING.md owns that rule).
 //
+// Class 3 reads its anchor table outside fenced blocks only: a `#` line inside a
+// fence is an example or a shell comment, and GitHub mints no anchor for it.
+//
 // Every spelling of a citation counts, fenced blocks included: a stale path in a
 // code block misleads a reader exactly as far as one in prose.
 package main
@@ -67,6 +70,10 @@ var mdLinkText = regexp.MustCompile(`\[([^\]]*)\]\([^)\s]*\)`)
 
 // lineAnchor matches the `:42` tail of a line-pinned citation.
 var lineAnchor = regexp.MustCompile(`:\d+$`)
+
+// fence matches the opening or closing line of a fenced code block, ``` or ~~~,
+// with any info string. Anchors are derived outside fences only.
+var fence = regexp.MustCompile("^\\s*(```|~~~)")
 
 // slugPunct is everything GitHub drops when it derives an anchor from a heading:
 // anything that is not alphanumeric, a space, a hyphen or an underscore.
@@ -182,7 +189,14 @@ func checkCitations(doc, text, root string) []finding {
 			if !rooted(line, loc[0]) {
 				continue
 			}
-			token := line[loc[0]:loc[1]]
+			// Prose ends a sentence: `… lives in cmd/root.go.` The trailing period
+			// is punctuation, not part of the path, and the exported-symbol strip
+			// below cannot remove it — it only strips a suffix that starts with an
+			// uppercase letter, which is what keeps `cmd/root.go` intact.
+			token := strings.TrimRight(line[loc[0]:loc[1]], ".,;:")
+			if token == "" {
+				continue
+			}
 			if userGuide {
 				out = append(out, finding{doc, i + 1, fmt.Sprintf(
 					"user-guide page cites the source tree (%q) — it is written for someone who never opens this repository", token)})
@@ -291,6 +305,10 @@ func checkLinks(doc, text, root string, anchors map[string]map[string]bool) []fi
 // anchorsOf derives the set of `#fragment`s a Markdown file answers to, the way
 // GitHub does: drop punctuation, lowercase, spaces to hyphens, and disambiguate
 // a repeated heading with a numeric suffix.
+//
+// Fenced blocks are skipped. A `#` inside one is a shell comment or a Markdown
+// example, not a heading, and GitHub mints no anchor for it — counting it made
+// the gate accept links that 404, which is the one thing it exists to catch.
 func anchorsOf(path string) map[string]bool {
 	out := map[string]bool{}
 	body, err := os.ReadFile(path)
@@ -298,7 +316,15 @@ func anchorsOf(path string) map[string]bool {
 		return out
 	}
 	seen := map[string]int{}
+	inFence := false
 	for _, line := range strings.Split(string(body), "\n") {
+		if fence.MatchString(line) {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
 		m := heading.FindStringSubmatch(line)
 		if m == nil {
 			continue

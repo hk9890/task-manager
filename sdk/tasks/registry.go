@@ -143,34 +143,52 @@ const (
 	storeFinished                   // a usable store
 )
 
-func storeStateOf(fs vfs.FS, dir string) storeState {
+// storeStateOf classifies dir. Only a not-exist Stat means storeMissing: any
+// other failure — a permission that stops the walk, an I/O error — says nothing
+// about whether the store is there, and answering "gone" for it reports intact
+// stores as dangling and sends the reader to advice that deletes the entry.
+func storeStateOf(fs vfs.FS, dir string) (storeState, error) {
 	fi, err := fs.Stat(dir)
-	if err != nil || !fi.IsDir() {
-		return storeMissing
+	if err != nil {
+		if vfs.IsNotExist(err) {
+			return storeMissing, nil
+		}
+		return storeMissing, fmt.Errorf("read central store %s: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return storeMissing, nil
 	}
 	if _, err := fs.Stat(filepath.Join(dir, ConfigFileName)); err != nil {
-		return storePartial
+		if vfs.IsNotExist(err) {
+			return storePartial, nil
+		}
+		return storeMissing, fmt.Errorf("read central store %s: %w", dir, err)
 	}
-	return storeFinished
+	return storeFinished, nil
 }
 
 // healthOf maps the internal classification onto the public one Stores reports,
 // so a listing and a resolution can never disagree about an entry.
-func healthOf(fs vfs.FS, dir string) StoreHealth {
-	switch storeStateOf(fs, dir) {
+func healthOf(fs vfs.FS, dir string) (StoreHealth, error) {
+	st, err := storeStateOf(fs, dir)
+	if err != nil {
+		return StoreOK, err
+	}
+	switch st {
 	case storeMissing:
-		return StoreDangling
+		return StoreDangling, nil
 	case storePartial:
-		return StoreBroken
+		return StoreBroken, nil
 	default:
-		return StoreOK
+		return StoreOK, nil
 	}
 }
 
 // storeComplete reports whether dir is a finished store: a directory holding a
 // config.yaml.
-func storeComplete(fs vfs.FS, dir string) bool {
-	return storeStateOf(fs, dir) == storeFinished
+func storeComplete(fs vfs.FS, dir string) (bool, error) {
+	st, err := storeStateOf(fs, dir)
+	return st == storeFinished, err
 }
 
 // errPartialStore is the shared diagnostic for a registry entry whose folder is
@@ -181,6 +199,16 @@ func storeComplete(fs vfs.FS, dir string) bool {
 func errPartialStore(name, dir string) error {
 	return fmt.Errorf("central store %q is not a finished store at %s (no %s) — a move may have failed part-way",
 		name, dir, ConfigFileName)
+}
+
+// errDanglingStore is the diagnostic for a registry entry whose folder is gone
+// altogether. It is a different fault from a partial store and takes a different
+// repair, so it must not borrow errPartialStore's message: that one sends the
+// reader to `ls` and a hand-written config.yaml inside a directory that does not
+// exist, and both commands fail on the spot.
+func errDanglingStore(name, dir string) error {
+	return fmt.Errorf("central store %q is registered but its directory is gone (%s) — restore it, or drop the entry from %s",
+		name, dir, registryFileName)
 }
 
 // stagingPrefix names the directory a store is assembled in before it is
@@ -259,9 +287,17 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 				continue
 			}
 			dir := filepath.Join(croot, storesSubdir, en.Store)
-			if !storeComplete(fs, dir) {
-				// Named explicitly, so say what is wrong rather than reporting
-				// it as unregistered: the entry is there, the store is not.
+			st, err := storeStateOf(fs, dir)
+			if err != nil {
+				return nil, ResolveInfo{}, err
+			}
+			// Named explicitly, so say what is wrong rather than reporting it as
+			// unregistered: the entry is there, the store is not. Which of the two
+			// faults it is decides the repair, so they get separate messages.
+			switch st {
+			case storeMissing:
+				return nil, ResolveInfo{}, errDanglingStore(en.Store, dir)
+			case storePartial:
 				return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 			}
 			project := canonicalize(fs, en.Path, home, croot)
@@ -300,7 +336,11 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	var kept []registryEntry
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
-		if storeStateOf(fs, dir) == storeMissing {
+		st, err := storeStateOf(fs, dir)
+		if err != nil {
+			return nil, ResolveInfo{}, err
+		}
+		if st == storeMissing {
 			continue // dangling: the folder is gone — skip (CONFIG-SPEC §3)
 		}
 		canonPaths = append(canonPaths, canonicalize(fs, en.Path, home, croot))
@@ -318,7 +358,9 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	// every issue file intact; skipping it hands the project a shorter ancestor's
 	// store or ErrNoStore, and the advice that comes with the latter creates a
 	// second, empty store beside the real one.
-	if !storeComplete(fs, dir) {
+	if done, err := storeComplete(fs, dir); err != nil {
+		return nil, ResolveInfo{}, err
+	} else if !done {
 		return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 	}
 	project := canonPaths[idx]
@@ -350,11 +392,15 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 	out := make([]StoreEntry, 0, len(entries))
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
+		health, err := healthOf(fs, dir)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, StoreEntry{
 			Path:      canonicalize(fs, en.Path, home, croot),
 			Store:     en.Store,
 			StorePath: dir,
-			Health:    healthOf(fs, dir),
+			Health:    health,
 		})
 	}
 	return out, nil
@@ -638,7 +684,9 @@ func relinkCentralWith(name, projectPath string, fs vfs.FS, e env.Environment) (
 	// by a half-done promote and report success on an entry the very next command
 	// skips as dangling.
 	dir := filepath.Join(croot, storesSubdir, name)
-	if !storeComplete(fs, dir) {
+	if done, err := storeComplete(fs, dir); err != nil {
+		return "", err
+	} else if !done {
 		return "", fmt.Errorf("%w: %s is not a finished store (no %s) — relinking it would write an entry that resolution skips",
 			ErrNoStore, dir, ConfigFileName)
 	}

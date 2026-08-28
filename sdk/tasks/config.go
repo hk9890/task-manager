@@ -42,6 +42,11 @@ const (
 	storesSubdir = "stores"
 	// centralLockName is the advisory lock for registry writes (CONFIG-SPEC §3).
 	centralLockName = ".lock"
+	// globalConfigLockName is the advisory lock for per-user config writes. It is
+	// a second lock file rather than centralLockName because the two guard
+	// different files: the home and the central root are the same directory only
+	// by default (CONFIG-SPEC §2/§3).
+	globalConfigLockName = ".config.lock"
 
 	// envTaskmgrHome overrides the per-user home (CONFIG-SPEC §1).
 	envTaskmgrHome = "TASKMGR_HOME"
@@ -103,14 +108,8 @@ func loadGlobalConfig(fs vfs.FS, home string) (GlobalConfig, error) {
 	return cfg, nil
 }
 
-// saveGlobalConfig writes cfg to <home>/config.yaml atomically, creating the
-// home if it is absent. Unlike the read path (CONFIG-SPEC §1) this is a write
-// command, so creating the home is expected rather than a side effect.
-//
-// It takes no lock. The central-root lock guards mapping.yaml, which may live
-// under a different directory than the home (CONFIG-SPEC §2/§3), and the file is
-// hand-edited anyway; the atomic replace is what keeps a reader from ever seeing
-// a partial document.
+// saveGlobalConfig writes cfg to <home>/config.yaml atomically. The caller must
+// already hold the home's config lock (updateGlobalConfig is the only path in).
 func saveGlobalConfig(fs vfs.FS, home string, cfg GlobalConfig) error {
 	path := filepath.Join(home, globalConfigName)
 	old, err := fs.ReadFile(path)
@@ -123,10 +122,39 @@ func saveGlobalConfig(fs vfs.FS, home string, cfg GlobalConfig) error {
 	if err != nil {
 		return err
 	}
+	return fs.WriteAtomic(path, data, 0o644)
+}
+
+// updateGlobalConfig is UpdateGlobalConfig with injectable seams, for hermetic
+// tests. Creating the home is expected here: unlike the read path (CONFIG-SPEC
+// §1) this is a write command.
+func updateGlobalConfig(fs vfs.FS, e env.Environment, mutate func(*GlobalConfig) error) error {
+	home, err := taskmgrHome(e)
+	if err != nil {
+		return err
+	}
 	if err := fs.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
-	return fs.WriteAtomic(path, data, 0o644)
+	unlock, err := fs.Lock(filepath.Join(home, globalConfigLockName))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unlock() }()
+
+	cur, err := loadGlobalConfig(fs, home)
+	if err != nil {
+		return err
+	}
+	next := cur
+	next.Hooks = cloneHooks(cur.Hooks)
+	if err := mutate(&next); err != nil {
+		return err
+	}
+	if err := checkHookChange(cur.HookTimeout, cur.Hooks, next.HookTimeout, next.Hooks, globalHookIDPrefix); err != nil {
+		return err
+	}
+	return saveGlobalConfig(fs, home, next)
 }
 
 // LoadGlobalConfig reads the per-user configuration (CONFIG-SPEC §2), returning
@@ -140,22 +168,36 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 	return loadGlobalConfig(vfs.NewOS(), home)
 }
 
+// UpdateGlobalConfig applies mutate to the per-user configuration and writes the
+// result (CONFIG-SPEC §2), creating the taskmgr home if needed. The read, the
+// mutation and the write all happen inside one hold of the home's config lock,
+// so two processes editing different keys cannot discard each other's work.
+//
+// mutate receives the configuration as it is on disk right now, not a snapshot
+// read earlier. Returning an error from it abandons the write.
+//
+// A hook the write introduces is compiled before anything is written: a global
+// hook that fails to compile blocks mutations in *every* store on the machine
+// (HOOK-SPEC §3.4/§3.5), so it is refused at the command that adds it rather
+// than left for the next write in some unrelated project to discover. A
+// malformed hook that is already on disk is not re-validated — that is what
+// leaves `taskmgr config hook rm` able to remove it.
+func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error {
+	return updateGlobalConfig(vfs.NewOS(), env.NewOS(), mutate)
+}
+
 // SaveGlobalConfig writes cfg as the per-user configuration (CONFIG-SPEC §2),
 // creating the taskmgr home if needed.
 //
-// The hooks block is validated before anything is written: a global hook that
-// would fail to compile blocks mutations in *every* store on the machine
-// (HOOK-SPEC §3.4/§3.5), so this refuses to persist one rather than leaving the
-// error for the next write in some unrelated project to discover.
+// It is last-writer-wins by construction: cfg was built from a read that happened
+// outside the lock, so a concurrent edit made between that read and this call is
+// overwritten. Use UpdateGlobalConfig to change one key without discarding the
+// rest.
 func SaveGlobalConfig(cfg GlobalConfig) error {
-	if _, err := buildHookSet(cfg, Config{}); err != nil {
-		return err
-	}
-	home, err := taskmgrHome(env.NewOS())
-	if err != nil {
-		return err
-	}
-	return saveGlobalConfig(vfs.NewOS(), home, cfg)
+	return UpdateGlobalConfig(func(g *GlobalConfig) error {
+		*g = cfg
+		return nil
+	})
 }
 
 // GlobalConfigPath returns the absolute path of the per-user config file

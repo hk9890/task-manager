@@ -11,10 +11,11 @@ file wins.
   [CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync) maps the area to its spec.
   The `spec_*_conformance_test.go` suites cover the sections named in their own headers and
   nothing more, so an un-updated spec is a review finding, not a test failure.
-- **A file added to the `imperativeShell` map in `sdk/tasks/importboundary_test.go`.**
-  The guard passes either way — that is the point of the map — so this is where the
-  pure-core boundary erodes. A file belongs on the list only when it genuinely cannot do
-  its job over plain values;
+- **A file added to `mayDeclareStoreMethods` or `mayImportVFS` in
+  `sdk/tasks/importboundary_test.go`.** The guard passes either way — that is the point of
+  the maps — so this is where the pure-core boundary erodes. A file belongs on a list only
+  when it genuinely cannot do its job over plain values, and being on one list is not a
+  reason to add it to the other;
   [ARCHITECTURE-SPEC §5](specs/ARCHITECTURE-SPEC.md#5-the-engine) is the standard.
   Adding one to make a build pass is a blocking finding.
 - **A disk, process, or environment call outside its seam** — an inline `os.Getenv` or

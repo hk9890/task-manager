@@ -35,7 +35,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 | Change | Goes in |
 |---|---|
-| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. One flag struct per command, named `<command>Flags` — never shared between sibling subcommands. The only package-level flag variables are `flagJSON`/`flagDir`/`flagStoreName`, which are root *persistent* flags every command reads |
+| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. One flag struct per command, named `<command>Flags` — never shared between sibling subcommands. A selector every subcommand of a group reads is that group's own *persistent* flag instead (`configFlags` on `config`), which also makes it accept in both positions. The only package-level flag variables are those and the root persistent flags `flagJSON`/`flagDir`/`flagStoreName` |
 | Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |

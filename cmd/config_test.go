@@ -392,3 +392,67 @@ func TestConfigGlobal_HooksApplyToAStoreThatHasNone(t *testing.T) {
 		t.Fatalf("the when clause must leave non-docs alone: exit %d, stderr %q", code, errOut)
 	}
 }
+
+// ── the --global selector ────────────────────────────────────────────────────
+
+// TestConfigGlobal_IsAcceptedInBothPositions: --global is a persistent flag on
+// the group, so it works where a reader naturally puts it. Registered on the
+// leaves only, `config --global list` failed as an unknown flag.
+func TestConfigGlobal_IsAcceptedInBothPositions(t *testing.T) {
+	isolatedHome(t)
+	for _, args := range [][]string{
+		{"config", "list", "--global"},
+		{"config", "--global", "list"},
+	} {
+		out, errOut, code := run(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit %d, stderr %q", args, code, errOut)
+		}
+		if !strings.Contains(out, "scope: global") {
+			t.Errorf("%v did not act on the per-user config:\n%s", args, out)
+		}
+	}
+}
+
+// ── set is not unset ─────────────────────────────────────────────────────────
+
+// TestConfigSet_RefusesAnEmptyValue: a wrapper passing an unset shell variable
+// used to delete the key and exit 0, reporting "Unset".
+func TestConfigSet_RefusesAnEmptyValue(t *testing.T) {
+	root := newStore(t)
+	if _, errOut, code := run(t, "--dir", root, "config", "set", "hook_timeout", "5m"); code != 0 {
+		t.Fatalf("setup: exit %d, stderr %q", code, errOut)
+	}
+
+	_, errOut, code := run(t, "--dir", root, "config", "set", "hook_timeout", "")
+	if code == 0 {
+		t.Fatal("an empty value must not be accepted by set")
+	}
+	if !strings.Contains(errOut, "config unset") {
+		t.Errorf("stderr %q does not point at the command that clears a key", errOut)
+	}
+	out, _, _ := run(t, "--dir", root, "config", "get", "hook_timeout")
+	if strings.TrimSpace(out) != "5m" {
+		t.Errorf("hook_timeout = %q after a refused set, want the previous 5m", strings.TrimSpace(out))
+	}
+}
+
+// ── hook ids stay addressable ────────────────────────────────────────────────
+
+// TestConfigHookRm_RemovesWhenNothingCollides keeps the ordinary path working.
+func TestConfigHookRm_RemovesWhenNothingCollides(t *testing.T) {
+	root := newStore(t)
+	for _, run1 := range []string{"a", "b"} {
+		if _, errOut, code := run(t, "--dir", root, "config", "hook", "add",
+			"--event", "pre-close", "--run", run1); code != 0 {
+			t.Fatalf("hook add %s: exit %d, stderr %q", run1, code, errOut)
+		}
+	}
+	if _, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "pre-close#0"); code != 0 {
+		t.Fatalf("hook rm: exit %d, stderr %q", code, errOut)
+	}
+	out, _, _ := run(t, "--dir", root, "config", "hook", "list")
+	if !strings.Contains(out, "b") || strings.Contains(out, " a ") {
+		t.Errorf("hook list after removal:\n%s", out)
+	}
+}

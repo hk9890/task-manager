@@ -114,11 +114,28 @@ func hookEnv(event string, h compiledHook, issueID, storeDir string) []string {
 func (s *Store) runOne(h compiledHook, event, issueID string, payload []byte, timeout time.Duration) exec.Result {
 	return s.runner.Run(exec.Spec{
 		Argv:    h.run,
-		Dir:     s.root,
+		Dir:     s.hookDir(),
 		Env:     hookEnv(event, h, issueID, s.dir),
 		Stdin:   payload,
 		Timeout: timeout,
 	})
+}
+
+// hookDir is the working directory a hook process runs in: the project root
+// (HOOK-SPEC §3.2), or the store's own data directory when that root is gone.
+//
+// A central store outlives the project directory it is registered for: the entry
+// still matches and still opens (CONFIG-SPEC §3), and every issue file is
+// intact. Handing the spawn a directory that does not exist fails it before the
+// binary is ever reached, and the seam reports that as "could not execute" —
+// naming the hook's own argv, which is fine. One global hook would then make
+// every such store permanently un-writable, with an error pointing at the wrong
+// thing entirely.
+func (s *Store) hookDir() string {
+	if fi, err := s.fs.Stat(s.root); err == nil && fi.IsDir() {
+		return s.root
+	}
+	return s.dir
 }
 
 // hookRow builds a query.Row for newIss with ready/blocked computed against the

@@ -176,8 +176,9 @@ func (s *Store) Dir() string      // absolute path to the data directory
 func (s *Store) Name() string     // central-registry name, "" for a local store
 func (s *Store) Prefix() string   // configured ID prefix
 
-func (s *Store) Config() Config           // a copy, Hooks included
-func (s *Store) SetConfig(cfg Config) error // validate, then write config.yaml under the lock
+func (s *Store) Config() Config                              // a deep copy, Hooks included
+func (s *Store) UpdateConfig(mutate func(*Config) error) error // read-modify-write under the lock
+func (s *Store) SetConfig(cfg Config) error                  // replace the file wholesale
 ```
 
 `Name` reports the registry name the store was opened under — set by `Resolve` for
@@ -187,15 +188,23 @@ take a name from. It is what identifies a store across projects; an issue ID doe
 not, because a prefix is derived from the project directory name, so two projects
 whose directories share a name share a prefix (CONFIG-SPEC §5).
 
-`Config` returns a copy: the `Hooks` slice is cloned, so editing the result cannot
-reach the configuration the store is running with.
+`Config` returns a **deep** copy: each `Hook`'s `Run` argv is cloned too. A compiled
+hook holds the very `[]string` a `Hook` carries, so a shallow copy would leave
+`cfg.Hooks[0].Run[0] = …` rewriting the gate the next mutation executes.
 
-`SetConfig` is the only public way to write `config.yaml`. It rejects a `Prefix` that
-is empty or differs from the store's — the prefix is part of every filename and every
-stored reference, so it is immutable — and compiles the hooks block before writing, so a
-block that would fail every later mutation ([HOOK-SPEC](HOOK-SPEC.md) §3.4) is refused
-here instead. On success the store's compiled hook set is invalidated, so a long-lived
-handle runs the hooks it just wrote rather than the ones it opened with.
+`UpdateConfig` is how a caller changes one key. The read, the mutation and the write
+all happen inside one hold of the store lock, so two processes editing different keys
+keep both edits; `mutate` receives the configuration as it is on disk, not the snapshot
+the `Store` was opened with. `SetConfig` replaces the file wholesale and is therefore
+last-writer-wins: `cfg` was built from a read that happened outside the lock.
+
+Both reject a `Prefix` that is empty or differs from the store's — the prefix is part of
+every filename and every stored reference, so it is immutable — and both compile the
+hooks a write **introduces** before writing, so a block that would fail every later
+mutation ([HOOK-SPEC](HOOK-SPEC.md) §3.4) is refused here instead. A malformed hook
+already on disk is not re-validated: it would otherwise refuse the write that removes
+it. On success the store's compiled hook set is invalidated, so a long-lived handle runs
+the hooks it just wrote rather than the ones it opened with.
 
 ---
 
@@ -344,7 +353,8 @@ type GlobalConfig struct {
 }
 
 func LoadGlobalConfig() (GlobalConfig, error)  // built-in defaults when the file is absent
-func SaveGlobalConfig(cfg GlobalConfig) error  // validates Hooks, then writes; creates the home
+func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error // read-modify-write under the home lock
+func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
 
 func HookID(h Hook, index int, global bool) string // the effective id: "gate", "pre-close#2", "global:gate"
@@ -355,8 +365,12 @@ carry a `global:` prefix ([HOOK-SPEC](HOOK-SPEC.md) §3.5). `HookID` is the one 
 that rule is implemented, so a caller listing or removing hooks derives an id rather
 than re-deriving the rule.
 
-`SaveGlobalConfig` validates the hooks block before writing: a malformed one would fail
-mutations in every store on the machine, so it is refused at the call that caused it.
+`UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
+home's own lock: the first is a read-modify-write inside it, the second replaces the file
+from a snapshot read outside it. Both compile a hook the write introduces — a malformed
+one would fail mutations in every store on the machine, so it is refused at the call that
+caused it — and neither re-validates one already on disk, which is what leaves a bad
+entry removable.
 
 ---
 

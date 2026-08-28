@@ -295,3 +295,42 @@ func TestRunPre_NoHooksForEventIsNoop(t *testing.T) {
 		t.Error("no hooks should run")
 	}
 }
+
+// TestHookDir_FallsBackWhenTheProjectRootIsGone: a central store outlives the
+// project directory it is registered for (CONFIG-SPEC §3), and its issue files
+// are intact. Spawning the hook in a directory that no longer exists fails
+// before the binary is reached, so one global hook made every such store
+// permanently un-writable — reported as "could not execute", which blames the
+// hook's argv.
+func TestHookDir_FallsBackWhenTheProjectRootIsGone(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := initData("/gone", "/central/stores/x", "tst", m, nil)
+	if err != nil {
+		t.Fatalf("initData: %v", err)
+	}
+	if got := s.hookDir(); got != s.dir {
+		t.Errorf("hookDir = %q, want the store directory %q", got, s.dir)
+	}
+
+	// The spawn sees the same directory.
+	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Allow("") }}
+	s.runner = fake
+	s.runOne(compiledHook{id: "gate", event: "pre-close", run: []string{"true"}}, "pre-close", "tst-1", nil, 0)
+	calls := fake.Calls()
+	if len(calls) != 1 || calls[0].Dir != s.dir {
+		t.Fatalf("hook ran in %+v, want Dir %q", calls, s.dir)
+	}
+}
+
+// TestHookDir_IsTheProjectRootWhenItExists is the rule itself (HOOK-SPEC §3.2);
+// the fallback must not take over the normal case.
+func TestHookDir_IsTheProjectRootWhenItExists(t *testing.T) {
+	m := vfs.NewMem()
+	s, err := initData("/proj", "/proj/.tasks", "tst", m, nil)
+	if err != nil {
+		t.Fatalf("initData: %v", err)
+	}
+	if got := s.hookDir(); got != "/proj" {
+		t.Errorf("hookDir = %q, want /proj", got)
+	}
+}

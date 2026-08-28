@@ -107,8 +107,9 @@ For the CLI:
   `warn`, and an unrecognised value silently falls back to `warn`.
 - **Format.** Always `slog`'s text handler — human-readable key/value. The CLI has no
   JSON log mode.
-- **Destination.** Always stderr. There is no destination setting; redirect at the
-  shell.
+- **Destination.** Always stderr — the invocation's stderr writer, which is the
+  process's for a real run and the caller's buffer under `cmd.Run`, so an in-process
+  test can assert on a record. There is no destination setting; redirect at the shell.
 
 This is environment-controlled and needs no entry in the store's `config.yaml`.
 

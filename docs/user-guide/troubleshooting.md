@@ -27,6 +27,21 @@ if the store directory ever comes back its issues stay invisible behind the empt
 just made. Put the directory back where the STORE PATH column points instead, or drop the
 entry from `~/.taskmgr/mapping.yaml` by hand if the store is really gone.
 
+## `central store "<name>" is registered but its directory is gone`
+
+You selected it with `--store-name`, and the registry entry is there but the directory it
+points at is not — the `dangling` row from `store list`, named explicitly instead of
+walked past. Nothing is recoverable from inside a directory that does not exist, so there
+are two moves:
+
+```bash
+taskmgr store list                  # the STORE PATH column says where it should be
+```
+
+Put the directory back at that path if you have it — a backup, another machine, a
+misfired `mv`. If the store is really gone, drop its entry from `~/.taskmgr/mapping.yaml`
+by hand; leaving it there keeps the entry claiming its project.
+
 ## `central store "<name>" is not a finished store … (no config.yaml)`
 
 The store directory is there but its `config.yaml` is not, so it is not something

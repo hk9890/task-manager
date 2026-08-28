@@ -17,7 +17,10 @@ lint job. It rejects four things:
 - a `docs/user-guide/` page that cites the source tree or links to a spec.
 
 The gate reads fenced blocks like any other text: a stale path in a code block misleads a
-reader exactly as far as one in prose. What it cannot see is everything below.
+reader exactly as far as one in prose. The **anchor table** is the exception — a `#` line
+inside a fence is a shell comment or an example, and GitHub mints no anchor for it, so a
+link to one is dead however the gate reads the fence. What it cannot see is everything
+below.
 
 ## `docs/specs/`
 

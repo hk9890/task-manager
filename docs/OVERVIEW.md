@@ -73,7 +73,7 @@ rg -n 'Use:\s+"' cmd/                                    # every command the CLI
 rg -n '^func \(s \*Store\)' sdk/tasks/                   # every operation the engine offers
 rg -n '^\tErr\w+' sdk/tasks/store.go                     # the error sentinels callers match with errors.Is
 rg -n 'kind: field' sdk/tasks/internal/query/parse.go    # every query field and the operators it allows
-rg -n 'imperativeShell' -A30 sdk/tasks/importboundary_test.go   # which files may reach the disk seam
+rg -n 'mayImportVFS|mayDeclareStoreMethods' -A12 sdk/tasks/importboundary_test.go  # the two shell exemption lists
 rg -n '^func validateFields' -A90 sdk/tasks/validate.go  # every field constraint enforced before a write
 rg -n 'MaxInlineBody|joinInlineBody' sdk/tasks/overflow.go      # the body-overflow watermarks
 rg -n '<field-name>' sdk/tasks/frontmatter.go            # how a stored field is read and written
