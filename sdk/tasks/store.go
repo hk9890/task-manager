@@ -218,7 +218,7 @@ func openWithFS(root string, fs vfs.FS) *Store {
 // the ErrStoreExists guard. A fixture that skipped that guard let a regression
 // in it survive the whole fast suite.
 func InitWithVFS(root, prefix string, fs vfs.FS, opts ...Option) (*Store, error) {
-	return initData(root, filepath.Join(root, DataDirName), prefix, fs, opts)
+	return initData(root, filepath.Join(root, DataDirName), prefix, fs, env.NewOS(), opts)
 }
 
 // Init creates a new data directory under root with the given ID prefix and
@@ -229,14 +229,20 @@ func Init(root, prefix string, opts ...Option) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return initData(absRoot, filepath.Join(absRoot, DataDirName), prefix, vfs.NewOS(), opts)
+	return initData(absRoot, filepath.Join(absRoot, DataDirName), prefix, vfs.NewOS(), env.NewOS(), opts)
 }
 
 // initData creates a store whose data directory is dir, tracking project root,
-// with the given ID prefix, using fs. It fails (ErrStoreExists) if dir already
-// exists. It is the shared creation path for Init (local: dir = root/.tasks) and
-// InitCentral (central: dir = <central_root>/stores/<name>, root = project path).
-func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error) {
+// with the given ID prefix, using fs and the environment seam e. It fails
+// (ErrStoreExists) if dir already exists. It is the shared creation path for Init
+// (local: dir = root/.tasks) and InitCentral (central: dir =
+// <central_root>/stores/<name>, root = project path).
+//
+// e travels with the store because a write reads the per-user config through it
+// to inherit global hooks (HOOK-SPEC §3.5). Taking it as a parameter rather than
+// calling env.NewOS() here is what lets a caller that already has a seam — the
+// central paths, which resolve the home through one — hand the same one on.
+func initData(root, dir, prefix string, fs vfs.FS, e env.Environment, opts []Option) (*Store, error) {
 	prefix = strings.TrimSpace(prefix)
 	if err := validatePrefix(prefix); err != nil {
 		return nil, err
@@ -248,7 +254,7 @@ func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, env: env.NewOS(), runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, env: e, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	s.applyOptions(opts)
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
@@ -280,7 +286,7 @@ func Open(start string, opts ...Option) (*Store, error) {
 	if !found {
 		return nil, ErrNoStore
 	}
-	return openData(root, dir, fs, opts)
+	return openData(root, dir, fs, env.NewOS(), opts)
 }
 
 // findLocalStore walks up from start (which must be absolute) looking for a
@@ -303,12 +309,17 @@ func findLocalStore(fs vfs.FS, start string) (root, dir string, found bool, err 
 }
 
 // openData opens an existing store whose data directory is dir, tracking project
-// root, using fs, and loads its config. root is reported by Root() and used as
-// the hook working directory — for a central store that is the tracked project
-// path, not the parent of dir. It is the shared open path for Open (local) and
-// Resolve (central / override).
-func openData(root, dir string, fs vfs.FS, opts []Option) (*Store, error) {
-	s := &Store{root: root, dir: dir, fs: fs, env: env.NewOS(), runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+// root, using fs and the environment seam e, and loads its config. root is
+// reported by Root() and used as the hook working directory — for a central store
+// that is the tracked project path, not the parent of dir. It is the shared open
+// path for Open (local) and Resolve (central / override).
+//
+// e is the caller's seam, not env.NewOS(): resolution already holds one, and a
+// store that replaced it with the OS environment would read the real per-user
+// config for its global hooks (HOOK-SPEC §3.5) however the resolution was
+// injected — leaving that inheritance untestable anywhere but the real home.
+func openData(root, dir string, fs vfs.FS, e env.Environment, opts []Option) (*Store, error) {
+	s := &Store{root: root, dir: dir, fs: fs, env: e, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	s.applyOptions(opts)
 	cfg, err := s.readConfig()
 	if err != nil {

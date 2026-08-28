@@ -56,9 +56,15 @@ import (
 // `:\d+` / `#L\d+` are captured deliberately — that is finding 2, not a miss.
 var citation = regexp.MustCompile(`(cmd|sdk)/[A-Za-z0-9._*/-]+(?::\d+|#L\d+)?`)
 
-// mdLink matches an inline Markdown link. Reference-style links are not used in
-// this doc set; add them here if that changes.
-var mdLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
+// mdLink matches an inline Markdown link, with or without a title:
+// `[text](target)` and `[text](target "Title")`. The title is optional in the
+// pattern rather than absent from it — a target followed by a space matched
+// nothing at all, so a titled link was not checked, which is the one outcome a
+// gate must never have.
+//
+// Reference-style links are not used in this doc set; add them here if that
+// changes.
+var mdLink = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
 // heading matches an ATX heading, for the anchor table a link fragment is
 // checked against.
@@ -66,7 +72,7 @@ var heading = regexp.MustCompile(`^(#{1,6})\s+(.*?)\s*#*$`)
 
 // mdLinkText matches the same link, capturing its text: a heading that contains
 // a link contributes the text to its anchor, never the target.
-var mdLinkText = regexp.MustCompile(`\[([^\]]*)\]\([^)\s]*\)`)
+var mdLinkText = regexp.MustCompile(`\[([^\]]*)\]\([^)\s]*(?:\s+"[^"]*")?\)`)
 
 // lineAnchor matches the `:42` tail of a line-pinned citation.
 var lineAnchor = regexp.MustCompile(`:\d+$`)
@@ -74,6 +80,13 @@ var lineAnchor = regexp.MustCompile(`:\d+$`)
 // fence matches the opening or closing line of a fenced code block, ``` or ~~~,
 // with any info string. Anchors are derived outside fences only.
 var fence = regexp.MustCompile("^\\s*(```|~~~)")
+
+// moduleTag matches the SDK module's release tag, the one `sdk/…` token that
+// names no path: `sdk/v0.7.0`, the `sdk/vX.Y.Z` placeholder the release docs
+// write, and a prerelease suffix. It is deliberately the full version shape and
+// not the `sdk/v` prefix, which exempted `sdk/validate.go` and every other real
+// path that happens to begin with the letter v.
+var moduleTag = regexp.MustCompile(`^sdk/v(\d+|[A-Z])\.(\d+|[A-Z])\.(\d+|[A-Z])([-+][0-9A-Za-z.-]+)?$`)
 
 // slugPunct is everything GitHub drops when it derives an anchor from a heading:
 // anything that is not alphanumeric, a space, a hyphen or an underscore.
@@ -240,7 +253,7 @@ func anchored(token string) bool {
 // are not plain paths and are normalised first.
 func resolves(root, token string) bool {
 	// A module tag, not a path: `sdk/vX.Y.Z` is what a release is called.
-	if strings.HasPrefix(token, "sdk/v") {
+	if moduleTag.MatchString(token) {
 		return true
 	}
 	// A qualified symbol: `sdk/tasks/internal/vfs.FS` names the package's type.

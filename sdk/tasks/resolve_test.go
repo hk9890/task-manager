@@ -130,7 +130,7 @@ func fakeEnv(vars map[string]string) env.Fake {
 // makeStore creates a store at dir (data dir) tracking project root in m.
 func makeStore(t *testing.T, m *vfs.Mem, root, dir, prefix string) {
 	t.Helper()
-	if _, err := initData(root, dir, prefix, m, nil); err != nil {
+	if _, err := initData(root, dir, prefix, m, env.NewOS(), nil); err != nil {
 		t.Fatalf("initData(%s): %v", dir, err)
 	}
 }
@@ -479,5 +479,37 @@ func TestLoadRegistry_Validation(t *testing.T) {
 	writeRegistry(t, m, testCentral, registryEntry{Path: "", Store: "a"})
 	if _, err := loadRegistry(m, testCentral, testHome); err == nil {
 		t.Error("missing path should error")
+	}
+}
+
+// TestResolve_StoreInheritsTheResolutionEnvironment: the store a resolution
+// returns must carry the environment seam that resolution used. It did not — the
+// constructors replaced it with env.NewOS() — so a store resolved through an
+// injected home still read the real ~/.taskmgr for the global hooks a write
+// inherits (HOOK-SPEC §3.5), and that inheritance was testable nowhere but a
+// developer's own home directory.
+func TestResolve_StoreInheritsTheResolutionEnvironment(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/proj", "/proj/.tasks", "prj")
+	if err := m.MkdirAll(testCentral, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	// A global hook that exists only in the injected home.
+	raw := "version: 1\nhooks:\n  - id: gate\n    event: pre-create\n    run: [\"true\"]\n"
+	if err := m.WriteAtomic(filepath.Join(testCentral, globalConfigName), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
+
+	s, _, err := resolveWith(ResolveOptions{WorkDir: "/proj"}, m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	hs, err := s.hooks()
+	if err != nil {
+		t.Fatalf("hooks: %v", err)
+	}
+	got := hs.forEvent(eventPreCreate)
+	if len(got) != 1 || got[0].id != globalHookIDPrefix+"gate" {
+		t.Fatalf("pre-create hooks = %+v, want the one inherited from the injected home", got)
 	}
 }

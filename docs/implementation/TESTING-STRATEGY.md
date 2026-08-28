@@ -5,8 +5,10 @@ Four layers, split by *what they touch*. The seam that makes the split possible 
 logic needs no disk, the shell is tested on an in-memory FS, and a real temp dir is
 the source of truth for durability.
 
-Command surface and gates: [docs/TESTING.md](../TESTING.md). This file owns the
-layer model and the fixtures.
+**This file owns nothing.** The command surface, the gates, and which one makes a
+change green are normative in [docs/TESTING.md](../TESTING.md); the conventions a
+test follows are in [docs/CODING.md](../CODING.md). This is the one-screen map of
+how the layers sit on the tree.
 
 ## Layers
 

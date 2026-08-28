@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
@@ -304,7 +305,7 @@ func TestRunPre_NoHooksForEventIsNoop(t *testing.T) {
 // hook's argv.
 func TestHookDir_FallsBackWhenTheProjectRootIsGone(t *testing.T) {
 	m := vfs.NewMem()
-	s, err := initData("/gone", "/central/stores/x", "tst", m, nil)
+	s, err := initData("/gone", "/central/stores/x", "tst", m, env.NewOS(), nil)
 	if err != nil {
 		t.Fatalf("initData: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestHookDir_FallsBackWhenTheProjectRootIsGone(t *testing.T) {
 // the fallback must not take over the normal case.
 func TestHookDir_IsTheProjectRootWhenItExists(t *testing.T) {
 	m := vfs.NewMem()
-	s, err := initData("/proj", "/proj/.tasks", "tst", m, nil)
+	s, err := initData("/proj", "/proj/.tasks", "tst", m, env.NewOS(), nil)
 	if err != nil {
 		t.Fatalf("initData: %v", err)
 	}

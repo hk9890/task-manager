@@ -18,8 +18,9 @@
 // cross-partition read dedup (at-dny.1).
 //
 // L2 (Mem): all tests exercise Store methods on an in-memory FS. The
-// cross-partition dedup cases need raw bytes in a real .tasks/ tree and live in
-// paging_l3_test.go.
+// cross-partition dedup case needs raw bytes rather than the Store API, which
+// cannot produce an ID in both partitions; it runs on Mem in store_mem_test.go,
+// and again over a real tree in paging_l3_test.go for the OS-backed Open path.
 package tasks_test
 
 import (

@@ -112,18 +112,18 @@ func emitIssues(store string, issues []*tasks.Issue) error {
 	return nil
 }
 
-var listFilter filterFlags
+var listFlags filterFlags
 
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List issues (open by default)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList(&listFilter)
+		return runList(&listFlags)
 	},
 }
 
-var searchFilter filterFlags
+var searchFlags filterFlags
 
 var searchCmd = &cobra.Command{
 	Use:   "search <text> [more words...]",
@@ -136,18 +136,18 @@ var searchCmd = &cobra.Command{
 		switch {
 		case textExpr == "":
 			// Whitespace-only query: no text constraint; leave any -q as-is.
-		case searchFilter.query != "":
+		case searchFlags.query != "":
 			// -q is an opaque, freeform filter expression — it cannot be reconstructed
 			// as a typed Criteria, so string concatenation is the only option here.
 			// (This is NOT the "don't concatenate" case in SDK-SPEC §3: that rule is
 			// about structured facets, which DO go through Criteria.) Parenthesize the
 			// user's expression so any internal `||` is protected under the `&&`:
 			// `(<user -q>) && text ~ "a" && text ~ "b"`.
-			searchFilter.query = "(" + searchFilter.query + ") && " + textExpr
+			searchFlags.query = "(" + searchFlags.query + ") && " + textExpr
 		default:
-			searchFilter.query = textExpr
+			searchFlags.query = textExpr
 		}
-		return runList(&searchFilter)
+		return runList(&searchFlags)
 	},
 }
 
@@ -276,8 +276,8 @@ var typesCmd = &cobra.Command{
 }
 
 func init() {
-	addFilterFlags(listCmd, &listFilter)
-	addFilterFlags(searchCmd, &searchFilter)
+	addFilterFlags(listCmd, &listFlags)
+	addFilterFlags(searchCmd, &searchFlags)
 	readyCmd.Flags().IntVar(&readyFlags.limit, "limit", 0, "maximum number of results (0 = all)")
 	rootCmd.AddCommand(listCmd, searchCmd, readyCmd, blockedCmd, labelsCmd, statusesCmd, typesCmd)
 }

@@ -54,7 +54,7 @@ func TestUpdateConfig_ReadsUnderTheLock(t *testing.T) {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
 	// second snapshots the config as it is now — before first writes.
-	second, err := openData("/p", "/p/.tasks", m, nil)
+	second, err := openData("/p", "/p/.tasks", m, env.NewOS(), nil)
 	if err != nil {
 		t.Fatalf("openData: %v", err)
 	}
