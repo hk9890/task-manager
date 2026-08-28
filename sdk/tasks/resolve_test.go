@@ -392,6 +392,10 @@ func TestInitCentral_CreatesAndRegisters(t *testing.T) {
 	if s.Prefix() != "myproj" { // derived from project base
 		t.Errorf("prefix = %q, want myproj", s.Prefix())
 	}
+	// It is registered as it is created, so it reports its name straight away.
+	if s.Name() != "myproj" {
+		t.Errorf("name = %q, want myproj", s.Name())
+	}
 	// It must now resolve by name and by central fallback.
 	_, info, err := resolveWith(ResolveOptions{WorkDir: "/dev/myproj"}, m, fakeEnv(nil), nil)
 	if err != nil || info.Kind != ResolvedCentral {

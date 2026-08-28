@@ -55,6 +55,10 @@ func TestMoveToCentral_MovesFilesAndRegisters(t *testing.T) {
 	if s.Root() != "/dev/myproj" {
 		t.Errorf("root = %q, want /dev/myproj", s.Root())
 	}
+	// The promoted store is registered, so it now has a name to report.
+	if s.Name() != "myproj" {
+		t.Errorf("name = %q, want myproj", s.Name())
+	}
 	// The prefix survives, so existing IDs stay valid.
 	if s.Prefix() != "myp" {
 		t.Errorf("prefix = %q, want myp", s.Prefix())
