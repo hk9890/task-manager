@@ -52,6 +52,8 @@ taskmgr ready                              # the dependent is now ready
 
 Add `--json` to any command for machine-readable output. Run `taskmgr guide` for
 a built-in how-to and `taskmgr commands` for the full machine-readable catalog.
+The [user guide](docs/user-guide/README.md) covers the rest — the issue model,
+filtering, hooks, and keeping the tracker outside the repository.
 
 ## Use as a Go library
 
@@ -96,6 +98,8 @@ See the [package reference on pkg.go.dev](https://pkg.go.dev/github.com/hk9890/t
 
 ## Documentation
 
+- [docs/user-guide/](docs/user-guide/README.md) — **start here.** Getting started,
+  concepts, filtering, stores, hooks, agents, troubleshooting.
 - [docs/OVERVIEW.md](docs/OVERVIEW.md) — architecture and repository layout.
 - [docs/specs/](docs/specs/) — the authoritative specs (CLI, SDK, storage format,
   query language, hooks, config, architecture).

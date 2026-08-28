@@ -7,8 +7,9 @@ and fixtures: [implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATE
 mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
 mise run test:integration  # L3 real temp dir + L4 CLI
 mise run test:all          # every layer
-mise run quality           # vet + lint + L1/L2 + build/vet all modules + fuzz  (pre-commit)
-mise run quality:full      # + L3/L4                                           (pre-handoff)
+mise run check:docs        # the doc gate (docs/DOCUMENTING.md)
+mise run quality           # vet + lint + docs + L1/L2 + build/vet all modules + fuzz  (pre-commit)
+mise run quality:full      # + L3/L4                                                  (pre-handoff)
 ```
 
 `make` fallback: `make test` (both modules), `make test-sdk` / `make test-cli` for

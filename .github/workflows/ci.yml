@@ -88,3 +88,8 @@ jobs:
 
       - name: golangci-lint (both modules)
         run: mise run lint
+
+      # The doc gate. It reads the working tree, so it needs no toolchain beyond
+      # the go mise already pins. docs/DOCUMENTING.md owns what it rejects.
+      - name: check:docs
+        run: mise run check:docs

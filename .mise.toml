@@ -31,13 +31,13 @@ go build -ldflags "-s -w -X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG
 
 [tasks.fmt]
 description = "Format Go source (goimports, both modules)"
-run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks"
+run = "goimports -local github.com/hk9890/task-manager -w cmd sdk/tasks scripts"
 
 [tasks."fmt:check"]
 description = "Fail if any file is not formatted"
 run = """
 # 2>&1 folds goimports' own diagnostics into $OUT so a broken run cannot pass.
-OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks 2>&1) || { echo "goimports failed:"; echo "$OUT"; exit 1; }
+OUT=$(goimports -local github.com/hk9890/task-manager -l cmd sdk/tasks scripts 2>&1) || { echo "goimports failed:"; echo "$OUT"; exit 1; }
 if [ -n "$OUT" ]; then echo "unformatted:"; echo "$OUT"; exit 1; fi
 """
 
@@ -135,6 +135,10 @@ CGO_ENABLED = "1"
 
 # ---- gates -----------------------------------------------------------------
 
+[tasks."check:docs"]
+description = "Doc gate: cited source paths resolve, no line-anchored citations, links and anchors resolve, the user guide stays user-facing"
+run = "go run ./scripts/checkdocs"
+
 [tasks."verify:pin"]
 description = "Build the CLI against the SDK version pinned in go.mod, without the workspace — the check that 'go install .../cmd/taskmgr@vX.Y.Z' will compile"
 run = """
@@ -158,9 +162,9 @@ GOWORK=off go build ./... || {
 """
 
 [tasks.quality]
-description = "Fast pre-commit gate: fmt + vet + lint + L1/L2 tests + build all modules + fuzz seeds"
-depends = ["fmt:check", "vet", "build:all", "lint", "test", "test:fuzz"]
+description = "Fast pre-commit gate: fmt + vet + lint + docs + L1/L2 tests + build all modules + fuzz seeds"
+depends = ["fmt:check", "vet", "build:all", "lint", "check:docs", "test", "test:fuzz"]
 
 [tasks."quality:full"]
-description = "Pre-handoff gate: fmt + vet + lint + all layers + build all modules + fuzz seeds"
-depends = ["fmt:check", "vet", "build:all", "lint", "test", "test:integration", "test:fuzz"]
+description = "Pre-handoff gate: fmt + vet + lint + docs + all layers + build all modules + fuzz seeds"
+depends = ["fmt:check", "vet", "build:all", "lint", "check:docs", "test", "test:integration", "test:fuzz"]
