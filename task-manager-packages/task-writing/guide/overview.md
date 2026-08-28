@@ -6,4 +6,5 @@ An epic carries Context, Outcome, Success criteria instead. Acceptance criteria
 must hold at least one "- [ ]" item, each runnable by someone who was not there.
 
 Read taskmgr guide pkg:task-writing:bodies before you write a body. It has the
-type contracts, what each section owns, and the templates.
+type contracts, what each section owns, a finished example, and where the
+templates are.

@@ -268,10 +268,9 @@ Read before you act:
   finding work to pick up       taskmgr guide model query
   parsing output in a script    taskmgr guide output
 
-Guessing instead of reading is what this guide exists to prevent, and three of
-these cost a wasted attempt every time: IDs are opaque and cannot be derived,
---description stores a literal backslash-n, and this store can refuse a write for
-reasons only its own sections state.
+Read first; three things here cost a wasted attempt every time they are guessed:
+IDs are opaque and cannot be derived, --description stores a literal backslash-n,
+and this store can refuse a write for reasons only its own sections state.
 
 More:
 

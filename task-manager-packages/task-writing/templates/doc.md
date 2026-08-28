@@ -18,6 +18,9 @@ priority and assignee are stored but mean nothing. Reach one by asking:
 No gate checks a doc's body. The headings below are one shape that works for a
 design page — replace them with the ones your document actually needs.
 
+A finished body to match the register is in taskmgr guide
+pkg:task-writing:bodies.
+
 Delete this comment block before filing.
 -->
 
