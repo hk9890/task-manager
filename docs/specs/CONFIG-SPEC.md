@@ -65,7 +65,15 @@ store** — never on a read — exactly as a store's own hooks block is
 ([HOOK-SPEC](HOOK-SPEC.md) §3.4). The blast radius is wider than a store's:
 a malformed block here fails mutations in *every* store on the machine while
 leaving every query working. `taskmgr config` validates before it writes, so the
-error normally surfaces at the command that caused it.
+error normally surfaces at the command that caused it — and validates only the
+entries that write **introduces**, so the command that removes a malformed hook is
+not itself refused by the hook it is removing.
+
+**Config lock.** Writes to this file are serialized by an advisory `flock` on
+`<home>/.config.lock`, and the read that a change is computed from happens inside
+it. It is a separate file from the registry's `<central_root>/.lock` (§3): the two
+guard different documents, and the home and the central root are the same directory
+only by default.
 
 **Machine-local, by construction.** A store travels in git; this file does not.
 A gate configured here therefore applies to you and not to a colleague or to CI,
@@ -84,13 +92,14 @@ holds the registry, an advisory lock (below), and a `stores/` directory with one
 subfolder per central store; each subfolder is a complete, ordinary store per
 TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`, `closed/`). The
 dedicated `stores/` directory keeps store names in their own namespace, so a store can
-never collide with the central root's own files (`config.yaml`, `mapping.yaml`,
-`.lock`). Because a central store is an ordinary store, relocating one is a plain folder
+never collide with the central root's own files (`config.yaml`, `mapping.yaml`, and the
+two lock files). Because a central store is an ordinary store, relocating one is a plain folder
 move plus a registry edit (§5).
 
 ```
 ~/.taskmgr/
 ├── config.yaml          # §2
+├── .config.lock         # advisory flock for config.yaml writes (empty; only its lock state matters)
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
 └── stores/              # all central stores live here
@@ -139,8 +148,15 @@ A missing project `path` is neither: an entry whose project directory was delete
 moved still matches and opens its central store. A subfolder with no registry entry is
 simply unreachable until an entry is added (§5).
 
-`--store-name` reports a broken store the same way, since the caller named something
-that does exist in the registry.
+`--store-name` reports both faults, since the caller named something that does exist
+in the registry — a broken store as above, and a dangling one as a directory that is
+gone. The two messages stay distinct because the repairs are: restoring a folder, or
+dropping the entry.
+
+**A `stat` that fails is neither.** Only "no such file or directory" makes an entry
+dangling. A permission error or an I/O failure says nothing about whether the store is
+there, so it is reported as itself. Reading it as "gone" labels intact stores
+`dangling` and sends the reader to the one repair that deletes their registry entry.
 
 **Enumeration** classifies without opening: `Stores` labels every entry `ok`,
 `dangling` or `broken` from a `stat` (SDK-SPEC §1, surfaced by `store list`,

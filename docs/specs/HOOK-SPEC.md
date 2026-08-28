@@ -163,8 +163,15 @@ configuration.
 | `run` | **yes** | Non-empty argv array, executed **directly** via `execve` — **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. |
 
 There is no per-hook `timeout`, `workdir`, or error policy. Timeout is the one global
-`hook_timeout`; the working directory is always the **repo root** (the directory that
-contains `.tasks/`); fail-closed (§4) is uniform.
+`hook_timeout`; the working directory is the **project root** (for a local store, the
+directory that contains `.tasks/`); fail-closed (§4) is uniform.
+
+**One fallback:** when the project root no longer exists, the hook runs in the store's
+own data directory instead. A central store outlives the project directory it is
+registered for — the entry still matches and still opens (CONFIG-SPEC.md §3), and every
+issue file is intact — so spawning in a directory that is gone would make one global
+hook turn every such store permanently un-writable, reported as a hook that "could not
+be executed".
 
 ### 3.3 `when` semantics
 
@@ -194,6 +201,13 @@ This applies to the per-user file too, where the same failure is wider: a malfor
 global block fails mutations in **every store on the machine**. `taskmgr config`
 validates before writing either file, so a block that would fail this check is normally
 refused at the command that wrote it rather than at the next unrelated mutation.
+
+**A write validates what it introduces, not what it finds.** An entry already in the
+file is left alone, and only the timeout is re-checked when the write changes it.
+Validating the whole block instead makes a malformed entry refuse the write that
+*removes* it: two of them in the per-user file then fail every write on the machine with
+`taskmgr config hook rm` refusing both ids, and the only way out is a hand edit.
+Compiling the delta still means taskmgr never writes a hook it would refuse to run.
 
 ### 3.5 Global hooks (per-user config)
 
@@ -286,7 +300,8 @@ Notes:
   | `TASKMGR_PAYLOAD_SCHEMA` | the input-payload schema version (§5) |
 
   The **canonical** input is the JSON on **stdin** (§5); the env vars are conveniences.
-  `cwd` is always the repo root.
+  `cwd` is the project root, with the one fallback in §3.2. `TASKMGR_STORE` always names
+  the data directory, so a hook that must not depend on either reads it from there.
 
 ---
 
@@ -534,6 +549,6 @@ Deliberately excluded, with rationale:
   hooks side-effect-free preserves the one-writer invariant (ARCHITECTURE-SPEC.md §7) and
   the validation/atomicity guarantee.
 - **No per-hook `timeout`, `workdir`, or error policy.** One `hook_timeout` per store (§3.1); cwd is
-  always the repo root; fail-closed (pre) / warn (post) is uniform.
+  the project root (§3.2); fail-closed (pre) / warn (post) is uniform.
 - **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.
 - **No comment- or dependency-specific events** (§2.2).

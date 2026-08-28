@@ -112,6 +112,10 @@ Create a new store for the current project — locally by default, or centrally 
   non-alphanumerics stripped, leading digits removed, truncated to 8 characters; falls back to `task`).
   This holds for both local and central stores — prefixes are per project, with no
   global default (CONFIG-SPEC §5).
+- `--dir`/`-C` is made absolute against the working directory **before** the prefix and
+  the store name are derived from its last element. `-C .` would otherwise derive from
+  `"."` and take the `task` fallback — into a prefix that is then immutable — and `-C ..`
+  a name the store-name grammar rejects.
 - **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with
   `--central`, also the registry `name`).
 
@@ -147,7 +151,9 @@ Listing them is what makes a store switcher possible: the caller sees the entrie
 will not open before it offers them, instead of one error per selected row.
 
 Classification is a `stat` per entry, not an open, so the listing stays a read and
-never takes a store's lock.
+never takes a store's lock. Only "no such file or directory" makes an entry `dangling`;
+a `stat` that fails for any other reason exits `1` with that failure, rather than
+reporting stores it could not read as gone (CONFIG-SPEC §3).
 
 - **Output (JSON):** array of `storeListDTO` (§6).
 
@@ -201,9 +207,13 @@ subcommand selects between them the same way:
 | `--global` | the per-user `config.yaml` (CONFIG-SPEC §2) | no |
 
 Because `--global` resolves no store, it works in a directory where nothing resolves.
+`--global` is a persistent flag on the group, so it is accepted in both positions:
+`taskmgr config --global list` and `taskmgr config list --global` are the same command.
 
-Every write goes through the engine, which validates before a byte lands: an
-unparseable `hook_timeout` or a malformed hook is refused at the command that wrote it,
+Every write goes through the engine, which re-reads the file under its lock and applies
+the change there, so two concurrent invocations editing different keys keep both edits
+(CONFIG-SPEC §2, SDK-SPEC §1). The engine validates before a byte lands: an unparseable
+`hook_timeout` or a hook the write introduces is refused at the command that wrote it,
 rather than at the next mutation (HOOK-SPEC §3.4). A refused command leaves the file
 byte-for-byte unchanged.
 
@@ -244,12 +254,13 @@ that would have worked.
 
 ### `taskmgr config set <key> <value> [--global]`
 
-Set one key. A read-only key exits `1`.
+Set one key. A read-only key exits `1`, and so does an **empty** `<value>`: clearing a key
+is `unset`'s job, and a wrapper passing an unset shell variable would otherwise delete the
+key and exit `0`.
 
 ### `taskmgr config unset <key> [--global]`
 
-Clear one key, restoring its documented default. Equivalent to setting the empty value; a
-read-only key exits `1`.
+Clear one key, restoring its documented default. A read-only key exits `1`.
 
 ### `taskmgr config hook add [--global] --event <e> --run <arg> [--run <arg>…]`
 
@@ -271,7 +282,7 @@ taskmgr config hook add --event pre-close \
   --run sh --run -c --run 'make lint && make test'
 ```
 
-A hook's working directory is always the project root, so a relative path in a
+A hook's working directory is the project root (HOOK-SPEC §3.2), so a relative path in a
 `--global` hook resolves against whichever project it runs in: give a global hook an
 absolute path.
 
@@ -295,6 +306,11 @@ the file (HOOK-SPEC §3.2), so removing or inserting an entry renumbers the ones
 remove `pre-create#0` and the former `pre-create#1` becomes `pre-create#0`. A script that
 removes several hooks must re-read `config hook list` between removals, or give the hooks
 an explicit `--id`, which never moves.
+
+A removal that would renumber a hook onto an id another entry declares explicitly exits
+`1` and names the shared id, leaving the file unchanged. Two hooks answering to one id
+make the second unaddressable, and a denial reporting that id could not say which of them
+refused; rename the declared one, then remove.
 
 ---
 

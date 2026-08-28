@@ -106,8 +106,9 @@ func Execute() {
 }
 
 // Run executes one taskmgr invocation with the given arguments, writing
-// everything the command emits to stdoutW and stderrW, and returns the exit code
-// the process would use: 0 on success, 1 on any failure.
+// everything the command emits to stdoutW and stderrW — log records included —
+// and returns the exit code the process would use: 0 on success, 1 on any
+// failure. A nil args is the empty argument list, not the process's own.
 //
 // This is the entry point tests use. Asserting on output previously meant
 // `go build` plus a fork, which is why 120 of the CLI's 121 tests sat behind the
@@ -119,6 +120,13 @@ func Execute() {
 // and the writers are restored — but two Runs at once would interleave. Do not
 // call t.Parallel in a test that uses it.
 func Run(args []string, stdoutW, stderrW io.Writer) int {
+	// SetArgs(nil) does not mean "no arguments": cobra treats a nil slice as
+	// "never set" and falls back to os.Args[1:], so Run(nil, …) would parse the
+	// host process's own command line — a test binary's -test.* flags, or under an
+	// embedder whatever subcommand that binary was invoked with.
+	if args == nil {
+		args = []string{}
+	}
 	restore := setOutput(stdoutW, stderrW)
 	defer restore()
 

@@ -21,10 +21,12 @@
 // config.yaml (TASK-STORAGE-SPEC §4.2); with it, the per-user config.yaml
 // (CONFIG-SPEC §2), which resolves no store and therefore works anywhere.
 //
-// Every write goes through the SDK (Store.SetConfig / tasks.SaveGlobalConfig),
-// which validates the hooks block before a byte lands: a malformed one fails
-// every later mutation (HOOK-SPEC §3.4), so it is refused at the command that
-// caused it rather than at the next unrelated write.
+// Every write goes through the SDK (Store.UpdateConfig / tasks.UpdateGlobalConfig),
+// which re-reads the file under its lock and applies the edit there, so two
+// concurrent invocations cannot discard each other's work. Both validate a hook
+// the write introduces before a byte lands: a malformed one fails every later
+// mutation (HOOK-SPEC §3.4), so it is refused at the command that caused it
+// rather than at the next unrelated write.
 package cmd
 
 import (
@@ -124,12 +126,30 @@ func (t *configTarget) scope() string {
 	return scopeStore
 }
 
-// save persists the edited body. Both paths validate before writing.
-func (t *configTarget) save() error {
+// update applies edit to the target file under that file's lock. The body edit
+// sees is the one on disk right now, not the copy loadConfigTarget read: the
+// read has to happen inside the lock, or two `taskmgr config` processes each
+// write a file built from a snapshot taken before the other one ran and the
+// second silently drops the first's change.
+func (t *configTarget) update(edit func(*configTarget) error) error {
 	if t.global {
-		return tasks.SaveGlobalConfig(t.gcfg)
+		return tasks.UpdateGlobalConfig(func(g *tasks.GlobalConfig) error {
+			t.gcfg = *g
+			if err := edit(t); err != nil {
+				return err
+			}
+			*g = t.gcfg
+			return nil
+		})
 	}
-	return t.store.SetConfig(t.cfg)
+	return t.store.UpdateConfig(func(c *tasks.Config) error {
+		t.cfg = *c
+		if err := edit(t); err != nil {
+			return err
+		}
+		*c = t.cfg
+		return nil
+	})
 }
 
 func (t *configTarget) hooks() []tasks.Hook {
@@ -222,6 +242,12 @@ func lookupConfigKey(name, scope string) (configKeyDef, error) {
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
+// configFlags holds the one selector every subcommand of this group reads. It is
+// a persistent flag on the group rather than seven identical registrations on
+// the leaves, so `config --global list` and `config list --global` both work and
+// a new subcommand cannot silently default to writing the store's file.
+var configFlags struct{ global bool }
+
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Read and write store and per-user configuration",
@@ -259,14 +285,12 @@ without a store.`,
 	},
 }
 
-var configListFlags struct{ global bool }
-
 var configListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show the current value of every key in one config file",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configListFlags.global)
+		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
 			return err
 		}
@@ -288,8 +312,6 @@ var configListCmd = &cobra.Command{
 	},
 }
 
-var configGetFlags struct{ global bool }
-
 var configGetCmd = &cobra.Command{
 	Use:   "get <key>",
 	Short: "Print the value of one configuration key",
@@ -297,7 +319,7 @@ var configGetCmd = &cobra.Command{
 without parsing. An unset key prints an empty line and exits 0.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configGetFlags.global)
+		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
 			return err
 		}
@@ -313,25 +335,28 @@ without parsing. An unset key prints an empty line and exits 0.`,
 	},
 }
 
-var configSetFlags struct{ global bool }
-
 var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set one configuration key",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return writeConfigKey(configSetFlags.global, args[0], args[1])
+		// An empty value is what `config unset` writes, and a wrapper passing an
+		// unset shell variable would otherwise delete the key and report success.
+		// The two commands exist separately so the destructive one has to be named.
+		if args[1] == "" {
+			return &usageError{cmd: cmd, msg: fmt.Sprintf(
+				"empty value for %q — use 'taskmgr config unset %s' to clear it", args[0], args[0])}
+		}
+		return writeConfigKey(configFlags.global, args[0], args[1])
 	},
 }
-
-var configUnsetFlags struct{ global bool }
 
 var configUnsetCmd = &cobra.Command{
 	Use:   "unset <key>",
 	Short: "Clear one configuration key, restoring its default",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return writeConfigKey(configUnsetFlags.global, args[0], "")
+		return writeConfigKey(configFlags.global, args[0], "")
 	},
 }
 
@@ -350,10 +375,7 @@ func writeConfigKey(global bool, name, value string) error {
 	if !k.writable {
 		return fmt.Errorf("%s config key %q is read-only: %s", t.scope(), k.name, k.desc)
 	}
-	if err := k.set(t, value); err != nil {
-		return err
-	}
-	if err := t.save(); err != nil {
+	if err := t.update(func(t *configTarget) error { return k.set(t, value) }); err != nil {
 		return err
 	}
 	if flagJSON {
@@ -379,11 +401,10 @@ store's config instead.`,
 }
 
 var configHookAddFlags struct {
-	global bool
-	id     string
-	event  string
-	when   string
-	run    []string
+	id    string
+	event string
+	when  string
+	run   []string
 }
 
 var configHookAddCmd = &cobra.Command{
@@ -412,7 +433,7 @@ an absolute path.`,
 		if len(configHookAddFlags.run) == 0 {
 			return &usageError{cmd: cmd, msg: "--run is required (repeat it once per argv element)"}
 		}
-		t, err := loadConfigTarget(configHookAddFlags.global)
+		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
 			return err
 		}
@@ -422,22 +443,24 @@ an absolute path.`,
 			When:  strings.TrimSpace(configHookAddFlags.when),
 			Run:   configHookAddFlags.run,
 		}
-		// Effective ids must stay unique within a file, or `config hook rm` could
-		// not name one of the two and the second hook would be unaddressable.
-		// Comparing *effective* ids rather than declared ones is what catches an
-		// id declared in the "<event>#<index>" shape colliding with another
-		// entry's default.
-		newID := tasks.HookID(hook, len(t.hooks()), t.global)
-		for i, h := range t.hooks() {
-			if tasks.HookID(h, i, t.global) == newID {
-				return fmt.Errorf("hook id %q is already in use in %s", newID, t.path)
+		var id string
+		if err := t.update(func(t *configTarget) error {
+			// Effective ids must stay unique within a file, or `config hook rm`
+			// could not name one of the two and the second hook would be
+			// unaddressable. Comparing *effective* ids rather than declared ones is
+			// what catches an id declared in the "<event>#<index>" shape colliding
+			// with another entry's default.
+			id = tasks.HookID(hook, len(t.hooks()), t.global)
+			for i, h := range t.hooks() {
+				if tasks.HookID(h, i, t.global) == id {
+					return fmt.Errorf("hook id %q is already in use in %s", id, t.path)
+				}
 			}
-		}
-		t.setHooks(append(t.hooks(), hook))
-		if err := t.save(); err != nil {
+			t.setHooks(append(t.hooks(), hook))
+			return nil
+		}); err != nil {
 			return err
 		}
-		id := tasks.HookID(hook, len(t.hooks())-1, t.global)
 		if flagJSON {
 			return printJSON(hookDTO(hook, id, t.scope()))
 		}
@@ -446,8 +469,6 @@ an absolute path.`,
 	},
 }
 
-var configHookListFlags struct{ global bool }
-
 var configHookListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the hooks configured in one config file",
@@ -455,7 +476,7 @@ var configHookListCmd = &cobra.Command{
 the id a denial reason reports and 'config hook rm' takes.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configHookListFlags.global)
+		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
 			return err
 		}
@@ -480,38 +501,47 @@ the id a denial reason reports and 'config hook rm' takes.`,
 	},
 }
 
-var configHookRmFlags struct{ global bool }
-
 var configHookRmCmd = &cobra.Command{
 	Use:   "rm <id>",
 	Short: "Remove one hook by its effective id",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configHookRmFlags.global)
+		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
 			return err
 		}
-		hooks := t.hooks()
-		var kept []tasks.Hook
-		var known []string
-		found := false
-		for i, h := range hooks {
-			id := tasks.HookID(h, i, t.global)
-			known = append(known, id)
-			if id == args[0] && !found {
-				found = true
-				continue
+		if err := t.update(func(t *configTarget) error {
+			var kept []tasks.Hook
+			var known []string
+			found := false
+			for i, h := range t.hooks() {
+				id := tasks.HookID(h, i, t.global)
+				known = append(known, id)
+				if id == args[0] && !found {
+					found = true
+					continue
+				}
+				kept = append(kept, h)
 			}
-			kept = append(kept, h)
-		}
-		if !found {
-			if len(known) == 0 {
-				return fmt.Errorf("no hook %q: %s configures no hooks", args[0], t.path)
+			if !found {
+				if len(known) == 0 {
+					return fmt.Errorf("no hook %q: %s configures no hooks", args[0], t.path)
+				}
+				return fmt.Errorf("no hook %q in %s — configured: %s", args[0], t.path, strings.Join(known, ", "))
 			}
-			return fmt.Errorf("no hook %q in %s — configured: %s", args[0], t.path, strings.Join(known, ", "))
-		}
-		t.setHooks(kept)
-		if err := t.save(); err != nil {
+			// A default id is "<event>#<position>", so removing an entry renumbers
+			// every later one. `config hook add` refuses a collision at the moment
+			// it would be created; a removal can create the same collision without
+			// touching either hook, and then one of the two is unaddressable and a
+			// denial reason cannot say which refused.
+			if dup, ok := duplicateHookID(kept, t.global); ok {
+				return fmt.Errorf("removing %q would leave two hooks sharing the effective id %q in %s — "+
+					"one declares that id, the other would default to it. Give the declared one a different id first",
+					args[0], dup, t.path)
+			}
+			t.setHooks(kept)
+			return nil
+		}); err != nil {
 			return err
 		}
 		if flagJSON {
@@ -523,6 +553,20 @@ var configHookRmCmd = &cobra.Command{
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+// duplicateHookID reports the first effective id two hooks of one file would
+// share (HOOK-SPEC §3.5).
+func duplicateHookID(hooks []tasks.Hook, global bool) (string, bool) {
+	seen := make(map[string]bool, len(hooks))
+	for i, h := range hooks {
+		id := tasks.HookID(h, i, global)
+		if seen[id] {
+			return id, true
+		}
+		seen[id] = true
+	}
+	return "", false
+}
 
 func hookDTO(h tasks.Hook, id, scope string) configHookDTO {
 	return configHookDTO{ID: id, Scope: scope, Event: h.Event, When: h.When, Run: h.Run}
@@ -545,19 +589,12 @@ func yesNo(b bool) string {
 }
 
 func init() {
-	configListCmd.Flags().BoolVar(&configListFlags.global, "global", false, "act on the per-user config instead of the store's")
-	configGetCmd.Flags().BoolVar(&configGetFlags.global, "global", false, "act on the per-user config instead of the store's")
-	configSetCmd.Flags().BoolVar(&configSetFlags.global, "global", false, "act on the per-user config instead of the store's")
-	configUnsetCmd.Flags().BoolVar(&configUnsetFlags.global, "global", false, "act on the per-user config instead of the store's")
+	configCmd.PersistentFlags().BoolVar(&configFlags.global, "global", false, "act on the per-user config instead of the store's")
 
-	configHookAddCmd.Flags().BoolVar(&configHookAddFlags.global, "global", false, "act on the per-user config instead of the store's")
 	configHookAddCmd.Flags().StringVar(&configHookAddFlags.id, "id", "", "hook id used in messages, logs and 'config hook rm'")
 	configHookAddCmd.Flags().StringVar(&configHookAddFlags.event, "event", "", "lifecycle event that fires the hook (required)")
 	configHookAddCmd.Flags().StringVar(&configHookAddFlags.when, "when", "", "filter expression scoping the hook to matching issues")
 	configHookAddCmd.Flags().StringArrayVar(&configHookAddFlags.run, "run", nil, "one argv element; repeat once per element (required)")
-
-	configHookListCmd.Flags().BoolVar(&configHookListFlags.global, "global", false, "act on the per-user config instead of the store's")
-	configHookRmCmd.Flags().BoolVar(&configHookRmFlags.global, "global", false, "act on the per-user config instead of the store's")
 
 	configHookCmd.AddCommand(configHookAddCmd)
 	configHookCmd.AddCommand(configHookListCmd)

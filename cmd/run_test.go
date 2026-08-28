@@ -26,6 +26,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -275,4 +276,72 @@ func keysOf(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestRun_NilArgsIsAnEmptyArgumentList: cobra reads SetArgs(nil) as "never set"
+// and falls back to os.Args[1:], so a caller spelling "no arguments" the
+// idiomatic way used to get the host process's own command line parsed as
+// taskmgr's — here, the test binary's -test.* flags.
+func TestRun_NilArgsIsAnEmptyArgumentList(t *testing.T) {
+	var outBuf, errBuf bytes.Buffer
+	code := Run(nil, &outBuf, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errBuf.String())
+	}
+	if !strings.Contains(outBuf.String(), "taskmgr is a lean") {
+		t.Errorf("stdout does not carry the root help:\n%s", outBuf.String())
+	}
+	if strings.Contains(errBuf.String(), "test.") {
+		t.Errorf("the test binary's own flags reached the parser: %q", errBuf.String())
+	}
+}
+
+// TestRun_LogRecordsGoToTheGivenStderrWriter: Run promises to write everything
+// the command emits to the writers it was given. The SDK logs a hook error at
+// warn, which is above the default threshold, so it fires with TASKMGR_LOG
+// unset — and a handler bound to os.Stderr put it on the host's real stderr,
+// where no in-process test could see it.
+func TestRun_LogRecordsGoToTheGivenStderrWriter(t *testing.T) {
+	root := newStore(t)
+	if _, errOut, code := run(t, "--dir", root, "config", "hook", "add",
+		"--event", "pre-close", "--run", "/nonexistent/taskmgr-hook-probe"); code != 0 {
+		t.Fatalf("hook add: exit %d, stderr %q", code, errOut)
+	}
+	out, _, code := run(t, "--dir", root, "--json", "create", "--title", "gated")
+	if code != 0 {
+		t.Fatalf("create: exit %d", code)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &created); err != nil {
+		t.Fatalf("parse create JSON: %v (%q)", err, out)
+	}
+
+	_, errOut, code := run(t, "--dir", root, "close", created.ID, "--reason", "done")
+	if code == 0 {
+		t.Fatal("a hook that cannot be executed must fail the close")
+	}
+	if !strings.Contains(errOut, "level=WARN") || !strings.Contains(errOut, "msg=hook") {
+		t.Errorf("the hook-error record did not reach Run's stderr writer:\n%s", errOut)
+	}
+}
+
+// TestInit_RelativeDirIsResolvedBeforeThePrefixIsDerived: the prefix is baked
+// into every issue ID and is immutable once written, so deriving it from "."
+// (which yields the "task" fallback) can only be undone by recreating the store.
+func TestInit_RelativeDirIsResolvedBeforeThePrefixIsDerived(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "payments-api")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	t.Chdir(dir)
+
+	out, errOut, code := run(t, "-C", ".", "init")
+	if code != 0 {
+		t.Fatalf("init: exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, `prefix "payments"`) {
+		t.Errorf("init derived the wrong prefix from a relative --dir:\n%s", out)
+	}
 }

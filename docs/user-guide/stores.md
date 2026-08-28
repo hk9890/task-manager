@@ -59,6 +59,10 @@ Each row of `store list` carries a health:
 A `dangling` or `broken` row is an entry to repair or delete by hand, not a store to
 select. Both are what a half-finished move leaves behind.
 
+A health is read from the store directory, so if `store list` cannot read one it says so
+and exits instead of printing a row: a directory it was refused is not a directory that
+is gone, and only one of the two is repaired by deleting the entry.
+
 ## Working on another project's store
 
 `--store-name` is not only the tie-breaker above. It works on every command, read and write

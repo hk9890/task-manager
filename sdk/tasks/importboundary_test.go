@@ -81,9 +81,8 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 }
 
 // TestImportBoundary_PureCoreNoVfs verifies that pure-core files in the tasks
-// package — every non-test .go file that is not listed as imperative shell —
-// stay pure: they take in-memory inputs and return values/errors, so they can be
-// unit-tested at L1 with no filesystem at all.
+// package stay pure: they take in-memory inputs and return values/errors, so
+// they can be unit-tested at L1 with no filesystem at all.
 //
 // A file breaks that rule two ways, and checking only the first is what let
 // ready.go read disk on every call while this test passed it:
@@ -94,33 +93,44 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 //     cannot be called without constructing a store, which is the property that
 //     actually makes L1 testing impossible.
 //
-// Pure-core files: ids.go, model.go, frontmatter.go, validate.go, ready.go,
-// doc.go, and any future file that is not explicitly the imperative shell.
+// The two rules are checked against two separate exemption lists below: a file
+// that hangs methods off *Store still has its imports checked unless it is also
+// on the vfs list. Pure-core files — ids.go, model.go, frontmatter.go,
+// validate.go, ready.go, criteria.go, doc.go, and any future file on neither
+// list — are held to both.
 func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 	sdkTasksDir, err := findSDKTasksDir()
 	if err != nil {
 		t.Skipf("cannot locate sdk/tasks dir: %v", err)
 	}
 
-	// imperativeShell lists the files that are allowed to import vfs and to
-	// declare *Store methods, because they form the imperative shell that
-	// connects pure logic to the disk seam.
+	// Two exemption lists, one per rule, because the two rules exempt different
+	// files. A single list short-circuits both checks at once: adding a file so it
+	// may declare a *Store method silently stops checking its imports too, and the
+	// vfs guard then covers neither it nor the five shell files that never needed
+	// the import exemption in the first place.
 	//
-	// Keep this list minimal: every entry is a file the guard stops checking, so
-	// adding one to make a build pass is how the boundary erodes. A file belongs
-	// here only if it genuinely cannot do its job over plain values.
-	imperativeShell := map[string]bool{
+	// Keep both minimal: every entry is a file the guard stops checking, so adding
+	// one to make a build pass is how the boundary erodes. A file belongs on a list
+	// only if it genuinely cannot do its job over plain values.
+	mayImportVFS := map[string]bool{
 		"store.go":    true,
 		"comments.go": true,
 		"config.go":   true, // global config loader (env/vfs seams)
 		"registry.go": true, // central registry + Resolve/Stores/InitCentral
 		"content.go":  true, // body-overflow sidecar I/O (rule itself is in overflow.go)
-		"list.go":     true, // Ready/Blocked/Detail/List over the rules in ready.go
+	}
+	mayDeclareStoreMethods := map[string]bool{
+		"store.go":    true,
+		"comments.go": true,
+		"config.go":   true,
+		"registry.go": true,
+		"content.go":  true,
+		"list.go":     true, // Ready/Blocked/Detail/List/Find over the rules in ready.go
 		"mutation.go": true, // the gated write path
 		"import.go":   true, // bulk import
 		"hookrun.go":  true, // hook execution against the exec seam
 		"log.go":      true, // observability records emitted from the write path
-		"criteria.go": true, // Criteria.Apply is a Store method over the listed set
 	}
 
 	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -137,22 +147,23 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		if imperativeShell[name] {
-			continue // shell files may import vfs and hang methods off *Store
-		}
-
 		path := filepath.Join(sdkTasksDir, name)
-		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-		if err != nil {
-			t.Errorf("parse %s: %v", path, err)
-			continue
-		}
-		for _, imp := range f.Imports {
-			pkg := strings.Trim(imp.Path.Value, `"`)
-			if pkg == vfsPkg || strings.HasPrefix(pkg, vfsPkg+"/") {
-				t.Errorf("pure-core file %s must not import vfs (got %q)", name, pkg)
+		if !mayImportVFS[name] {
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Errorf("parse %s: %v", path, err)
+				continue
 			}
+			for _, imp := range f.Imports {
+				pkg := strings.Trim(imp.Path.Value, `"`)
+				if pkg == vfsPkg || strings.HasPrefix(pkg, vfsPkg+"/") {
+					t.Errorf("file %s must not import vfs (got %q)", name, pkg)
+				}
+			}
+		}
+		if mayDeclareStoreMethods[name] {
+			continue
 		}
 
 		// The receiver check needs the declarations, so re-parse in full.

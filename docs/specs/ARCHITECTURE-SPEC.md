@@ -77,6 +77,8 @@ Two Go modules:
 github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra)
 ├── cmd/                                 command groups + output rendering
 │   └── taskmgr/                         package main — wires command execution
+├── scripts/                             repo tooling shipped in neither binary
+│   └── checkdocs/                       package main — the doc gate, stdlib only
 └── sdk/                                 separate module — the engine
     └── tasks/                           package tasks: storage engine + public API
 ```
@@ -111,13 +113,19 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the global hooks block a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
-### Imperative-shell files (may import `internal/vfs` / `internal/env`, and declare `*Store` methods)
+### Imperative-shell files (may declare `*Store` methods)
 
 A **closed set**; every other non-test file in `sdk/tasks` is pure core by
 definition, so a new file is pure core unless it is added to the guard's
-`imperativeShell` map. Adding one there to make a build pass is how the boundary
-erodes — a file belongs on this list only when it genuinely cannot do its job
-over plain values.
+`mayDeclareStoreMethods` map. Adding one there to make a build pass is how the
+boundary erodes — a file belongs on this list only when it genuinely cannot do
+its job over plain values.
+
+Importing `internal/vfs` / `internal/env` is a **second, narrower** exemption
+(`mayImportVFS`: `store.go`, `comments.go`, `content.go`, `config.go`,
+`registry.go`). The two lists are separate because the two rules exempt different
+files: one list short-circuited both checks, so a file added for its `*Store`
+methods silently stopped having its imports checked as well.
 
 | File | Responsibility |
 |---|---|
@@ -125,12 +133,11 @@ over plain values.
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
 | `content.go` | Body-overflow sidecar I/O: the two-file write ordering, sidecar read/removal, `ResolveBody` (TASK-STORAGE-SPEC §4.6). The rule it applies is pure and lives in `overflow.go`. |
 | `config.go` / `registry.go` | Load/persist the global config (`LoadGlobalConfig`/`SaveGlobalConfig`) and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
-| `list.go` | `Ready`/`Blocked`/`Detail`/`Query`/`List`/`ListPage`: read the hot index, the `closed/` partition and comment sidecars through the seam, then apply the pure rules in `ready.go`. |
+| `list.go` | `Ready`/`Blocked`/`Detail`/`Query`/`List`/`ListPage`, and `Find`/`FindPage` over a `Criteria`: read the hot index, the `closed/` partition and comment sidecars through the seam, then apply the pure rules in `ready.go`. |
 | `mutation.go` | `MutationResult` and the gated-write sequence every mutation shares — validate+index (§6 step 3), pre-hooks around the write (step 4), hints/warnings after post-hooks (step 7). |
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
-| `criteria.go` | The `Criteria` builder and `Criteria.Apply`, which lists through the store. |
 
 ### Pure-core files (no filesystem access)
 
@@ -152,9 +159,11 @@ call.
 | `ready.go` | The graph rules: open-blocker computation, cycle detection, sort and window. Plain functions over an issue index and an "is this closed?" predicate; the methods that supply both are in `list.go`. |
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
 | `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and equality. |
-| `query.go` / `search.go` | The query surface: the `*Issue`→`query.Row` adapter and the `ParseError` alias, and `SearchExpr` free-text→expression. `criteria.go` is shell — `Criteria.Apply` lists through the store. |
-| `hooks.go` | Hook config types (`Hook`) and their validation (HOOK-SPEC §3). |
+| `query.go` / `search.go` | The query surface: the `*Issue`→`query.Row` adapter and the `ParseError` alias, and `SearchExpr` free-text→expression. |
+| `criteria.go` | The `Criteria` builder and `Build`, which compiles it to a filter expression. The two `*Store` methods that take one, `Find` and `FindPage`, are in `list.go`. |
+| `hooks.go` | Hook config types (`Hook`), their validation (HOOK-SPEC §3), and `checkHookChange`, which validates only what a write introduces. |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
+| `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
 | `doc.go` | Package documentation. |
 
 ### Seams and os/syscall confinement

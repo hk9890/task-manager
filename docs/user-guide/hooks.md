@@ -66,8 +66,8 @@ Three consequences of the split:
 - **A global hook's id is prefixed `global:`** wherever it appears — in a denial, in
   `config hook list`, and in `config hook rm`. That prefix is how a refusal tells you which
   file to edit.
-- **Give a global hook an absolute path.** A hook's working directory is always the project
-  root, which for a global hook is whichever project it happens to be running in.
+- **Give a global hook an absolute path.** A hook's working directory is the project root,
+  which for a global hook is whichever project it happens to be running in.
 
 A store cannot switch inherited hooks off. The escape hatch is editing the per-user file.
 For `hook_timeout` the store's value wins, then the global one, then the 2s default.
@@ -111,7 +111,10 @@ empty string.
 
 The same values arrive as environment variables for convenience — `TASKMGR_HOOK_EVENT`,
 `TASKMGR_HOOK_ID`, `TASKMGR_ISSUE_ID`, `TASKMGR_STORE` (the absolute path to the store)
-and `TASKMGR_PAYLOAD_SCHEMA` — and the working directory is always the project root.
+and `TASKMGR_PAYLOAD_SCHEMA` — and the working directory is the project root. If that
+directory has been deleted — which a store kept outside the project outlives — the hook
+runs in the store directory instead, so your tasks stay writable. A hook that needs one
+of the two whatever happens should read `TASKMGR_STORE`.
 
 **Out:** the exit code is the decision, and the message is stdout, or stderr if stdout is
 empty.

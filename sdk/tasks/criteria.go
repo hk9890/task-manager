@@ -18,7 +18,9 @@
 // expression (QUERY-SPEC.md §1) fed to the existing engine. This is sugar over
 // the one query language, NOT a second engine.
 //
-// SDK-SPEC §3 (Criteria/LabelMatch/WorkState/Build), §4 (Find/FindPage/FindOptions).
+// SDK-SPEC §3 (Criteria/LabelMatch/WorkState/Build). The two *Store methods that
+// take a Criteria — Find and FindPage, SDK-SPEC §4 — are in list.go with the
+// rest of the shell.
 //
 // Pure-core: no os, no vfs import. No filesystem access anywhere in this file.
 
@@ -314,63 +316,4 @@ func buildTextExpr(text string, mode TextMatch) string {
 		return ""
 	}
 	return fmt.Sprintf("text ~ %s", quoteVal(text))
-}
-
-// ---------------------------------------------------------------------------
-// FindOptions and Store.Find / Store.FindPage
-// ---------------------------------------------------------------------------
-
-// FindOptions is the presentation subset of Filter used with a Criteria. The
-// selection comes from the Criteria (via Build), not from an Expr. Offset/Limit
-// behave exactly as on Filter (SDK-SPEC §3): negatives clamp to 0, Limit 0 = no limit.
-type FindOptions struct {
-	IncludeClosed bool
-	Sort          SortField
-	Reverse       bool
-	Offset        int
-	Limit         int
-}
-
-// Find compiles c to a filter expression and calls List with the resulting
-// Filter. It is equivalent to List(Filter{Expr: c.Build(), …}).
-//
-// Cold scope is derived by applying the cold-scope predicate (QUERY-SPEC §5)
-// to the built expression — the same detector List uses — so a Criteria and
-// its hand-written Expr always scope identically. FindOptions.IncludeClosed is
-// the explicit override.
-//
-// If Criteria.Build fails (unknown Status/Type, or negative priority bound),
-// that *ValidationError is returned and no scan runs.
-func (s *Store) Find(c Criteria, opt FindOptions) ([]*Issue, error) {
-	expr, err := c.Build()
-	if err != nil {
-		return nil, err
-	}
-	return s.List(Filter{
-		Expr:          expr,
-		IncludeClosed: opt.IncludeClosed,
-		Sort:          opt.Sort,
-		Reverse:       opt.Reverse,
-		Offset:        opt.Offset,
-		Limit:         opt.Limit,
-	})
-}
-
-// FindPage compiles c to a filter expression and calls ListPage with the
-// resulting Filter. It is equivalent to ListPage(Filter{Expr: c.Build(), …}).
-//
-// Cold scope and error semantics are the same as Find.
-func (s *Store) FindPage(c Criteria, opt FindOptions) (Page, error) {
-	expr, err := c.Build()
-	if err != nil {
-		return Page{}, err
-	}
-	return s.ListPage(Filter{
-		Expr:          expr,
-		IncludeClosed: opt.IncludeClosed,
-		Sort:          opt.Sort,
-		Reverse:       opt.Reverse,
-		Offset:        opt.Offset,
-		Limit:         opt.Limit,
-	})
 }

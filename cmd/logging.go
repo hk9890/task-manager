@@ -28,6 +28,13 @@ import (
 // variable (MONITORING.md). The default level is warn — a successful run stays
 // silent. Records go to stderr as text, never stdout, so a machine consumer
 // parsing --json output is never polluted.
+//
+// The destination is the invocation's stderr writer, not os.Stderr: Run promises
+// to write everything the command emits to the writers it was given, and the SDK
+// logs hook errors at warn and I/O errors at error — both above the default
+// threshold, so this fires with TASKMGR_LOG unset. Binding the handler to
+// os.Stderr put those records on the host's real stderr, where no in-process test
+// could assert on them and an embedder could not capture them.
 func newLogger() *slog.Logger {
 	level := slog.LevelWarn
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("TASKMGR_LOG"))) {
@@ -38,7 +45,7 @@ func newLogger() *slog.Logger {
 	case "error":
 		level = slog.LevelError
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	return slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 }
 
 // logOption returns the store option that wires in the CLI logger.

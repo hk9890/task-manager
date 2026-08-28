@@ -390,3 +390,65 @@ func (s *Store) ListPage(f Filter) (Page, error) {
 	total := len(matches)
 	return Page{Issues: window(matches, f.Offset, f.Limit), Total: total}, nil
 }
+
+// ---------------------------------------------------------------------------
+// FindOptions and Store.Find / Store.FindPage
+//
+// The Criteria they take is pure (criteria.go); these two are *Store methods, so
+// they live on this side of the split.
+// ---------------------------------------------------------------------------
+
+// FindOptions is the presentation subset of Filter used with a Criteria. The
+// selection comes from the Criteria (via Build), not from an Expr. Offset/Limit
+// behave exactly as on Filter (SDK-SPEC §3): negatives clamp to 0, Limit 0 = no limit.
+type FindOptions struct {
+	IncludeClosed bool
+	Sort          SortField
+	Reverse       bool
+	Offset        int
+	Limit         int
+}
+
+// Find compiles c to a filter expression and calls List with the resulting
+// Filter. It is equivalent to List(Filter{Expr: c.Build(), …}).
+//
+// Cold scope is derived by applying the cold-scope predicate (QUERY-SPEC §5)
+// to the built expression — the same detector List uses — so a Criteria and
+// its hand-written Expr always scope identically. FindOptions.IncludeClosed is
+// the explicit override.
+//
+// If Criteria.Build fails (unknown Status/Type, or negative priority bound),
+// that *ValidationError is returned and no scan runs.
+func (s *Store) Find(c Criteria, opt FindOptions) ([]*Issue, error) {
+	expr, err := c.Build()
+	if err != nil {
+		return nil, err
+	}
+	return s.List(Filter{
+		Expr:          expr,
+		IncludeClosed: opt.IncludeClosed,
+		Sort:          opt.Sort,
+		Reverse:       opt.Reverse,
+		Offset:        opt.Offset,
+		Limit:         opt.Limit,
+	})
+}
+
+// FindPage compiles c to a filter expression and calls ListPage with the
+// resulting Filter. It is equivalent to ListPage(Filter{Expr: c.Build(), …}).
+//
+// Cold scope and error semantics are the same as Find.
+func (s *Store) FindPage(c Criteria, opt FindOptions) (Page, error) {
+	expr, err := c.Build()
+	if err != nil {
+		return Page{}, err
+	}
+	return s.ListPage(Filter{
+		Expr:          expr,
+		IncludeClosed: opt.IncludeClosed,
+		Sort:          opt.Sort,
+		Reverse:       opt.Reverse,
+		Offset:        opt.Offset,
+		Limit:         opt.Limit,
+	})
+}

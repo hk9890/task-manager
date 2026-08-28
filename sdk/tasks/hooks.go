@@ -131,16 +131,9 @@ func buildHookSet(global GlobalConfig, cfg Config) (*hookSet, error) {
 	if raw == "" {
 		raw = strings.TrimSpace(global.HookTimeout)
 	}
-	timeout := defaultHookTimeout
-	if raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid hook_timeout %q: %w", raw, err)
-		}
-		if d < 0 {
-			return nil, fmt.Errorf("invalid hook_timeout %q: must not be negative", raw)
-		}
-		timeout = d // 0 disables the limit
+	timeout, err := parseHookTimeout(raw)
+	if err != nil {
+		return nil, err
 	}
 
 	hs := &hookSet{timeout: timeout}
@@ -159,6 +152,90 @@ func buildHookSet(global GlobalConfig, cfg Config) (*hookSet, error) {
 		hs.hooks = append(hs.hooks, ch)
 	}
 	return hs, nil
+}
+
+// parseHookTimeout turns a configured hook_timeout into a duration: empty means
+// the 2s default, "0" disables the limit (HOOK-SPEC §3.1).
+func parseHookTimeout(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultHookTimeout, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid hook_timeout %q: %w", raw, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("invalid hook_timeout %q: must not be negative", raw)
+	}
+	return d, nil
+}
+
+// checkHookChange validates the part of one config file's hooks block that a
+// write introduces: the timeout when it changed, and every entry that was not
+// already there. idPrefix scopes the error to the file being written, so a
+// message never sends the reader to the other one.
+//
+// Only the delta is compiled, and deliberately (HOOK-SPEC §3.4). Validating the
+// whole block means an entry that is already on disk refuses the write that
+// removes it: two malformed hooks in the per-user config then fail every write
+// on the machine with no way back out through `taskmgr config hook rm`.
+// Compiling only what arrives still keeps a bad hook from ever being written by
+// taskmgr, which is what the validation is for.
+func checkHookChange(curTimeout string, cur []Hook, nextTimeout string, next []Hook, idPrefix string) error {
+	if strings.TrimSpace(nextTimeout) != strings.TrimSpace(curTimeout) {
+		if _, err := parseHookTimeout(nextTimeout); err != nil {
+			return err
+		}
+	}
+	for i, h := range next {
+		if containsHook(cur, h) {
+			continue
+		}
+		if _, err := compileHook(h, i, idPrefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// containsHook reports whether hooks holds an entry equal to h. Position is not
+// part of the comparison: removing one entry renumbers the rest, and a hook that
+// only moved is not a hook this write introduced.
+func containsHook(hooks []Hook, h Hook) bool {
+	for _, c := range hooks {
+		if c.ID == h.ID && c.Event == h.Event && c.When == h.When && equalArgv(c.Run, h.Run) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalArgv(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// cloneHooks deep-copies a hooks block, argv slices included. A shallow copy
+// shares every Run slice with the original — and a compiled hook holds that same
+// slice — so it is not a copy a caller can edit.
+func cloneHooks(hooks []Hook) []Hook {
+	if hooks == nil {
+		return nil
+	}
+	out := make([]Hook, len(hooks))
+	for i, h := range hooks {
+		h.Run = append([]string(nil), h.Run...)
+		out[i] = h
+	}
+	return out
 }
 
 // compileHook validates a single hook entry and compiles its `when` predicate.

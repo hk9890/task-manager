@@ -51,6 +51,15 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 			}
 			root = wd
 		}
+		// Both the prefix and the central store name are derived from the last
+		// element of this path, so it has to be absolute before either is taken:
+		// `-C .` otherwise derives from "." and falls back to the "task" prefix,
+		// which is then immutable, and `-C ..` derives a name the store grammar
+		// rejects. Init/InitCentral make it absolute too, but only afterwards.
+		root, err := filepath.Abs(root)
+		if err != nil {
+			return err
+		}
 		prefix := initFlags.prefix
 		if prefix == "" {
 			// The engine owns this rule (CONFIG-SPEC §5) — the CLI must not
