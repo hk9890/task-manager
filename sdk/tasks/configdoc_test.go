@@ -67,32 +67,29 @@ hook_timeout: 5m
 	}
 }
 
-// TestApplyConfigToDoc_KeepsUnknownKeysInsideAnUntouchedHook covers the same
-// promise one level down (HOOK-SPEC §3.4): adding a hook must not strip a key a
-// newer taskmgr wrote on a different one.
-func TestApplyConfigToDoc_KeepsUnknownKeysInsideAnUntouchedHook(t *testing.T) {
+// TestApplyConfigToDoc_KeepsUnknownKeysInsideAnUntouchedUseEntry covers the same
+// promise one level down (HOOK-SPEC §3.4): adding a package must not strip a key
+// a newer taskmgr wrote on a different one.
+func TestApplyConfigToDoc_KeepsUnknownKeysInsideAnUntouchedUseEntry(t *testing.T) {
 	old := `prefix: proj
-hooks:
-    - id: gate
-      event: pre-create
-      run:
-        - /bin/true
-      future_hook_key: keep-me
+use:
+    - name: doc-policy
+      future_use_key: keep-me
 `
-	cfg := Config{Prefix: "proj", Hooks: []Hook{
-		{ID: "gate", Event: "pre-create", Run: []string{"/bin/true"}},
-		{ID: "second", Event: "post-close", Run: []string{"/bin/true"}},
+	cfg := Config{Prefix: "proj", Use: []PackageRef{
+		{Name: "doc-policy"},
+		{Name: "second"},
 	}}
 
 	got, err := applyConfigToDoc([]byte(old), cfg)
 	if err != nil {
 		t.Fatalf("applyConfigToDoc: %v", err)
 	}
-	if !strings.Contains(string(got), "future_hook_key: keep-me") {
-		t.Errorf("an unrelated hook's unknown key was dropped:\n%s", got)
+	if !strings.Contains(string(got), "future_use_key: keep-me") {
+		t.Errorf("an unrelated entry's unknown key was dropped:\n%s", got)
 	}
-	if !strings.Contains(string(got), "id: second") {
-		t.Errorf("the added hook is missing:\n%s", got)
+	if !strings.Contains(string(got), "name: second") {
+		t.Errorf("the added package is missing:\n%s", got)
 	}
 }
 
@@ -108,15 +105,15 @@ func TestApplyConfigToDoc_UnsetRemovesTheKey(t *testing.T) {
 	}
 }
 
-func TestApplyConfigToDoc_RemovingTheLastHookDropsTheBlock(t *testing.T) {
-	old := "prefix: proj\nhooks:\n    - id: gate\n      event: pre-create\n      run: [/bin/true]\n"
+func TestApplyConfigToDoc_RemovingTheLastPackageDropsTheBlock(t *testing.T) {
+	old := "prefix: proj\nuse:\n    - name: doc-policy\n"
 
 	got, err := applyConfigToDoc([]byte(old), Config{Prefix: "proj"})
 	if err != nil {
 		t.Fatalf("applyConfigToDoc: %v", err)
 	}
-	if strings.Contains(string(got), "hooks:") {
-		t.Errorf("an empty hooks list must not be written:\n%s", got)
+	if strings.Contains(string(got), "use:") {
+		t.Errorf("an empty use list must not be written:\n%s", got)
 	}
 }
 
@@ -234,8 +231,8 @@ func fillField(t *testing.T, name string, f reflect.Value) {
 		f.SetString("sentinel-" + strings.ToLower(name))
 	case f.Kind() == reflect.Int:
 		f.SetInt(7)
-	case f.Type() == reflect.TypeOf([]Hook(nil)):
-		f.Set(reflect.ValueOf([]Hook{{ID: "sentinel-hook", Event: eventPreClose, Run: []string{"true"}}}))
+	case f.Type() == reflect.TypeOf([]PackageRef(nil)):
+		f.Set(reflect.ValueOf([]PackageRef{{Name: "sentinel-package"}}))
 	default:
 		t.Fatalf("field %s has type %s, which this guard cannot fill — extend fillField, "+
 			"and check that the config writer handles the new type", name, f.Type())

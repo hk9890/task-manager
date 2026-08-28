@@ -69,7 +69,7 @@ func TestLogHook_RecordsDecisionAndDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.runner = fake
-	s.cfg.Hooks = []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}}
+	storePackage(t, s, "p", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
 
 	if _, err := s.Create(CreateInput{Title: "t"}); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestLogHook_RecordsDecisionAndDuration(t *testing.T) {
 	if hook == nil {
 		t.Fatal("expected a hook log record")
 	}
-	if hook["event"] != "pre-create" || hook["hook"] != "g" || hook["decision"] != "allow" {
+	if hook["event"] != "pre-create" || hook["hook"] != "pkg:p:g" || hook["decision"] != "allow" {
 		t.Errorf("hook record = %v", hook)
 	}
 	if _, ok := hook["duration_ms"]; !ok {
@@ -103,7 +103,7 @@ func TestLogHook_DenyLogsAtInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.runner = fake
-	s.cfg.Hooks = []Hook{{ID: "gate", Event: "pre-create", Run: []string{"g"}}}
+	storePackage(t, s, "p", []Hook{{ID: "gate", Event: "pre-create", Run: []string{"g"}}})
 
 	if _, err := s.Create(CreateInput{Title: "t"}); err == nil {
 		t.Fatal("expected denial")
@@ -127,7 +127,7 @@ func TestLogHook_PostHookFailureLogsWarnNotDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.runner = fake
-	s.cfg.Hooks = []Hook{{ID: "notify", Event: "post-create", Run: []string{"n"}}}
+	storePackage(t, s, "p", []Hook{{ID: "notify", Event: "post-create", Run: []string{"n"}}})
 
 	res, err := s.Create(CreateInput{Title: "t"})
 	if err != nil {
@@ -165,7 +165,7 @@ func TestLogHook_ErrorDecisionIsPhaseIndependent(t *testing.T) {
 				t.Fatal(err)
 			}
 			s.runner = fake
-			s.cfg.Hooks = []Hook{{ID: "h", Event: event, Run: []string{"h"}}}
+			storePackage(t, s, "p", []Hook{{ID: "h", Event: event, Run: []string{"h"}}})
 
 			_, _ = s.Create(CreateInput{Title: "t"})
 

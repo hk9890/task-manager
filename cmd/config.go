@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // config.go — the `taskmgr config` command tree: read and write the scalar keys
-// of a configuration file, and manage its hooks block.
+// of a configuration file. The `use:` list of hook packages is a list, not a
+// scalar, and belongs to `taskmgr package` (pkg.go).
 //
 // Two files are addressable. Without --global the target is the resolved store's
 // config.yaml (TASK-STORAGE-SPEC §4.2); with it, the per-user config.yaml
@@ -23,10 +24,7 @@
 //
 // Every write goes through the SDK (Store.UpdateConfig / tasks.UpdateGlobalConfig),
 // which re-reads the file under its lock and applies the edit there, so two
-// concurrent invocations cannot discard each other's work. Both validate a hook
-// the write introduces before a byte lands: a malformed one fails every later
-// mutation (HOOK-SPEC §3.4), so it is refused at the command that caused it
-// rather than at the next unrelated write.
+// concurrent invocations cannot discard each other's work.
 package cmd
 
 import (
@@ -69,17 +67,6 @@ type configKeyDTO struct {
 	Scope       string `json:"scope"`
 	Writable    bool   `json:"writable"`
 	Description string `json:"description"`
-}
-
-// configHookDTO is one entry of `config hook list`. ID is the *effective* id —
-// the one a denial reason and `config hook rm` use, including the "<event>#<n>"
-// default and the "global:" scope prefix (HOOK-SPEC §3.5).
-type configHookDTO struct {
-	ID    string   `json:"id"`
-	Scope string   `json:"scope"`
-	Event string   `json:"event"`
-	When  string   `json:"when,omitempty"`
-	Run   []string `json:"run"`
 }
 
 // ── the target file ──────────────────────────────────────────────────────────
@@ -152,25 +139,27 @@ func (t *configTarget) update(edit func(*configTarget) error) error {
 	})
 }
 
-func (t *configTarget) hooks() []tasks.Hook {
+// use and setUse reach the `use:` list of whichever file this target names, so
+// `taskmgr package` can edit either one through the same code path.
+func (t *configTarget) use() []tasks.PackageRef {
 	if t.global {
-		return t.gcfg.Hooks
+		return t.gcfg.Use
 	}
-	return t.cfg.Hooks
+	return t.cfg.Use
 }
 
-func (t *configTarget) setHooks(hooks []tasks.Hook) {
+func (t *configTarget) setUse(refs []tasks.PackageRef) {
 	if t.global {
-		t.gcfg.Hooks = hooks
+		t.gcfg.Use = refs
 		return
 	}
-	t.cfg.Hooks = hooks
+	t.cfg.Use = refs
 }
 
 // ── the key catalog ──────────────────────────────────────────────────────────
 
-// configKeyDef is one scalar key of a configuration file. `hooks` is
-// deliberately absent: it is a list, and `config hook` owns it.
+// configKeyDef is one scalar key of a configuration file. `use` is deliberately
+// absent: it is a list, and `taskmgr package` owns it.
 type configKeyDef struct {
 	name     string
 	scope    string
@@ -257,8 +246,9 @@ Without --global a command acts on the resolved store's config.yaml
 (TASK-STORAGE-SPEC §4.2). With --global it acts on the per-user config.yaml
 (CONFIG-SPEC §2), which needs no store and works in any directory.
 
-'config keys' lists every supported key. The hooks block is a list, not a scalar,
-so it is managed with 'config hook' rather than 'config set'.`,
+'config keys' lists every supported key. The 'use:' list of hook packages is a
+list, not a scalar, so it is managed with 'taskmgr package' rather than
+'config set'.`,
 }
 
 var configKeysCmd = &cobra.Command{
@@ -389,169 +379,7 @@ func writeConfigKey(global bool, name, value string) error {
 	return nil
 }
 
-// ── config hook ──────────────────────────────────────────────────────────────
-
-var configHookCmd = &cobra.Command{
-	Use:   "hook",
-	Short: "Manage the lifecycle-gate hooks of one config file",
-	Long: `Manage the hooks block (HOOK-SPEC). Hooks in the per-user config (--global) run
-before the store's own hooks and apply to every store on this machine; they do
-not travel with a repository, so a rule the data depends on belongs in the
-store's config instead.`,
-}
-
-var configHookAddFlags struct {
-	id    string
-	event string
-	when  string
-	run   []string
-}
-
-var configHookAddCmd = &cobra.Command{
-	Use:   "add --event <event> --run <arg> [--run <arg>…]",
-	Short: "Append a hook to the config file",
-	Long: `Append one hook.
-
---run is repeatable and each occurrence is exactly one argv element, matching the
-way hooks are executed: directly via execve, with no shell. For shell features
-pass the shell explicitly:
-
-  taskmgr config hook add --event pre-close \
-    --run sh --run -c --run 'make lint && make test'
-
---when takes a filter expression (QUERY-SPEC) evaluated against the candidate
-issue; omitted, the hook runs for every occurrence of its event.
-
-The working directory of a hook is the project root, so a relative path in a
---global hook resolves against whichever project it runs in: give a global hook an
-absolute path.`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if strings.TrimSpace(configHookAddFlags.event) == "" {
-			return &usageError{cmd: cmd, msg: "--event is required"}
-		}
-		if len(configHookAddFlags.run) == 0 {
-			return &usageError{cmd: cmd, msg: "--run is required (repeat it once per argv element)"}
-		}
-		// The hook compile rejects this too, but that happens on the next write:
-		// without the guard here `add` would save a config file that then fails
-		// every mutation until it is hand-edited.
-		if strings.Contains(configHookAddFlags.id, "#") {
-			return &usageError{cmd: cmd, msg: `--id must not contain '#' (reserved for the defaulted "<event>#<index>" id)`}
-		}
-		t, err := loadConfigTarget(configFlags.global)
-		if err != nil {
-			return err
-		}
-		hook := tasks.Hook{
-			ID:    strings.TrimSpace(configHookAddFlags.id),
-			Event: strings.TrimSpace(configHookAddFlags.event),
-			When:  strings.TrimSpace(configHookAddFlags.when),
-			Run:   configHookAddFlags.run,
-		}
-		var id string
-		if err := t.update(func(t *configTarget) error {
-			// Effective ids must stay unique within a file, or `config hook rm`
-			// could not name one of the two and the second hook would be
-			// unaddressable. Since a declared id cannot contain '#', the only
-			// remaining way to collide is two entries declaring the same id.
-			id = tasks.HookID(hook, len(t.hooks()), t.global)
-			for i, h := range t.hooks() {
-				if tasks.HookID(h, i, t.global) == id {
-					return fmt.Errorf("hook id %q is already in use in %s", id, t.path)
-				}
-			}
-			t.setHooks(append(t.hooks(), hook))
-			return nil
-		}); err != nil {
-			return err
-		}
-		if flagJSON {
-			return printJSON(hookDTO(hook, id, t.scope()))
-		}
-		_, _ = fmt.Fprintf(stdout, "Added hook %s (%s) to %s\n", id, hook.Event, t.path)
-		return nil
-	},
-}
-
-var configHookListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List the hooks configured in one config file",
-	Long: `List one file's hooks in the order they run, with the effective id of each —
-the id a denial reason reports and 'config hook rm' takes.`,
-	Args: cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configFlags.global)
-		if err != nil {
-			return err
-		}
-		hooks := t.hooks()
-		out := make([]configHookDTO, 0, len(hooks))
-		for i, h := range hooks {
-			out = append(out, hookDTO(h, tasks.HookID(h, i, t.global), t.scope()))
-		}
-		if flagJSON {
-			return printJSON(out)
-		}
-		if len(out) == 0 {
-			_, _ = fmt.Fprintf(stdout, "no hooks in %s\n", t.path)
-			return nil
-		}
-		w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "ID\tEVENT\tWHEN\tRUN")
-		for _, h := range out {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", h.ID, h.Event, orUnset(h.When), strings.Join(h.Run, " "))
-		}
-		return w.Flush()
-	},
-}
-
-var configHookRmCmd = &cobra.Command{
-	Use:   "rm <id>",
-	Short: "Remove one hook by its effective id",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		t, err := loadConfigTarget(configFlags.global)
-		if err != nil {
-			return err
-		}
-		if err := t.update(func(t *configTarget) error {
-			var kept []tasks.Hook
-			var known []string
-			found := false
-			for i, h := range t.hooks() {
-				id := tasks.HookID(h, i, t.global)
-				known = append(known, id)
-				if id == args[0] && !found {
-					found = true
-					continue
-				}
-				kept = append(kept, h)
-			}
-			if !found {
-				if len(known) == 0 {
-					return fmt.Errorf("no hook %q: %s configures no hooks", args[0], t.path)
-				}
-				return fmt.Errorf("no hook %q in %s — configured: %s", args[0], t.path, strings.Join(known, ", "))
-			}
-			t.setHooks(kept)
-			return nil
-		}); err != nil {
-			return err
-		}
-		if flagJSON {
-			return printJSON(map[string]string{"removed": args[0], "path": t.path})
-		}
-		_, _ = fmt.Fprintf(stdout, "Removed hook %s from %s\n", args[0], t.path)
-		return nil
-	},
-}
-
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-func hookDTO(h tasks.Hook, id, scope string) configHookDTO {
-	return configHookDTO{ID: id, Scope: scope, Event: h.Event, When: h.When, Run: h.Run}
-}
 
 // orUnset renders an empty value in a human table, where a blank column reads as
 // a rendering bug rather than as "not configured".
@@ -572,20 +400,10 @@ func yesNo(b bool) string {
 func init() {
 	configCmd.PersistentFlags().BoolVar(&configFlags.global, "global", false, "act on the per-user config instead of the store's")
 
-	configHookAddCmd.Flags().StringVar(&configHookAddFlags.id, "id", "", "hook id used in messages, logs and 'config hook rm'")
-	configHookAddCmd.Flags().StringVar(&configHookAddFlags.event, "event", "", "lifecycle event that fires the hook (required)")
-	configHookAddCmd.Flags().StringVar(&configHookAddFlags.when, "when", "", "filter expression scoping the hook to matching issues")
-	configHookAddCmd.Flags().StringArrayVar(&configHookAddFlags.run, "run", nil, "one argv element; repeat once per element (required)")
-
-	configHookCmd.AddCommand(configHookAddCmd)
-	configHookCmd.AddCommand(configHookListCmd)
-	configHookCmd.AddCommand(configHookRmCmd)
-
 	configCmd.AddCommand(configKeysCmd)
 	configCmd.AddCommand(configListCmd)
 	configCmd.AddCommand(configGetCmd)
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configUnsetCmd)
-	configCmd.AddCommand(configHookCmd)
 	rootCmd.AddCommand(configCmd)
 }

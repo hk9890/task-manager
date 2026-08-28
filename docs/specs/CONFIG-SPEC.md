@@ -43,11 +43,8 @@ version: 1
 central_root: ~/.taskmgr   # registry + central stores live here; ~ expands
 
 hook_timeout: 2s           # fallback limit for a store that sets none
-hooks:                     # lifecycle gates for every store on this machine
-  - id: doc-needs-path
-    event: pre-create
-    when: 'type == "doc" && !(label ~ "path:")'
-    run: ["/home/me/.taskmgr/hooks/doc-path.sh"]
+use:                       # hook packages applied to every store on this machine
+  - name: doc-policy       # <home>/packages/doc-policy
 ```
 
 | Field | Required | Notes |
@@ -55,19 +52,22 @@ hooks:                     # lifecycle gates for every store on this machine
 | `version` | no | Schema version; defaults to `1`. |
 | `central_root` | no | Directory holding the registry and central stores. `~` expands; a relative value resolves against the home. Defaults to the home. |
 | `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
-| `hooks` | no | Lifecycle gates applied to **every** store on this machine, running before the store's own. Same schema as a store's hooks block; semantics in [HOOK-SPEC](HOOK-SPEC.md) §3.5. |
+| `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home. |
+
+Machine-wide packages live at `<home>/packages/<name>`, which is what a `name` entry in
+either config file resolves to. The directory is created by whoever installs a package;
+taskmgr never writes one ([HOOK-SPEC](HOOK-SPEC.md) §3.6).
 
 `config.yaml` always lives in the home, even when `central_root` points elsewhere.
 Unknown keys are ignored; a corrupt (unparseable) file is a hard error.
 
-`hook_timeout` and `hooks` are validated **lazily, on the first write to any
-store** — never on a read — exactly as a store's own hooks block is
-([HOOK-SPEC](HOOK-SPEC.md) §3.4). The blast radius is wider than a store's:
-a malformed block here fails mutations in *every* store on the machine while
-leaving every query working. `taskmgr config` validates before it writes, so the
-error normally surfaces at the command that caused it — and validates only the
-entries that write **introduces**, so the command that removes a malformed hook is
-not itself refused by the hook it is removing.
+`hook_timeout` and `use` are read **lazily, on the first write to any store** — never on
+a read — exactly as a store's own `use` list is ([HOOK-SPEC](HOOK-SPEC.md) §3.4). The
+blast radius is wider than a store's: a package named here that will not load fails
+mutations in *every* store on the machine while leaving every query working. `taskmgr
+package` checks an entry before it writes, so the error normally surfaces at the command
+that caused it — and checks only the entries the write **introduces**, so the command
+that removes a bad entry is not itself refused by it.
 
 **Config lock.** Writes to this file are serialized by an advisory `flock` on
 `<home>/.config.lock`, and the read that a change is computed from happens inside
@@ -216,10 +216,12 @@ path exists, then clean. Matching is ancestor/longest-prefix on **segment** boun
   **and** add its registry entry in one step (the `init --central` command, CLI-SPEC §2).
 - **Promote local → central** — move an existing `<project>/.tasks` to
   `<central_root>/stores/<store>` and register it (`store move --central`, CLI-SPEC §2.1).
-  The store moves whole, `config.yaml` included, so its prefix and hooks block survive
-  and existing IDs stay valid. Hook **argv** is not rewritten: hooks run with the
-  project root as their working directory (HOOK-SPEC §3.2), which the promote does not
-  change, so a hook whose argv points into `.tasks` must be rewritten by hand.
+  The store moves whole, `config.yaml` included, so its prefix and `use:` list survive
+  and existing IDs stay valid. A package held by path under `.tasks/packages/` moves with
+  the tree and keeps working: its hooks' relative `argv[0]` resolves against the package's
+  new location (HOOK-SPEC §3.6). The working directory is still the project root, which
+  the promote does not change, so a path a hook builds at run time is the one thing to
+  check by hand.
   The **registry entry is written before the files move**, so a promote that dies in
   between leaves a dangling entry (ignored by resolution, §3) plus the local store,
   which still exists and still wins step 2 — the project keeps working. The reverse

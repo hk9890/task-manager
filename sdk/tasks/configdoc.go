@@ -19,7 +19,7 @@
 //
 // Both config files are documented as forward-compatible: a reader ignores keys
 // it does not know rather than rejecting them (TASK-STORAGE-SPEC §4.2, and the
-// same rule for hook entries in HOOK-SPEC §3.4). Until there was a writer, that
+// same rule for package entries in HOOK-SPEC §3.4). Until there was a writer, that
 // promise was free. Round-tripping the file through Config would break it: every
 // unknown key, and every comment in a hand-edited file, would vanish on the first
 // `taskmgr config set` — silently, and for a key a *newer* taskmgr put there.
@@ -48,7 +48,7 @@ func applyConfigToDoc(old []byte, cfg Config) ([]byte, error) {
 	}
 	setScalar(root, "prefix", cfg.Prefix)
 	setScalar(root, "hook_timeout", cfg.HookTimeout)
-	if err := setHooks(root, cfg.Hooks); err != nil {
+	if err := setUse(root, cfg.Use); err != nil {
 		return nil, err
 	}
 	return encodeDoc(root)
@@ -70,7 +70,7 @@ func applyGlobalConfigToDoc(old []byte, cfg GlobalConfig) ([]byte, error) {
 	})
 	setScalar(root, "central_root", cfg.CentralRoot)
 	setScalar(root, "hook_timeout", cfg.HookTimeout)
-	if err := setHooks(root, cfg.Hooks); err != nil {
+	if err := setUse(root, cfg.Use); err != nil {
 		return nil, err
 	}
 	return encodeDoc(root)
@@ -146,72 +146,60 @@ func setScalar(mapping *yaml.Node, key, value string) {
 	setNode(mapping, key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
 }
 
-// setHooks writes the hooks sequence, reusing the original node of any entry
+// setUse writes the `use:` sequence, reusing the original node of any entry
 // whose modelled fields are unchanged.
 //
 // Reuse is what carries an entry's own unknown keys through an unrelated edit:
-// adding one hook must not strip a key a newer taskmgr wrote on another. An
+// adding one package must not strip a key a newer taskmgr wrote on another. An
 // entry that did change is re-encoded and loses them, which is the honest
 // outcome — the writer has no way to merge a field it cannot see.
-func setHooks(mapping *yaml.Node, hooks []Hook) error {
-	if len(hooks) == 0 {
-		removeKey(mapping, "hooks")
+func setUse(mapping *yaml.Node, refs []PackageRef) error {
+	if len(refs) == 0 {
+		removeKey(mapping, "use")
 		return nil
 	}
 
 	var oldNodes []*yaml.Node
-	if i := findKey(mapping, "hooks"); i >= 0 && mapping.Content[i].Kind == yaml.SequenceNode {
+	if i := findKey(mapping, "use"); i >= 0 && mapping.Content[i].Kind == yaml.SequenceNode {
 		oldNodes = mapping.Content[i].Content
 	}
 	used := make([]bool, len(oldNodes))
 
 	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, h := range hooks {
-		if node := matchHookNode(oldNodes, used, h); node != nil {
+	for _, ref := range refs {
+		if node := matchUseNode(oldNodes, used, ref); node != nil {
 			seq.Content = append(seq.Content, node)
 			continue
 		}
 		fresh := &yaml.Node{}
-		if err := fresh.Encode(h); err != nil {
+		if err := fresh.Encode(ref); err != nil {
 			return err
 		}
 		seq.Content = append(seq.Content, fresh)
 	}
-	setNode(mapping, "hooks", seq)
+	setNode(mapping, "use", seq)
 	return nil
 }
 
-// matchHookNode returns the first unused original node that decodes to exactly
-// h, marking it used. Matching by value rather than by index keeps reuse correct
-// when entries are added, removed, or reordered.
-func matchHookNode(oldNodes []*yaml.Node, used []bool, h Hook) *yaml.Node {
+// matchUseNode returns the first unused original node that decodes to exactly
+// ref, marking it used. Matching by value rather than by index keeps reuse
+// correct when entries are added, removed, or reordered.
+func matchUseNode(oldNodes []*yaml.Node, used []bool, ref PackageRef) *yaml.Node {
 	for i, node := range oldNodes {
 		if used[i] {
 			continue
 		}
-		var got Hook
+		var got PackageRef
 		if err := node.Decode(&got); err != nil {
 			continue
 		}
-		if !sameHook(got, h) {
+		if got != ref {
 			continue
 		}
 		used[i] = true
 		return node
 	}
 	return nil
-}
-
-func sameHook(a, b Hook) bool {
-	if a.ID != b.ID || a.Event != b.Event || a.When != b.When || len(a.Run) != len(b.Run) {
-		return false
-	}
-	for i := range a.Run {
-		if a.Run[i] != b.Run[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func encodeDoc(root *yaml.Node) ([]byte, error) {

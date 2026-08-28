@@ -66,7 +66,7 @@ func TestUpdateConfig_ReadsUnderTheLock(t *testing.T) {
 		t.Fatalf("first UpdateConfig: %v", err)
 	}
 	if err := second.UpdateConfig(func(c *Config) error {
-		c.Hooks = append(c.Hooks, Hook{ID: "gate", Event: "pre-close", Run: []string{"true"}})
+		c.Use = append(c.Use, PackageRef{Name: "gate"})
 		return nil
 	}); err != nil {
 		t.Fatalf("second UpdateConfig: %v", err)
@@ -79,13 +79,13 @@ func TestUpdateConfig_ReadsUnderTheLock(t *testing.T) {
 	if onDisk.HookTimeout != "5m" {
 		t.Errorf("hook_timeout = %q, want 5m — the second write discarded the first", onDisk.HookTimeout)
 	}
-	if len(onDisk.Hooks) != 1 {
-		t.Fatalf("hooks = %d, want 1", len(onDisk.Hooks))
+	if len(onDisk.Use) != 1 {
+		t.Fatalf("use entries = %d, want 1", len(onDisk.Use))
 	}
 }
 
 // TestUpdateConfig_ConcurrentWritersAllSurvive reproduces the reported failure:
-// twelve `taskmgr config hook add` at once left one hook and reported success
+// twelve `taskmgr package add` at once left one entry and reported success
 // twelve times.
 func TestUpdateConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 	m := vfs.NewMem()
@@ -102,10 +102,7 @@ func TestUpdateConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errs[i] = s.UpdateConfig(func(c *Config) error {
-				c.Hooks = append(c.Hooks, Hook{
-					Event: "pre-close",
-					Run:   []string{fmt.Sprintf("cmd%d", i)},
-				})
+				c.Use = append(c.Use, PackageRef{Name: fmt.Sprintf("cmd%d", i)})
 				return nil
 			})
 		}()
@@ -121,62 +118,62 @@ func TestUpdateConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readConfig: %v", err)
 	}
-	if len(onDisk.Hooks) != writers {
-		t.Fatalf("config holds %d hooks, want %d — every writer reported success", len(onDisk.Hooks), writers)
+	if len(onDisk.Use) != writers {
+		t.Fatalf("config holds %d use entries, want %d — every writer reported success", len(onDisk.Use), writers)
 	}
 }
 
-// TestUpdateConfig_RefusesAHookItWouldIntroduce keeps the validation the change
-// preserves: a malformed hook still never reaches the file.
-func TestUpdateConfig_RefusesAHookItWouldIntroduce(t *testing.T) {
+// TestUpdateConfig_RefusesAUseEntryItWouldIntroduce keeps the validation the
+// change preserves: a reference that could never resolve never reaches the file.
+func TestUpdateConfig_RefusesAUseEntryItWouldIntroduce(t *testing.T) {
 	m := vfs.NewMem()
 	s, err := InitWithVFS("/p", "tst", m)
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
 	err = s.UpdateConfig(func(c *Config) error {
-		c.Hooks = append(c.Hooks, Hook{Event: "pre-explode", Run: []string{"x"}})
+		c.Use = append(c.Use, PackageRef{Name: "../escape"})
 		return nil
 	})
 	if err == nil {
-		t.Fatal("a hook with an unknown event must be refused")
+		t.Fatal("a use entry with an invalid package name must be refused")
 	}
-	if !strings.Contains(err.Error(), "pre-explode") {
-		t.Errorf("error %q does not name the offending event", err)
+	if !strings.Contains(err.Error(), "../escape") {
+		t.Errorf("error %q does not name the offending entry", err)
 	}
 	onDisk, _ := s.readConfig()
-	if len(onDisk.Hooks) != 0 {
-		t.Errorf("refused write left %d hooks on disk", len(onDisk.Hooks))
+	if len(onDisk.Use) != 0 {
+		t.Errorf("refused write left %d use entries on disk", len(onDisk.Use))
 	}
 }
 
-// TestUpdateConfig_RemovesAHookThatIsAlreadyMalformed is the other half:
-// validating the whole block meant a bad entry refused the write that deletes
-// it, and the file could then only be repaired by hand.
-func TestUpdateConfig_RemovesAHookThatIsAlreadyMalformed(t *testing.T) {
+// TestUpdateConfig_RemovesAUseEntryThatIsAlreadyMalformed is the other half:
+// validating the whole list meant a bad entry refused the write that deletes it,
+// and the file could then only be repaired by hand.
+func TestUpdateConfig_RemovesAUseEntryThatIsAlreadyMalformed(t *testing.T) {
 	m := vfs.NewMem()
 	s, err := InitWithVFS("/p", "tst", m)
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
-	// Two malformed hooks, written the way a hand edit puts them there.
-	raw := "prefix: tst\nhooks:\n  - event: pre-delete\n    run: [\"a\"]\n  - event: pre-purge\n    run: [\"b\"]\n"
+	// Two malformed entries, written the way a hand edit puts them there.
+	raw := "prefix: tst\nuse:\n  - name: \"../a\"\n  - name: \"../b\"\n"
 	if err := m.WriteAtomic("/p/.tasks/config.yaml", []byte(raw), 0o644); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 
 	if err := s.UpdateConfig(func(c *Config) error {
-		c.Hooks = c.Hooks[1:] // drop the first
+		c.Use = c.Use[1:] // drop the first
 		return nil
 	}); err != nil {
-		t.Fatalf("removing one of two malformed hooks must be allowed: %v", err)
+		t.Fatalf("removing one of two malformed entries must be allowed: %v", err)
 	}
 	onDisk, err := s.readConfig()
 	if err != nil {
 		t.Fatalf("readConfig: %v", err)
 	}
-	if len(onDisk.Hooks) != 1 || onDisk.Hooks[0].Event != "pre-purge" {
-		t.Fatalf("hooks after removal = %+v", onDisk.Hooks)
+	if len(onDisk.Use) != 1 || onDisk.Use[0].Name != "../b" {
+		t.Fatalf("use entries after removal = %+v", onDisk.Use)
 	}
 }
 
@@ -205,34 +202,26 @@ func TestUpdateConfig_PrefixStaysImmutable(t *testing.T) {
 	}
 }
 
-// TestConfig_DeepCopiesHookArgv: the doc comment promises a caller cannot reach
-// the running configuration through the returned copy. A shallow copy shares
-// every Run slice with the compiled hook the next mutation executes.
-func TestConfig_DeepCopiesHookArgv(t *testing.T) {
+// TestConfig_CopiesTheUseList: the doc comment promises a caller cannot reach
+// the running configuration through the returned copy.
+func TestConfig_CopiesTheUseList(t *testing.T) {
 	m := vfs.NewMem()
 	s, err := InitWithVFS("/p", "tst", m)
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
 	if err := s.UpdateConfig(func(c *Config) error {
-		c.Hooks = append(c.Hooks, Hook{ID: "gate", Event: "pre-close", Run: []string{"make", "test"}})
+		c.Use = append(c.Use, PackageRef{Name: "policy"})
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
 	cfg := s.Config()
-	cfg.Hooks[0].Run[0] = "/bin/false"
+	cfg.Use[0].Name = "mutated"
 
-	if got := s.Config().Hooks[0].Run[0]; got != "make" {
-		t.Errorf("editing the returned copy changed the store's config: Run[0] = %q", got)
-	}
-	hs, err := s.hooks()
-	if err != nil {
-		t.Fatalf("hooks: %v", err)
-	}
-	if got := hs.hooks[0].run[0]; got != "make" {
-		t.Errorf("editing the returned copy changed the compiled hook: run[0] = %q", got)
+	if got := s.Config().Use[0].Name; got != "policy" {
+		t.Errorf("editing the returned copy changed the store's config: Name = %q", got)
 	}
 }
 
@@ -308,10 +297,7 @@ func TestUpdateGlobalConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errs[i] = updateGlobalConfig(m, e, func(g *GlobalConfig) error {
-				g.Hooks = append(g.Hooks, Hook{
-					Event: "pre-close",
-					Run:   []string{fmt.Sprintf("g%d", i)},
-				})
+				g.Use = append(g.Use, PackageRef{Name: fmt.Sprintf("g%d", i)})
 				return nil
 			})
 		}()
@@ -327,50 +313,50 @@ func TestUpdateGlobalConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadGlobalConfig: %v", err)
 	}
-	if len(got.Hooks) != writers {
-		t.Fatalf("per-user config holds %d hooks, want %d", len(got.Hooks), writers)
+	if len(got.Use) != writers {
+		t.Fatalf("per-user config holds %d use entries, want %d", len(got.Use), writers)
 	}
 }
 
-// TestUpdateGlobalConfig_RemovesOneOfTwoMalformedHooks is the machine-wide
-// version of the brick: a global hook that fails to compile blocks every write
-// in every store, and validating the surviving entries meant the command that
-// removes it was blocked too.
-func TestUpdateGlobalConfig_RemovesOneOfTwoMalformedHooks(t *testing.T) {
+// TestUpdateGlobalConfig_RemovesOneOfTwoMalformedEntries is the machine-wide
+// version of the brick: an unusable package here blocks every write in every
+// store, and validating the surviving entries meant the command that removes it
+// was blocked too.
+func TestUpdateGlobalConfig_RemovesOneOfTwoMalformedEntries(t *testing.T) {
 	m, e := memHome(t)
-	raw := "version: 1\nhooks:\n  - event: pre-delete\n    run: [\"a\"]\n  - event: pre-purge\n    run: [\"b\"]\n"
+	raw := "version: 1\nuse:\n  - name: \"../a\"\n  - name: \"../b\"\n"
 	if err := m.WriteAtomic("/home/config.yaml", []byte(raw), 0o644); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 
 	if err := updateGlobalConfig(m, e, func(g *GlobalConfig) error {
-		g.Hooks = g.Hooks[1:]
+		g.Use = g.Use[1:]
 		return nil
 	}); err != nil {
-		t.Fatalf("removing one of two malformed global hooks must be allowed: %v", err)
+		t.Fatalf("removing one of two malformed entries must be allowed: %v", err)
 	}
 	got, err := loadGlobalConfig(m, "/home")
 	if err != nil {
 		t.Fatalf("loadGlobalConfig: %v", err)
 	}
-	if len(got.Hooks) != 1 || got.Hooks[0].Event != "pre-purge" {
-		t.Fatalf("hooks after removal = %+v", got.Hooks)
+	if len(got.Use) != 1 || got.Use[0].Name != "../b" {
+		t.Fatalf("use entries after removal = %+v", got.Use)
 	}
 }
 
-func TestUpdateGlobalConfig_RefusesAHookItWouldIntroduce(t *testing.T) {
+func TestUpdateGlobalConfig_RefusesAUseEntryItWouldIntroduce(t *testing.T) {
 	m, e := memHome(t)
 	err := updateGlobalConfig(m, e, func(g *GlobalConfig) error {
-		g.Hooks = append(g.Hooks, Hook{Event: "pre-explode", Run: []string{"x"}})
+		g.Use = append(g.Use, PackageRef{Name: "../escape"})
 		return nil
 	})
 	if err == nil {
-		t.Fatal("a global hook with an unknown event must be refused")
+		t.Fatal("a use entry with an invalid package name must be refused")
 	}
-	// The id is scoped to the file at fault, so the message never sends the
-	// reader to the store's config.yaml.
-	if !strings.Contains(err.Error(), globalHookIDPrefix) {
-		t.Errorf("error %q does not scope the hook id to the per-user file", err)
+	// The message is scoped to the file at fault, so it never sends the reader
+	// to the store's config.yaml.
+	if !strings.Contains(err.Error(), "per-user config") {
+		t.Errorf("error %q does not scope the refusal to the per-user file", err)
 	}
 	if _, statErr := m.Stat("/home/config.yaml"); statErr == nil {
 		t.Error("a refused write created the per-user config")

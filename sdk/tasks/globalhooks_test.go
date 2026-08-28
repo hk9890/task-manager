@@ -14,141 +14,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// globalhooks_test.go — hooks inherited from the per-user config (HOOK-SPEC
-// §3.5) and the public config API (Store.Config/SetConfig, LoadGlobalConfig).
+// globalhooks_test.go — the hook chain a store actually runs: packages named by
+// the per-user config, then packages named by the store's own (HOOK-SPEC §3.5),
+// plus the public config API (Store.Config/SetConfig, LoadGlobalConfig).
 //
-// L1 for the merge rules, which are pure; L2 on vfs.Mem for the parts that read
-// or write a file.
+// L2 on vfs.Mem throughout: the chain is read from files, so the seam is the
+// subject rather than something to work around.
 package tasks
 
 import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
-
-// ── L1: merge rules ──────────────────────────────────────────────────────────
-
-// TestBuildHookSet_GlobalHooksRunBeforeStoreHooks pins the order decision: the
-// machine-wide gate is evaluated first, so its denial is the one that surfaces.
-func TestBuildHookSet_GlobalHooksRunBeforeStoreHooks(t *testing.T) {
-	hs, err := buildHookSet(
-		GlobalConfig{Hooks: []Hook{
-			{ID: "g1", Event: "pre-create", Run: []string{"g1"}},
-			{ID: "g2", Event: "pre-create", Run: []string{"g2"}},
-		}},
-		Config{Prefix: "x", Hooks: []Hook{
-			{ID: "s1", Event: "pre-create", Run: []string{"s1"}},
-		}},
-	)
-	if err != nil {
-		t.Fatalf("buildHookSet: %v", err)
-	}
-	var got []string
-	for _, h := range hs.forEvent("pre-create") {
-		got = append(got, h.id)
-	}
-	want := []string{"global:g1", "global:g2", "s1"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("chain = %v, want %v", got, want)
-	}
-}
-
-// TestBuildHookSet_GlobalIDsCarryTheScopePrefix covers both id forms: without it
-// a defaulted "pre-create#0" from each file would be indistinguishable.
-func TestBuildHookSet_GlobalIDsCarryTheScopePrefix(t *testing.T) {
-	hs, err := buildHookSet(
-		GlobalConfig{Hooks: []Hook{
-			{ID: "named", Event: "pre-create", Run: []string{"x"}},
-			{Event: "pre-create", Run: []string{"y"}},
-		}},
-		Config{Prefix: "x", Hooks: []Hook{
-			{Event: "pre-create", Run: []string{"z"}},
-		}},
-	)
-	if err != nil {
-		t.Fatalf("buildHookSet: %v", err)
-	}
-	want := []string{"global:named", "global:pre-create#1", "pre-create#0"}
-	for i, w := range want {
-		if hs.hooks[i].id != w {
-			t.Errorf("hook[%d].id = %q, want %q", i, hs.hooks[i].id, w)
-		}
-	}
-}
-
-func TestBuildHookSet_TimeoutPrecedence(t *testing.T) {
-	cases := []struct {
-		name         string
-		global, cfg  string
-		want         time.Duration
-		wantErrPiece string
-	}{
-		{name: "neither set", want: defaultHookTimeout},
-		{name: "global only", global: "5m", want: 5 * time.Minute},
-		{name: "store only", cfg: "10s", want: 10 * time.Second},
-		{name: "store wins over global", global: "5m", cfg: "10s", want: 10 * time.Second},
-		{name: "global is validated", global: "nonsense", wantErrPiece: `invalid hook_timeout "nonsense"`},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			hs, err := buildHookSet(GlobalConfig{HookTimeout: c.global}, Config{Prefix: "x", HookTimeout: c.cfg})
-			if c.wantErrPiece != "" {
-				if err == nil || !strings.Contains(err.Error(), c.wantErrPiece) {
-					t.Fatalf("error = %v, want it to contain %q", err, c.wantErrPiece)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("buildHookSet: %v", err)
-			}
-			if hs.timeout != c.want {
-				t.Errorf("timeout = %v, want %v", hs.timeout, c.want)
-			}
-		})
-	}
-}
-
-// TestBuildHookSet_MalformedGlobalHookIsAConfigError checks the error names the
-// file to fix — the whole point of the scope prefix.
-func TestBuildHookSet_MalformedGlobalHookIsAConfigError(t *testing.T) {
-	_, err := buildHookSet(
-		GlobalConfig{Hooks: []Hook{{Event: "pre-delete", Run: []string{"x"}}}},
-		Config{Prefix: "x"},
-	)
-	if err == nil {
-		t.Fatal("unknown global event: want error, got none")
-	}
-	if !strings.Contains(err.Error(), "global:pre-delete#0") {
-		t.Errorf("error %q does not name the global hook", err)
-	}
-}
-
-func TestHookID(t *testing.T) {
-	cases := []struct {
-		hook   Hook
-		index  int
-		global bool
-		want   string
-	}{
-		{Hook{ID: "gate", Event: "pre-close"}, 0, false, "gate"},
-		{Hook{Event: "pre-close"}, 3, false, "pre-close#3"},
-		{Hook{ID: "gate", Event: "pre-close"}, 0, true, "global:gate"},
-		{Hook{Event: "pre-close"}, 2, true, "global:pre-close#2"},
-	}
-	for _, c := range cases {
-		if got := HookID(c.hook, c.index, c.global); got != c.want {
-			t.Errorf("HookID(%+v, %d, %v) = %q, want %q", c.hook, c.index, c.global, got, c.want)
-		}
-	}
-}
-
-// ── L2: reading the per-user config through the seams ────────────────────────
 
 // globalHookStore builds a Mem-backed store whose taskmgr home is /hm, with the
 // given per-user config.yaml body already in place.
@@ -160,10 +42,10 @@ func globalHookStore(t *testing.T, globalYAML string) (*Store, *exec.Fake) {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
 	s.env = env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}}
+	if err := fs.MkdirAll("/hm", 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
 	if globalYAML != "" {
-		if err := fs.MkdirAll("/hm", 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
 		if err := fs.WriteAtomic("/hm/config.yaml", []byte(globalYAML), 0o644); err != nil {
 			t.Fatalf("write global config: %v", err)
 		}
@@ -173,26 +55,127 @@ func globalHookStore(t *testing.T, globalYAML string) (*Store, *exec.Fake) {
 	return s, fake
 }
 
-func TestStoreHooks_InheritsGlobalHooks(t *testing.T) {
-	s, fake := globalHookStore(t, `
-version: 1
-hooks:
-  - id: doc-needs-path
-    event: pre-create
-    when: 'type == "doc"'
-    run: ["/bin/false"]
-`)
+// ── the chain and its order ──────────────────────────────────────────────────
+
+// The machine-wide packages are evaluated first, so their denial is the one that
+// surfaces when both would deny (HOOK-SPEC §3.5 rule 1).
+func TestPackageChain_GlobalPackagesRunBeforeStorePackages(t *testing.T) {
+	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: machine\n")
+	writePackage(t, s.fs, "/hm", "machine", []Hook{
+		{ID: "g1", Event: "pre-create", Run: []string{"g1"}},
+		{ID: "g2", Event: "pre-create", Run: []string{"g2"}},
+	})
+	storePackage(t, s, "project", []Hook{
+		{ID: "s1", Event: "pre-create", Run: []string{"s1"}},
+	})
+
+	hs, err := s.hooks()
+	if err != nil {
+		t.Fatalf("hooks(): %v", err)
+	}
+	var got []string
+	for _, h := range hs.forEvent("pre-create") {
+		got = append(got, h.id)
+	}
+	want := []string{"pkg:machine:g1", "pkg:machine:g2", "pkg:project:s1"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("chain = %v, want %v", got, want)
+	}
+}
+
+// The same package named in both files contributes once, from the file that
+// named it first. Erroring instead would let one person's machine-wide package
+// break every colleague's repository (HOOK-SPEC §3.5).
+func TestPackageChain_SamePackageInBothFilesRunsOnce(t *testing.T) {
+	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: shared\n")
+	writePackage(t, s.fs, "/hm", "shared", []Hook{
+		{ID: "gate", Event: "pre-create", Run: []string{"gate"}},
+	})
+	// The store names the very same directory by path.
+	useRef(s, PackageRef{Path: "/hm/packages/shared"})
+
+	hs, err := s.hooks()
+	if err != nil {
+		t.Fatalf("hooks(): %v", err)
+	}
+	pre := hs.forEvent("pre-create")
+	if len(pre) != 1 || pre[0].id != "pkg:shared:gate" {
+		t.Fatalf("chain = %v, want one pkg:shared:gate", pre)
+	}
+
+	infos, err := s.Packages()
+	if err != nil {
+		t.Fatalf("Packages(): %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("Packages() = %d entries, want both listed", len(infos))
+	}
+	if infos[0].Shadowed {
+		t.Error("the first entry must not be marked shadowed")
+	}
+	if !infos[1].Shadowed {
+		t.Error("the second entry must be reported as shadowed, not silently dropped")
+	}
+}
+
+func TestStoreHooks_InheritsGlobalPackages(t *testing.T) {
+	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
+	writePackage(t, s.fs, "/hm", "docs", []Hook{
+		{ID: "doc-needs-path", Event: "pre-create", When: `type == "doc"`, Run: []string{"/bin/false"}},
+	})
 	fake.Func = func(exec.Spec) exec.Result { return exec.Deny(1, "a doc needs a path label") }
 
 	if _, err := s.Create(CreateInput{Title: "a doc", Type: TypeDoc}); err == nil {
-		t.Fatal("create of a doc: want the global hook to deny, got success")
-	} else if !strings.Contains(err.Error(), "global:doc-needs-path") {
-		t.Errorf("denial %q does not name the global hook", err)
+		t.Fatal("create of a doc: want the machine-wide hook to deny, got success")
+	} else if !strings.Contains(err.Error(), "pkg:docs:doc-needs-path") {
+		t.Errorf("denial %q does not name the hook by its effective id", err)
 	}
 
 	// The `when` scopes it: ordinary work is untouched by the same hook.
 	if _, err := s.Create(CreateInput{Title: "work", Type: TypeTask}); err != nil {
 		t.Errorf("create of a task: %v", err)
+	}
+}
+
+// A relative argv[0] in a package is found inside that package, wherever it was
+// installed, while the working directory stays the project root (HOOK-SPEC §3.6).
+func TestStoreHooks_PackageArgvResolvesInsideThePackage(t *testing.T) {
+	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
+	writePackage(t, s.fs, "/hm", "docs", []Hook{
+		{ID: "gate", Event: "pre-create", Run: []string{"./hooks/check.sh", "--strict"}},
+	})
+	var spec exec.Spec
+	fake.Func = func(sp exec.Spec) exec.Result { spec = sp; return exec.Allow("") }
+
+	if _, err := s.Create(CreateInput{Title: "x"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if spec.Argv[0] != "/hm/packages/docs/hooks/check.sh" {
+		t.Errorf("argv[0] = %q, want it resolved inside the package", spec.Argv[0])
+	}
+	if spec.Argv[1] != "--strict" {
+		t.Errorf("argv[1] = %q, want it passed through verbatim", spec.Argv[1])
+	}
+	if spec.Dir != s.root {
+		t.Errorf("cwd = %q, want the project root %q", spec.Dir, s.root)
+	}
+}
+
+// A first element with no path separator is a PATH lookup and must be left
+// alone, or the documented ["sh", "-c", …] idiom would search the package.
+func TestStoreHooks_PathLookupArgvIsNotRewritten(t *testing.T) {
+	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
+	writePackage(t, s.fs, "/hm", "docs", []Hook{
+		{ID: "gate", Event: "pre-create", Run: []string{"sh", "-c", "true"}},
+	})
+	var spec exec.Spec
+	fake.Func = func(sp exec.Spec) exec.Result { spec = sp; return exec.Allow("") }
+
+	if _, err := s.Create(CreateInput{Title: "x"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if spec.Argv[0] != "sh" {
+		t.Errorf("argv[0] = %q, want the PATH lookup left alone", spec.Argv[0])
 	}
 }
 
@@ -225,18 +208,18 @@ func TestStoreHooks_AbsentHomeIsNotAnError(t *testing.T) {
 	}
 }
 
-// ── L2: the public config API ────────────────────────────────────────────────
+// ── the public config API ────────────────────────────────────────────────────
 
 func TestStoreConfig_ReturnsACopy(t *testing.T) {
 	s, _ := globalHookStore(t, "")
-	s.cfg.Hooks = []Hook{{ID: "a", Event: "pre-create", Run: []string{"x"}}}
+	s.cfg.Use = []PackageRef{{Name: "a"}}
 
 	got := s.Config()
-	got.Hooks[0].ID = "mutated"
+	got.Use[0].Name = "mutated"
 	got.HookTimeout = "9s"
 
-	if s.cfg.Hooks[0].ID != "a" {
-		t.Error("Config() aliased the Hooks slice; editing the copy changed the store")
+	if s.cfg.Use[0].Name != "a" {
+		t.Error("Config() aliased the Use slice; editing the copy changed the store")
 	}
 	if s.cfg.HookTimeout != "" {
 		t.Error("Config() returned a reference, not a copy")
@@ -259,40 +242,43 @@ func TestSetConfig_RejectsAPrefixChange(t *testing.T) {
 	}
 }
 
-func TestSetConfig_RejectsAMalformedHookAndWritesNothing(t *testing.T) {
+// A `use:` entry the write introduces is checked before a byte lands, so a
+// reference that could never resolve is refused here (HOOK-SPEC §3.4).
+func TestSetConfig_RejectsAMalformedUseEntryAndWritesNothing(t *testing.T) {
 	s, _ := globalHookStore(t, "")
 
-	err := s.SetConfig(Config{Prefix: "x", Hooks: []Hook{{Event: "pre-delete", Run: []string{"x"}}}})
+	err := s.SetConfig(Config{Prefix: "x", Use: []PackageRef{{Name: "../escape"}}})
 	if err == nil {
-		t.Fatal("unknown event: want an error, got none")
+		t.Fatal("an invalid package name: want an error, got none")
 	}
 	cfg, readErr := s.readConfig()
 	if readErr != nil {
 		t.Fatalf("readConfig: %v", readErr)
 	}
-	if len(cfg.Hooks) != 0 {
-		t.Errorf("config.yaml gained %d hooks from a refused write", len(cfg.Hooks))
+	if len(cfg.Use) != 0 {
+		t.Errorf("config.yaml gained %d use entries from a refused write", len(cfg.Use))
 	}
 }
 
-// TestSetConfig_TakesEffectOnTheSameHandle covers the hookOnce reset: the
+// TestSetConfig_TakesEffectOnTheSameHandle covers the hookBuilt reset: the
 // compiled set is built once per Store, so without invalidation a long-lived
 // handle would keep running the hooks it opened with.
 func TestSetConfig_TakesEffectOnTheSameHandle(t *testing.T) {
 	s, fake := globalHookStore(t, "")
+	writePackage(t, s.fs, s.dir, "gatepkg", []Hook{
+		{ID: "gate", Event: "pre-create", Run: []string{"/bin/false"}},
+	})
 
 	if _, err := s.Create(CreateInput{Title: "before"}); err != nil {
 		t.Fatalf("create before: %v", err) // compiles the empty hook set
 	}
 	fake.Func = func(exec.Spec) exec.Result { return exec.Deny(1, "no new issues") }
 
-	if err := s.SetConfig(Config{Prefix: "x", Hooks: []Hook{
-		{ID: "gate", Event: "pre-create", Run: []string{"/bin/false"}},
-	}}); err != nil {
+	if err := s.SetConfig(Config{Prefix: "x", Use: []PackageRef{{Path: "packages/gatepkg"}}}); err != nil {
 		t.Fatalf("SetConfig: %v", err)
 	}
 	if _, err := s.Create(CreateInput{Title: "after"}); err == nil {
-		t.Error("the hook written by SetConfig did not take effect on this handle")
+		t.Error("the package written by SetConfig did not take effect on this handle")
 	}
 }
 
@@ -314,10 +300,28 @@ func TestSetConfig_PersistsHookTimeout(t *testing.T) {
 	}
 }
 
-func TestSaveGlobalConfig_RefusesAMalformedHooksBlock(t *testing.T) {
-	// buildHookSet is the validation SaveGlobalConfig runs before writing; going
-	// through it directly keeps this L1 while proving the same refusal.
-	if _, err := buildHookSet(GlobalConfig{Hooks: []Hook{{Event: "pre-create"}}}, Config{Prefix: "x"}); err == nil {
-		t.Fatal("a hook with no run must not be persistable")
+// HookChain is the authoritative reading of both files plus the manifests they
+// name — the answer neither config file gives on its own.
+func TestStoreHookChain_ReportsOrderAndScope(t *testing.T) {
+	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: machine\n")
+	writePackage(t, s.fs, "/hm", "machine", []Hook{
+		{ID: "g", Event: "pre-create", Run: []string{"g"}},
+	})
+	storePackage(t, s, "project", []Hook{
+		{ID: "s", Event: "pre-close", When: `type == "feature"`, Run: []string{"s"}},
+	})
+
+	chain, err := s.HookChain()
+	if err != nil {
+		t.Fatalf("HookChain: %v", err)
+	}
+	if len(chain) != 2 {
+		t.Fatalf("chain has %d hooks, want 2", len(chain))
+	}
+	if chain[0].ID != "pkg:machine:g" || chain[0].Scope != scopeGlobal {
+		t.Errorf("chain[0] = %+v, want the machine-wide hook first", chain[0])
+	}
+	if chain[1].ID != "pkg:project:s" || chain[1].Scope != scopeStore || chain[1].When == "" {
+		t.Errorf("chain[1] = %+v, want the store's hook second with its when", chain[1])
 	}
 }

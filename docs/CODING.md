@@ -42,7 +42,8 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 | Spawning a hook process | `sdk/tasks/internal/exec` (the process seam) — never inline `os/exec` elsewhere |
 | Reading the environment (home, any `TASKMGR_*`) | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
 | Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
-| Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
+| Hook packages: the format, `use:` resolution, the `argv[0]` rule | `sdk/tasks` (`packages.go` pure; `packageload.go` reads a package directory) |
+| Hook compilation / orchestration | `sdk/tasks` (`hooks.go` compile+validate, `hookrun.go` run, `hookpayload.go`) |
 | Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import **and no `*Store` method** → unit-tests at L1 |
 | Repo tooling that ships with neither binary | `scripts/<name>/` — its own `main` package, stdlib only, run from a `mise` task |
 

@@ -41,7 +41,7 @@ func TestCreate_PreCreateDenyAbortsWrite(t *testing.T) {
 	if !errors.As(err, &de) {
 		t.Fatalf("error must be *HookDeniedError, got %T", err)
 	}
-	if de.Event != "pre-create" || de.Hook != "gate" || de.Reason != "no new issues" {
+	if de.Event != "pre-create" || de.Hook != "pkg:p:gate" || de.Reason != "no new issues" {
 		t.Errorf("denial = %+v", de)
 	}
 	// Nothing was written: the store is empty.
@@ -250,13 +250,13 @@ func TestConfigError_FailsMutationsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.cfg.Hooks = []Hook{{Event: "bogus-event", Run: []string{"x"}}} // malformed
+	storePackage(t, s, "bad", []Hook{{ID: "g", Event: "bogus-event", Run: []string{"x"}}}) // malformed
 
 	if _, err := s.Create(CreateInput{Title: "x"}); err == nil {
-		t.Error("malformed hooks config must fail Create closed (§3.4)")
+		t.Error("a malformed package must fail Create closed (§3.4)")
 	}
 	// Reads remain unaffected.
 	if _, err := s.All(); err != nil {
-		t.Errorf("reads must be unaffected by malformed hooks: %v", err)
+		t.Errorf("reads must be unaffected by a malformed package: %v", err)
 	}
 }

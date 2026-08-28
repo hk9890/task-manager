@@ -114,7 +114,7 @@ visible to `list`, `search` and every filter.
 
 ```
 .tasks/
-├── config.yaml         the ID prefix, and any hooks
+├── config.yaml         the ID prefix, and the hook packages this project uses
 ├── proj-3k9f2x.md      one active issue: YAML frontmatter, then the Markdown body
 ├── comments/           one append-only comment log per issue
 ├── content/            oversized bodies, kept out of the issue files

@@ -120,7 +120,16 @@ concrete example.
 |---|---|
 | **Path** | `.tasks/` |
 | **Role** | Marker directory that anchors store discovery and holds the project. |
-| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/`, `content/` and `closed/` subdirectories. |
+| **Contents** | `config.yaml`, `.lock`, the active `*.md` task files, and the `comments/`, `content/` and `closed/` subdirectories. A store may also hold `packages/`, described below. |
+
+`packages/` holds hook packages committed with the store, which a `use:` entry reaches by
+path (§4.2). The engine neither creates nor reads it as store data: it is a directory the
+project puts there, whose format is [HOOK-SPEC.md](HOOK-SPEC.md) §3.6, and it sits inside
+`.tasks/` so that a package travels with the store — `store move --central` moves the tree
+whole, executable bits included ([CONFIG-SPEC.md](CONFIG-SPEC.md) §5).
+
+A directory the engine does not know is ignored rather than rejected, exactly as an
+unknown key in `config.yaml` is: a listing reads the root's `*.md` files and nothing else.
 
 ### 4.2 Project config — `config.yaml`
 
@@ -134,29 +143,34 @@ concrete example.
 prefix: proj
 
 hook_timeout: 2s          # optional; max runtime for any single hook (HOOK-SPEC §3.1)
-hooks:                    # optional; lifecycle-gate hooks run at issue transitions
-  - id: tests-before-close
-    event: pre-close
-    run: ["make", "test"]
+use:                      # optional; the hook packages this store takes its gates from
+  - name: doc-policy      # <taskmgr home>/packages/doc-policy
+  - path: packages/repo-policy   # relative to .tasks/
 ```
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max length 32. The ID prefix for every issue in the store. |
 | `hook_timeout` | duration | no | Store-wide per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
-| `hooks` | list | no | Lifecycle-gate hooks run at issue transitions; full schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3. |
+| `use` | list | no | The hook packages this store uses; entry schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3.5, package format in §3.6. |
 
-Unknown keys must be ignored by readers, never rejected. The `hooks` block and
-`hook_timeout` are validated when the store is opened for a write ([HOOK-SPEC.md](HOOK-SPEC.md) §3.4).
+Unknown keys must be ignored by readers, never rejected. The `use` list and
+`hook_timeout` are read when the store is opened for a write ([HOOK-SPEC.md](HOOK-SPEC.md) §3.4).
+
+Hooks are never declared in this file. They live in packages, which the `use` list
+names; a directory carries the hooks and the scripts they run together, so a hook can
+name its own script without knowing where the package was installed
+([HOOK-SPEC.md](HOOK-SPEC.md) §3.6).
 
 `prefix` is **immutable**: it is part of every issue ID, every filename, and every
-stored reference (§3), so it is fixed at `init`. The other keys are editable by hand or
-with `taskmgr config` ([CLI-SPEC.md](CLI-SPEC.md) §2.2).
+stored reference (§3), so it is fixed at `init`. `hook_timeout` is editable by hand or
+with `taskmgr config`, and `use` with `taskmgr package` ([CLI-SPEC.md](CLI-SPEC.md) §2.2–§2.3).
 
-This file is committed with the repository, so its hooks apply to everyone who works in
-it. A machine may add further hooks in the per-user config
-([CONFIG-SPEC.md](CONFIG-SPEC.md) §2); those run first and travel with the machine, not
-with the store ([HOOK-SPEC.md](HOOK-SPEC.md) §3.5).
+This file is committed with the repository, so the packages it names apply to everyone
+who works in it. A `path` entry pointing inside `.tasks/` travels with the store, a
+`name` entry resolves per machine. A machine may name further packages in the per-user
+config ([CONFIG-SPEC.md](CONFIG-SPEC.md) §2); those run first and travel with the
+machine, not with the store ([HOOK-SPEC.md](HOOK-SPEC.md) §3.5).
 
 ### 4.3 Task file — `<id>.md`
 

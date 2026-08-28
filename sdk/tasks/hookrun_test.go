@@ -79,7 +79,7 @@ func hookTestStore(t *testing.T, fake *exec.Fake, hooks []Hook) (*Store, *hookSe
 		t.Fatal(err)
 	}
 	s.runner = fake
-	s.cfg.Hooks = hooks
+	storePackage(t, s, "p", hooks)
 	hs, err := s.hooks()
 	if err != nil {
 		t.Fatalf("build hookSet: %v", err)
@@ -97,9 +97,16 @@ func envVal(spec exec.Spec, key string) string {
 }
 
 // byHookID returns a Fake.Func that dispatches on the TASKMGR_HOOK_ID env var.
+// The map is keyed on the hook's declared id: the environment carries the
+// effective id "pkg:<package>:<declared>", and which package a fixture happened
+// to put a hook in is never what a test is about.
 func byHookID(m map[string]exec.Result) func(exec.Spec) exec.Result {
 	return func(spec exec.Spec) exec.Result {
-		return m[envVal(spec, "TASKMGR_HOOK_ID")]
+		id := envVal(spec, "TASKMGR_HOOK_ID")
+		if i := strings.LastIndex(id, packageIDSep); i >= 0 {
+			id = id[i+1:]
+		}
+		return m[id]
 	}
 }
 
@@ -148,7 +155,7 @@ func TestRunPre_DenyShortCircuits(t *testing.T) {
 	if denial == nil {
 		t.Fatal("expected a denial")
 	}
-	if denial.Hook != "b" || denial.Reason != "reasonB" || denial.Exit != 1 {
+	if denial.Hook != "pkg:p:b" || denial.Reason != "reasonB" || denial.Exit != 1 {
 		t.Errorf("denial = %+v, want hook=b reason=reasonB exit=1", denial)
 	}
 	if len(denial.Hints) != 1 || denial.Hints[0] != "hintA" {
@@ -266,8 +273,10 @@ func TestRunOne_DeliversPayloadAndEnv(t *testing.T) {
 	if got := envVal(spec, "TASKMGR_HOOK_EVENT"); got != "pre-close" {
 		t.Errorf("TASKMGR_HOOK_EVENT = %q", got)
 	}
-	if got := envVal(spec, "TASKMGR_HOOK_ID"); got != "g" {
-		t.Errorf("TASKMGR_HOOK_ID = %q", got)
+	// The hook sees the effective id, so a script can report which package's
+	// gate it is without being told separately.
+	if got := envVal(spec, "TASKMGR_HOOK_ID"); got != "pkg:p:g" {
+		t.Errorf("TASKMGR_HOOK_ID = %q, want the effective id", got)
 	}
 	if got := envVal(spec, "TASKMGR_ISSUE_ID"); got != "x-7" {
 		t.Errorf("TASKMGR_ISSUE_ID = %q, want x-7", got)

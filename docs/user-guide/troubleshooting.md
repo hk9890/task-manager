@@ -58,8 +58,8 @@ printf 'prefix: proj\n' > ~/.taskmgr/stores/<name>/config.yaml
 taskmgr store list                  # the row reads ok again
 ```
 
-Any hooks the store had are gone with the old file; add them back with
-`taskmgr config hook add` ([Hooks](hooks.md)).
+Any hook packages the store used are gone with the old file; name them again with
+`taskmgr package add` ([Hooks](hooks.md)).
 
 ## `issue not found: proj-xxxxxx`
 
@@ -94,21 +94,21 @@ either run from inside the project or register the store centrally and select it
 ## A command is refused by a hook
 
 ```
-taskmgr: pre-close denied for proj-3k9f2x by hook "tests-before-close": 3 unit tests failing
+taskmgr: pre-close denied for proj-3k9f2x by hook "pkg:repo-policy:tests-before-close": 3 unit tests failing
 ```
 
 There is a gate ([Hooks](hooks.md)). The message after the colon is the hook's own reason —
 fix that, then retry. There is no bypass flag by design.
 
-**Read the hook's id to find the file.** A plain id is the project's, in
-`.tasks/config.yaml`; an id prefixed `global:` is one of yours, applying to every project
-on this machine. `taskmgr config hook list` and `taskmgr config hook list --global` print
-each file's hooks in the order they run — global first.
+**Read the hook's id to find the package.** The id is `pkg:<package>:<hook>`, so the
+middle part names the package that supplied the gate. `taskmgr hook list` prints every
+hook that gates this store in the order it runs, with the file that named its package.
 
-If **every** write is failing with a configuration error instead, a `hooks:` block is
-malformed — an unknown `event`, an empty `run`, an unparseable `when` or `hook_timeout`.
-Reads keep working, so you can still `list` and `show` while you fix it. If the failure
-follows you into *other* projects too, it is the per-user block, not the project's.
+If **every** write is failing with a configuration error instead, one of the packages
+will not load — it is not installed, holds no `taskmgr-package.yaml`, or an entry in it
+is malformed. `taskmgr package list` names it and says which. Reads keep working, so you
+can still `list` and `show` while you fix it. If the failure follows you into *other*
+projects too, the entry is in your own `~/.taskmgr/config.yaml`, not the project's.
 
 If a write simply hangs, a pre-hook is running and holding the store lock. It is bounded by
 `hook_timeout` (default `2s`, plus a 2-second grace).

@@ -7,8 +7,10 @@ to one after it commits — send a notification. Either kind may also hand back 
 
 Hooks keep policy out of the core. The engine knows only issues, dependencies, and
 ready-work (ARCHITECTURE-SPEC.md §1); rules like "tests must pass before close" or
-"a feature needs a Definition-of-Done section" are hooks, declared per-repository in
-`config.yaml` — or, for a machine rather than a repository, in the per-user config (§3.5).
+"a feature needs a Definition-of-Done section" are hooks. They are declared in a **hook
+package** — a directory holding a manifest and the scripts the hooks run (§3.6) — which a
+configuration file names in its `use:` list, per repository or, for a machine rather than
+a repository, in the per-user config (§3.5).
 Hooks are the project's **extension system**: the core stays minimal and
 earns every feature it keeps, and anything that *can* live in a hook is a hook rather than
 engine code (ARCHITECTURE-SPEC.md §9–§10).
@@ -46,8 +48,9 @@ The contract is uniform:
    runs after the write has committed, so its failure is a logged warning, never a rollback.
 5. **Deterministic.** For a given event and store state, which hooks run, in what order,
    and the decision are fixed by the two configuration files — the store's `config.yaml`
-   and the per-user one (§3.5). Both are plain files a reader can inspect; nothing else
-   contributes a hook.
+   and the per-user one (§3.5) — plus the package manifests those files name. All are
+   plain files a reader can inspect, and `taskmgr hook list` prints the result
+   (CLI-SPEC.md §2.3); nothing else contributes a hook.
 6. **Engine-level.** Hooks fire inside the `Store` write path, so every front end (the
    `taskmgr` CLI, any future consumer) is gated identically (ARCHITECTURE-SPEC.md §3).
 
@@ -97,33 +100,31 @@ Out of scope, additive later:
 
 ## 3. Configuration
 
-Hooks live in the store's `config.yaml` (TASK-STORAGE-SPEC.md §4.2), so they are
-committed with the repository and shared across everyone — and every agent — who works
-in it. A second, machine-local set may be declared in the per-user config
-(CONFIG-SPEC.md §2); the two are merged as §3.5 describes. Everything in §3.1–§3.4
-applies to both files.
-
-Either file is editable by hand or with `taskmgr config hook` (CLI-SPEC.md).
+A configuration file declares no hooks. It lists the **packages** it takes them from:
 
 ```yaml
 prefix: proj
 
 hook_timeout: 2s                  # store-wide: max runtime for ANY single hook. Default 2s.
 
-hooks:
-  - id: tests-before-close        # optional label, shown in messages and logs
-    event: pre-close              # required — one of the eight events (§2)
-    when: 'type == "feature"'     # optional — QUERY-SPEC filter over `new`; default: always
-    run: ["make", "test"]         # required — argv, executed directly (no shell)
-
-  - id: require-dod
-    event: pre-create
-    run: [".tasks/validators/dod.sh"]
-
-  - id: notify-on-close
-    event: post-close
-    run: [".tasks/hooks/notify.sh"]
+use:
+  - name: doc-policy              # <taskmgr home>/packages/doc-policy
+  - path: packages/repo-policy    # relative to the directory holding this file
 ```
+
+The store's file travels with the repository, so the packages it names apply to everyone
+who works in it (TASK-STORAGE-SPEC.md §4.2). A second list may be declared in the
+per-user config (CONFIG-SPEC.md §2); the two are merged as §3.5 describes. The package
+format itself is §3.6.
+
+Either `use:` list is editable by hand or with `taskmgr package` (CLI-SPEC.md §2.3).
+
+**Why a package and not an inline block.** A hook is argv, and its working directory is
+the project root (§3.2), so an inline entry could name a script only by absolute path —
+which is machine-specific, and therefore un-shippable. A package binds the hooks and
+their scripts into one directory and gives a relative `argv[0]` a meaning that survives
+being copied (§3.6). It also collapses the merge: two files each naming packages, rather
+than two files each carrying hooks *and* naming packages.
 
 ### 3.1 `hook_timeout` (top-level)
 
@@ -131,6 +132,11 @@ A single, **store-wide** wall-clock limit applied to **every** hook process the 
 runs, inherited ones included; there is no per-hook timeout. Go duration string (`"2s"`,
 `"5m"`); default **`2s`**; `0` disables it. It may also be set in the per-user config as
 a fallback, where the store's own value wins (§3.5 rule 3).
+
+**A package cannot set it.** The limit is how long the store lock may be held (§8), so a
+package that could raise it would extend that for every project on the machine, from a
+file the machine's owner did not write. A package whose gate needs longer says so in its
+own documentation, and the person installing it sets `hook_timeout` once.
 
 With `0`, nothing bounds a hook — a hang blocks the command indefinitely, and for a
 pre-hook holds the store lock for that whole time (§8). Such a hook stays in taskmgr's
@@ -155,12 +161,14 @@ configuration.
 
 ### 3.2 Hook fields
 
+A hook is one entry of a package manifest's `hooks:` list (§3.6).
+
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | no | Label used in messages, logs, and the structured denial. Defaults to `<event>#<index>`, where `<index>` is the entry's position in the file's whole `hooks` list. A declared `id` **must not contain `#`**: the character is reserved for the defaulted form, so the two sources of an id can never resolve to the same text. Without the rule a declared `pre-close#1` collides with another entry's default — on removal of an earlier hook the rest renumber onto it — and the second hook is then unaddressable by `config hook rm` and ambiguous in a denial reason. A declared `#` is a config error (§3.4). |
+| `id` | **yes** | The hook's label within its package. The **effective id** — what a denial reason, the logs and `taskmgr hook list` report — is `pkg:<package>:<id>`. A declared `id` **must not contain `:`**, which separates those three parts. There is no positional default: a package is replaced whole when it is updated, so a numbered id would move to a different hook as soon as an entry was added above it, and a denial reason would stop naming the same gate across versions. |
 | `event` | **yes** | One of the eight events (§2). Any other value is a config error (§3.4). |
 | `when` | no | A QUERY-SPEC.md filter expression. The hook runs only if it matches **`new`** (§3.3). Omitted → always. |
-| `run` | **yes** | Non-empty argv array, executed **directly** via `execve` — **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. |
+| `run` | **yes** | Non-empty argv array, executed **directly** via `execve` — **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. A relative `argv[0]` is resolved inside the package (§3.6). |
 
 There is no per-hook `timeout`, `workdir`, or error policy. Timeout is the one global
 `hook_timeout`; the working directory is the **project root** (for a local store, the
@@ -191,60 +199,142 @@ parse is a config error (§3.4).
 
 ### 3.4 Config validation
 
-The `hooks:` block and `hook_timeout` are validated when the store is opened for a
-**write**. If malformed — unknown `event`, empty/missing `run`, a declared `id` containing
-`#` (§3.2), unparseable `when` or `hook_timeout` — **every mutation fails** with a clear
-configuration error naming the offending hook, until fixed
-(fail-closed config; §1 principle 4). **Reads are never affected.** Unknown keys within a hook
-entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
+The `use:` list and `hook_timeout` are read when the store is opened for a **write**,
+and every package the list names is loaded then. If anything is wrong — a `use` entry
+that sets neither or both of `name` and `path`, an invalid package name, a package that
+is **not installed** or holds no manifest, a missing or duplicated hook `id`, an unknown
+`event`, empty/missing `run`, unparseable `when` or `hook_timeout` — **every mutation
+fails** with a configuration error naming the package and what is wrong, until fixed
+(fail-closed config; §1 principle 4). **Reads are never affected.** Unknown keys within a
+`use` entry or a hook entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
 
-This applies to the per-user file too, where the same failure is wider: a malformed
-global block fails mutations in **every store on the machine**. `taskmgr config`
-validates before writing either file, so a block that would fail this check is normally
-refused at the command that wrote it rather than at the next unrelated mutation.
+A missing package fails closed rather than being skipped, and there is no per-entry
+switch to soften it. A `use:` entry states that the configuration depends on that
+package; running a store with the gate silently absent is the outcome the whole
+arrangement exists to prevent. The store config travels in git, so an entry naming a
+package a colleague has not installed will stop their mutations with a message naming
+what to install — visible, and one action away from fixed.
 
-**A write validates what it introduces, not what it finds.** An entry already in the
-file is left alone, and only the timeout is re-checked when the write changes it.
-Validating the whole block instead makes a malformed entry refuse the write that
-*removes* it: two of them in the per-user file then fail every write on the machine with
-`taskmgr config hook rm` refusing both ids, and the only way out is a hand edit.
-Compiling the delta still means taskmgr never writes a hook it would refuse to run.
+This applies to the per-user file too, where the same failure is wider: a package named
+there that will not load fails mutations in **every store on the machine**. `taskmgr
+package add` loads the package before it writes the entry, so a package that could never
+run is normally refused at the command that named it rather than at the next unrelated
+mutation.
 
-### 3.5 Global hooks (per-user config)
+**A write checks what it introduces, not what it finds.** An entry already in the file is
+left alone, and only the timeout is re-checked when the write changes it. Checking the
+whole list instead makes a bad entry refuse the write that *removes* it: two of them in
+the per-user file then fail every write on the machine, and the only way out is a hand
+edit.
 
-The per-user config (CONFIG-SPEC.md §2) may carry a `hooks:` block with the same schema.
-It applies to **every** store this machine resolves.
+### 3.5 The chain: two `use:` lists
+
+The per-user config (CONFIG-SPEC.md §2) carries a `use:` list with the same schema as a
+store's. It applies to **every** store this machine resolves.
+
+**A `use:` entry.**
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | one of | A package name, resolved to `<taskmgr home>/packages/<name>`. Machine-independent, so a store config can carry it into git and every machine finds its own copy. |
+| `path` | one of | A directory, resolved against the directory holding **this** config file — `.tasks/` for a store, the home for the per-user one. A package under `.tasks/` travels with the store, `store move --central` included. |
+
+Exactly one of the two is set; an entry with both, or neither, is a config error (§3.4).
+Which is meant is always stated rather than inferred from the string, matching the rule
+CONFIG-SPEC.md applies to naming a store. Nothing about a package's **origin** is
+recorded — no URL, no revision — so resolution never reaches the network and a hook is
+never fetched during a `create` or a `close`.
 
 **Merge (normative).**
 
-1. **Global hooks run first**, then the store's, each group in its own config order. The
-   effective chain for an event is `[global…] ++ [store…]`; §4's "first deny wins" then
-   selects within it, so a machine-wide gate is what surfaces when both would deny.
-2. **Effective ids are prefixed `global:`** — a declared `id` as well as a defaulted
-   `<event>#<index>`. The two files number their entries independently, so without the
-   prefix a denial naming `pre-create#0` would not say which file to edit. `taskmgr
-   config hook list` prints the effective id, and `taskmgr config hook rm` takes it.
-3. **`hook_timeout`**: the store's value when it sets one, else the global one, else the
-   2s default. One limit still bounds every hook in the merged chain.
-4. **No opt-out.** A store cannot suppress inherited hooks; the escape hatch is editing
-   the per-user config. A gate configured for the machine applies to every project on it.
-5. **The working directory is unchanged** — always the project root (§3.2). A relative
-   path in a global hook therefore resolves against whichever project the hook runs in,
-   which is almost never what the author meant: give a global hook an absolute path.
-   This is **not** validated, because `["sh", "-c", …]` is the documented idiom for shell
-   features and `sh` is resolved from `PATH`.
+1. **The per-user config's packages run first**, then the store's, each list in its own
+   order and each package's hooks in manifest order. The effective chain for an event is
+   `[per-user…] ++ [store…]`; §4's "first deny wins" then selects within it, so a
+   machine-wide gate is what surfaces when both would deny.
+2. **Effective ids are `pkg:<package>:<hook>`** (§3.2). The package name is part of the
+   id, so a denial always says which package to open, and `taskmgr hook list` prints the
+   same string.
+3. **A package named by both files contributes once**, from the list that named it first
+   — which is the per-user one. The shadowed entry is reported by `taskmgr package list`
+   rather than dropped silently. Making the duplicate an error instead would let one
+   person's machine-wide install break the repository for every colleague who has it.
+4. **`hook_timeout`**: the store's value when it sets one, else the per-user one, else
+   the 2s default. One limit still bounds every hook in the merged chain, and no package
+   contributes one (§3.1).
+5. **No opt-out.** A store cannot suppress inherited packages; the escape hatch is
+   editing the per-user config. A gate configured for the machine applies to every
+   project on it.
+6. **The working directory is unchanged** — always the project root (§3.2). Only
+   `argv[0]` is resolved inside the package (§3.6), so a hook's own arguments and any
+   path it reads at run time still mean what they mean in the project.
 
 **When to use which file.** A store's config travels with the repository; the per-user
-config does not. A gate declared here holds on your machine and nowhere else — not for a
+config does not. A package named there holds on your machine and nowhere else — not for a
 colleague, not in CI — so it fits personal ergonomics and not an invariant the data
 depends on. Anything in the second category belongs in the store's `config.yaml`.
 
-**The hooks block is not read on a read path.** It is loaded where the hook set is
-compiled — the first write (§3.4) — so no query, list or show consults it, and the local
-walk-up of store resolution stays free of global config (CONFIG-SPEC.md §4). This is
-about the *hooks*, not about the file: resolving a **central** store already reads the
-per-user config on every command to find `central_root`, and that is unchanged. A machine
-with no locatable home simply inherits nothing; that is not an error.
+**Neither `use:` list is read on a read path.** Both are loaded where the hook set is
+compiled — the first write (§3.4) — so no query, list or show consults them, and the
+local walk-up of store resolution stays free of global config (CONFIG-SPEC.md §4). This
+is about the *packages*, not about the file: resolving a **central** store already reads
+the per-user config on every command to find `central_root`, and that is unchanged. A
+machine with no locatable home simply inherits nothing; that is not an error.
+
+### 3.6 The package format
+
+A **hook package** is a directory. Its **directory name is the package name** — there is
+no `name` key in the manifest, so a copy that lands in a differently-named directory
+cannot disagree with its own manifest. The name follows the store-name grammar
+(CONFIG-SPEC.md §3): one path segment, leading alphanumeric, at most 64 characters.
+
+```
+doc-policy/
+├── taskmgr-package.yaml
+└── hooks/doc-path.sh
+```
+
+```yaml
+# taskmgr-package.yaml
+version: 1
+hooks:
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["./hooks/doc-path.sh"]   # resolved inside this directory
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `version` | no | Manifest schema version; defaults to `1`. |
+| `hooks` | no | The hooks this package contributes, in run order. Entry schema in §3.2. |
+
+**Resolving `argv[0]` (normative).** When the first element of a hook's `run` is a
+relative path **containing a path separator**, it resolves against the package directory.
+An absolute path is used as given. A first element with **no** separator is left alone: it
+is a `PATH` lookup, exactly as `execve` treats it, so the documented `["sh", "-c", …]`
+idiom finds the system shell rather than searching the package. Only `argv[0]` is
+rewritten; every other argument is passed verbatim, and the working directory is still
+the project root (§3.2).
+
+This one rule is what makes a package portable. Without it a hook could name its script
+only by absolute path, which differs per machine, and "shipping a gate" would mean
+shipping a path the recipient has to edit.
+
+**A package carries hooks and nothing else.** No `hook_timeout` (§3.1), no `prefix`, no
+`central_root`. The config surface a package could otherwise reach is either
+store-identity (which a package must not touch) or machine policy (which the machine's
+owner sets), and ARCHITECTURE-SPEC.md §10 keeps that surface from growing: a behaviour
+that can be a hook is a hook.
+
+**Packages do not nest.** A manifest may not name other packages. There is therefore no
+cycle detection, no depth limit, and no shared-dependency resolution — a chain is exactly
+the two `use:` lists and the manifests they name.
+
+**A directory, never an archive.** taskmgr never fetches a package and never extracts
+one. A program cannot be executed inside an archive, so supporting one would mean
+taskmgr extracting it — and then owning the execute bit it must preserve and the
+path-traversal safety extraction demands. Installing a package is creating the directory
+and putting the manifest and scripts in it.
 
 ---
 
@@ -295,7 +385,7 @@ Notes:
   | Variable | Value |
   |---|---|
   | `TASKMGR_HOOK_EVENT` | the event, e.g. `pre-close` / `post-close` |
-  | `TASKMGR_HOOK_ID` | the hook's `id` |
+  | `TASKMGR_HOOK_ID` | the hook's **effective** id, `pkg:<package>:<hook>` (§3.2) |
   | `TASKMGR_ISSUE_ID` | the issue's id |
   | `TASKMGR_STORE` | absolute path to the `.tasks/` directory |
   | `TASKMGR_PAYLOAD_SCHEMA` | the input-payload schema version (§5) |
@@ -425,7 +515,7 @@ onto the issue — hooks never change tasks.
   exit `1`, a `taskmgr: ` message on stderr, and with `--json` a structured error:
 
   ```json
-  { "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
+  { "error": "hook_denied", "event": "pre-close", "hook": "pkg:repo-policy:tests-before-close",
     "issue_id": "proj-0042", "exit": 1,
     "reason": "3 unit tests failing; HEAD not clean",
     "hints": ["run `make fmt` before retrying"] }
@@ -484,8 +574,8 @@ fine.
 Fail-closed means a **misconfigured pre-hook wedges the relevant mutations** until fixed
 (a typo'd `run` blocks all closes). This is intentional — the point of a gate is that it
 cannot be skipped. **There is no bypass flag** (§10): to relax or remove a gate you edit
-`config.yaml`. Up-front config validation (§3.4) makes the failure a clear config error
-rather than a mysterious per-close one.
+the package, or drop it from the `use:` list. Up-front checking (§3.4) makes the failure
+a clear config error rather than a mysterious per-close one.
 
 ---
 
@@ -528,7 +618,7 @@ project can see exactly how long its gates hold the lock and decide whether to r
 - **Payload version.** The stdin payload carries `schema` (§5). Adding a field is additive;
   a removal/repurpose is breaking and is versioned with the SDK module (cf. QUERY-SPEC.md §7).
 - **Spec sync.** Hooks span several specs, which stay consistent (per CODING.md): the
-  `config.yaml` schema carries `hook_timeout` and `hooks` (TASK-STORAGE-SPEC.md §4.2); the
+  `config.yaml` schema carries `hook_timeout` and `use` (TASK-STORAGE-SPEC.md §4.2); the
   pre/post-hook steps sit in the write path (ARCHITECTURE-SPEC.md §6); the run-or-omit-hooks
   flag on `Import` and the hook-denied error are in SDK-SPEC.md (§3/§4/§6); and the `hints` /
   `warnings` fields and the `hook_denied` error shape are in CLI-SPEC.md §6. A change to the
@@ -541,7 +631,7 @@ project can see exactly how long its gates hold the lock and decide whether to r
 Deliberately excluded, with rationale:
 
 - **No bypass / skip mechanism.** A gate that can be skipped is not a gate. To relax or
-  remove one, edit `config.yaml`.
+  remove one, edit the package or drop it from the `use:` list.
 - **Hooks never mutate issues.** No writing labels or any field from a hook output; hooks
   gate (pre) or notify (post) only. The engine stays the sole author. This is deliberate
   even though auto-labeling is a common lightweight-tracker hook: the chosen ergonomic is
@@ -553,3 +643,10 @@ Deliberately excluded, with rationale:
   the project root (§3.2); fail-closed (pre) / warn (post) is uniform.
 - **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.
 - **No comment- or dependency-specific events** (§2.2).
+- **No package installer, and no origin in a `use:` entry** (§3.5). taskmgr never fetches
+  or extracts; a package is a directory somebody put there. Recording where one came from
+  and at what revision is additive — two optional keys on an entry — and is left until a
+  package is actually distributed.
+- **No per-entry override of the missing-package failure** (§3.4). A `use:` entry means
+  the configuration depends on that package, and one fixed behaviour is easier to reason
+  about than a switch that can silently disable a gate.

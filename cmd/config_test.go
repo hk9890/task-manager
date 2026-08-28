@@ -166,161 +166,6 @@ func TestConfigList_JSONCarriesScopeAndPath(t *testing.T) {
 	}
 }
 
-// ── hooks ────────────────────────────────────────────────────────────────────
-
-func TestConfigHook_AddListRemoveRoundTrip(t *testing.T) {
-	root := newStore(t)
-
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-		"--id", "gate", "--event", "pre-create", "--when", `type == "doc"`,
-		"--run", "sh", "--run", "-c", "--run", "exit 1")
-	if code != 0 {
-		t.Fatalf("hook add: exit %d, stderr %q", code, errOut)
-	}
-
-	out, _, code := run(t, "--dir", root, "--json", "config", "hook", "list")
-	if code != 0 {
-		t.Fatalf("hook list: exit %d", code)
-	}
-	var hooks []struct {
-		ID    string   `json:"id"`
-		Scope string   `json:"scope"`
-		Event string   `json:"event"`
-		When  string   `json:"when"`
-		Run   []string `json:"run"`
-	}
-	if err := json.Unmarshal([]byte(out), &hooks); err != nil {
-		t.Fatalf("decode: %v\n%s", err, out)
-	}
-	if len(hooks) != 1 {
-		t.Fatalf("listed %d hooks, want 1", len(hooks))
-	}
-	if hooks[0].ID != "gate" || hooks[0].Scope != "store" || hooks[0].Event != "pre-create" {
-		t.Errorf("hook = %+v, want id=gate scope=store event=pre-create", hooks[0])
-	}
-	if strings.Join(hooks[0].Run, "|") != "sh|-c|exit 1" {
-		t.Errorf("run = %v, want each --run to be one argv element", hooks[0].Run)
-	}
-
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "gate"); code != 0 {
-		t.Fatalf("hook rm: exit %d, stderr %q", code, errOut)
-	}
-	out, _, _ = run(t, "--dir", root, "--json", "config", "hook", "list")
-	if strings.TrimSpace(out) != "[]" && strings.TrimSpace(out) != "null" {
-		t.Errorf("hook list after rm = %q, want empty", out)
-	}
-}
-
-// TestConfigHook_ListShowsTheDefaultedID pins the id a denial reports for a hook
-// that declared none — the id `config hook rm` then has to accept.
-func TestConfigHook_ListShowsTheDefaultedID(t *testing.T) {
-	root := newStore(t)
-	if _, _, code := run(t, "--dir", root, "config", "hook", "add",
-		"--event", "post-close", "--run", "/bin/true"); code != 0 {
-		t.Fatal("setup: hook add")
-	}
-
-	out, _, _ := run(t, "--dir", root, "config", "hook", "list")
-	if !strings.Contains(out, "post-close#0") {
-		t.Fatalf("hook list = %q, want the defaulted id post-close#0", out)
-	}
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "post-close#0"); code != 0 {
-		t.Fatalf("rm by defaulted id: exit %d, stderr %q", code, errOut)
-	}
-}
-
-func TestConfigHook_AddRejectsAnUnknownEventAndWritesNothing(t *testing.T) {
-	root := newStore(t)
-
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-		"--event", "pre-delete", "--run", "/bin/true")
-	if code == 0 {
-		t.Fatal("an unknown event must be refused")
-	}
-	if !strings.Contains(errOut, "unknown event") {
-		t.Errorf("stderr = %q, want it to name the unknown event", errOut)
-	}
-	out, _, _ := run(t, "--dir", root, "config", "hook", "list")
-	if !strings.Contains(out, "no hooks") {
-		t.Errorf("hook list = %q, want the refused hook not to have been written", out)
-	}
-}
-
-func TestConfigHook_AddRequiresEventAndRun(t *testing.T) {
-	root := newStore(t)
-
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "add", "--run", "/bin/true"); code == 0 {
-		t.Error("a hook with no event must be refused")
-	} else if !strings.Contains(errOut, "--event") {
-		t.Errorf("stderr = %q, want it to name --event", errOut)
-	}
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "add", "--event", "pre-create"); code == 0 {
-		t.Error("a hook with no run must be refused")
-	} else if !strings.Contains(errOut, "--run") {
-		t.Errorf("stderr = %q, want it to name --run", errOut)
-	}
-}
-
-func TestConfigHook_AddRejectsADuplicateID(t *testing.T) {
-	root := newStore(t)
-	if _, _, code := run(t, "--dir", root, "config", "hook", "add",
-		"--id", "gate", "--event", "pre-create", "--run", "/bin/true"); code != 0 {
-		t.Fatal("setup: hook add")
-	}
-
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-		"--id", "gate", "--event", "pre-close", "--run", "/bin/true")
-	if code == 0 {
-		t.Fatal("a duplicate id must be refused: 'hook rm' could not then name one of the two")
-	}
-	if !strings.Contains(errOut, "gate") {
-		t.Errorf("stderr = %q, want it to name the clashing id", errOut)
-	}
-}
-
-// TestConfigHook_AddRejectsAnIDContainingAHash covers the rule that keeps the
-// two id sources disjoint. Before it, an id written in the "<event>#<index>"
-// shape could equal another entry's default — directly, or after a removal
-// renumbered a later entry onto it — and the second hook was then unaddressable
-// by `config hook rm` and ambiguous in a denial reason.
-func TestConfigHook_AddRejectsAnIDContainingAHash(t *testing.T) {
-	for _, id := range []string{"pre-create#0", "pre-create#1", "gate#a"} {
-		root := newStore(t)
-		_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-			"--id", id, "--event", "pre-create", "--run", "/bin/true")
-		if code == 0 {
-			t.Fatalf("--id %q must be refused: '#' belongs to the defaulted id", id)
-		}
-		if !strings.Contains(errOut, "#") {
-			t.Errorf("--id %q: stderr = %q, want it to state the rule", id, errOut)
-		}
-		// A refused add writes nothing: the store still has no hooks.
-		out, _, code := run(t, "--dir", root, "config", "hook", "list")
-		if code != 0 {
-			t.Fatalf("--id %q: hook list: exit %d", id, code)
-		}
-		if strings.Contains(out, id) {
-			t.Errorf("--id %q: refused add must write nothing, got %q", id, out)
-		}
-	}
-}
-
-func TestConfigHook_RmUnknownIDListsTheConfiguredOnes(t *testing.T) {
-	root := newStore(t)
-	if _, _, code := run(t, "--dir", root, "config", "hook", "add",
-		"--id", "gate", "--event", "pre-create", "--run", "/bin/true"); code != 0 {
-		t.Fatal("setup: hook add")
-	}
-
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "nosuchhook")
-	if code == 0 {
-		t.Fatal("removing an unknown id must fail")
-	}
-	if !strings.Contains(errOut, "gate") {
-		t.Errorf("stderr = %q, want it to list the configured ids", errOut)
-	}
-}
-
 // ── --global ─────────────────────────────────────────────────────────────────
 
 func TestConfigGlobal_WorksWithoutAStore(t *testing.T) {
@@ -338,50 +183,32 @@ func TestConfigGlobal_WorksWithoutAStore(t *testing.T) {
 	}
 }
 
-// TestConfigGlobal_HookIDCarriesTheScopePrefix is what makes a denial reason say
-// which of the two files to edit.
-func TestConfigGlobal_HookIDCarriesTheScopePrefix(t *testing.T) {
-	isolatedHome(t)
-
-	out, errOut, code := run(t, "config", "hook", "add", "--global",
-		"--id", "doc-needs-path", "--event", "pre-create",
-		"--when", `type == "doc"`, "--run", "/bin/false")
-	if code != 0 {
-		t.Fatalf("hook add --global: exit %d, stderr %q", code, errOut)
-	}
-	if !strings.Contains(out, "global:doc-needs-path") {
-		t.Errorf("stdout = %q, want the effective id global:doc-needs-path", out)
-	}
-
-	out, _, _ = run(t, "config", "hook", "list", "--global")
-	if !strings.Contains(out, "global:doc-needs-path") {
-		t.Errorf("hook list --global = %q, want the prefixed id", out)
-	}
-	if _, errOut, code := run(t, "config", "hook", "rm", "--global", "global:doc-needs-path"); code != 0 {
-		t.Fatalf("hook rm --global: exit %d, stderr %q", code, errOut)
-	}
-}
-
-// TestConfigGlobal_HooksApplyToAStoreThatHasNone is the end-to-end shape of the
-// feature: one gate configured once, enforced in a store whose own config is
-// empty.
-func TestConfigGlobal_HooksApplyToAStoreThatHasNone(t *testing.T) {
-	isolatedHome(t)
+// TestConfigGlobal_PackageAppliesToAStoreThatHasNone is the end-to-end shape of
+// the feature: one gate configured once for the machine, enforced in a store
+// whose own config names no package.
+func TestConfigGlobal_PackageAppliesToAStoreThatHasNone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	writeCmdPackage(t, home, "doc-policy", `hooks:
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["sh", "-c", "echo 'a doc needs a path: label' >&2; exit 1"]
+`)
 	root := newStore(t)
 
-	if _, errOut, code := run(t, "config", "hook", "add", "--global",
-		"--id", "doc-needs-path", "--event", "pre-create",
-		"--when", `type == "doc" && !(label ~ "path:")`,
-		"--run", "sh", "--run", "-c", "--run", "echo 'a doc needs a path: label' >&2; exit 1"); code != 0 {
-		t.Fatalf("hook add --global: exit %d, stderr %q", code, errOut)
+	if _, errOut, code := run(t, "package", "add", "--global", "doc-policy"); code != 0 {
+		t.Fatalf("package add --global: exit %d, stderr %q", code, errOut)
 	}
 
 	_, errOut, code := run(t, "--dir", root, "create", "--title", "Auth design", "--type", "doc")
 	if code == 0 {
-		t.Fatal("the global gate did not deny a doc with no path: label")
+		t.Fatal("the machine-wide gate did not deny a doc with no path: label")
 	}
-	if !strings.Contains(errOut, "global:doc-needs-path") {
-		t.Errorf("stderr = %q, want the denial to name the global hook", errOut)
+	// The denial names the hook by its effective id, which says which package to
+	// open (HOOK-SPEC §3.5).
+	if !strings.Contains(errOut, "pkg:doc-policy:doc-needs-path") {
+		t.Errorf("stderr = %q, want the denial to name the hook by its effective id", errOut)
 	}
 
 	if _, errOut, code := run(t, "--dir", root, "create", "--title", "Auth design",
@@ -434,25 +261,5 @@ func TestConfigSet_RefusesAnEmptyValue(t *testing.T) {
 	out, _, _ := run(t, "--dir", root, "config", "get", "hook_timeout")
 	if strings.TrimSpace(out) != "5m" {
 		t.Errorf("hook_timeout = %q after a refused set, want the previous 5m", strings.TrimSpace(out))
-	}
-}
-
-// ── hook ids stay addressable ────────────────────────────────────────────────
-
-// TestConfigHookRm_RemovesWhenNothingCollides keeps the ordinary path working.
-func TestConfigHookRm_RemovesWhenNothingCollides(t *testing.T) {
-	root := newStore(t)
-	for _, run1 := range []string{"a", "b"} {
-		if _, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-			"--event", "pre-close", "--run", run1); code != 0 {
-			t.Fatalf("hook add %s: exit %d, stderr %q", run1, code, errOut)
-		}
-	}
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "pre-close#0"); code != 0 {
-		t.Fatalf("hook rm: exit %d, stderr %q", code, errOut)
-	}
-	out, _, _ := run(t, "--dir", root, "config", "hook", "list")
-	if !strings.Contains(out, "b") || strings.Contains(out, " a ") {
-		t.Errorf("hook list after removal:\n%s", out)
 	}
 }

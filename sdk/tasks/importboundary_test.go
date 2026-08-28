@@ -119,6 +119,10 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"config.go":   true, // global config loader (env/vfs seams)
 		"registry.go": true, // central registry + Resolve/Stores/InitCentral
 		"content.go":  true, // body-overflow sidecar I/O (rule itself is in overflow.go)
+
+		// packageload.go reads a hook package's manifest; the format itself is
+		// pure and lives in packages.go.
+		"packageload.go": true,
 	}
 	mayDeclareStoreMethods := map[string]bool{
 		"store.go":    true,

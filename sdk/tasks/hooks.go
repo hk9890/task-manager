@@ -30,12 +30,15 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
 
-// Hook is one configured lifecycle hook as parsed from config.yaml (HOOK-SPEC
-// §3.2). Unknown keys in an entry are ignored by the YAML decoder for
-// forward-compatibility (TASK-STORAGE-SPEC §4.2).
+// Hook is one configured lifecycle hook as parsed from a package manifest
+// (HOOK-SPEC §3.6). Unknown keys in an entry are ignored by the YAML decoder for
+// forward-compatibility, as in a config file (TASK-STORAGE-SPEC §4.2).
 type Hook struct {
-	// ID is an optional label used in messages, logs, and the structured denial.
-	// Defaults to "<event>#<index>" when empty.
+	// ID is the hook's label within its package, used in messages, logs, and the
+	// structured denial. It is required and must not contain ':'; the effective
+	// id a denial reports is "pkg:<package>:<id>" (packages.go). There is no
+	// positional default: a package is replaced whole when it is updated, and a
+	// numbered id would silently move to a different hook.
 	ID string `yaml:"id,omitempty"`
 	// Event is the lifecycle event that fires the hook; one of the eight in §2.
 	Event string `yaml:"event"`
@@ -98,38 +101,20 @@ func (hs *hookSet) forEvent(event string) []compiledHook {
 	return out
 }
 
-// globalHookIDPrefix marks every hook that came from the per-user config
-// (HOOK-SPEC §3.5). It is applied to a declared id as well as to a defaulted
-// "<event>#<index>": the two files number their hooks independently, so without
-// it a denial reason could name "pre-create#0" without saying which file to fix.
-const globalHookIDPrefix = "global:"
-
-// HookID returns the effective id of the index-th hook of a config file: its
-// declared id, or "<event>#<index>" when it declares none, prefixed "global:"
-// when it comes from the per-user config (HOOK-SPEC §3.5).
+// buildHookSet validates and compiles a resolved hook chain into one hookSet
+// (HOOK-SPEC §3.4/§3.5). The chain arrives flat and already ordered — the
+// per-user config's packages first, then the store's — and every entry already
+// carries the effective id it runs under, so this stays pure: it returns a
+// configuration error, never applies one, and touches no filesystem.
 //
-// This is the id a denial reason and the logs report, so a caller that lists or
-// removes hooks derives it here rather than re-deriving the rule.
-func HookID(h Hook, index int, global bool) string {
-	prefix := ""
-	if global {
-		prefix = globalHookIDPrefix
-	}
-	return hookLabel(h, index, prefix)
-}
-
-// buildHookSet validates and compiles the global and store hook configuration
-// into one hookSet (HOOK-SPEC §3.4/§3.5). Global hooks come first, so a
-// machine-wide gate is evaluated before project policy and its denial is the one
-// that surfaces. It is pure: a configuration error is returned, never applied,
-// and it touches no filesystem.
-//
-// The timeout is the store's when it sets one, else the global one, else the
-// 2s default — one limit for every hook in the merged chain (HOOK-SPEC §3.1).
-func buildHookSet(global GlobalConfig, cfg Config) (*hookSet, error) {
-	raw := strings.TrimSpace(cfg.HookTimeout)
+// The timeout is the store's when it sets one, else the per-user one, else the
+// 2s default — one limit for every hook in the chain (HOOK-SPEC §3.1). A package
+// cannot contribute one: raising it would extend how long the store lock is
+// held, for every project on the machine (HOOK-SPEC §8).
+func buildHookSet(globalTimeout, storeTimeout string, hooks []packageHook) (*hookSet, error) {
+	raw := strings.TrimSpace(storeTimeout)
 	if raw == "" {
-		raw = strings.TrimSpace(global.HookTimeout)
+		raw = strings.TrimSpace(globalTimeout)
 	}
 	timeout, err := parseHookTimeout(raw)
 	if err != nil {
@@ -137,15 +122,8 @@ func buildHookSet(global GlobalConfig, cfg Config) (*hookSet, error) {
 	}
 
 	hs := &hookSet{timeout: timeout}
-	for i, h := range global.Hooks {
-		ch, err := compileHook(h, i, globalHookIDPrefix)
-		if err != nil {
-			return nil, err
-		}
-		hs.hooks = append(hs.hooks, ch)
-	}
-	for i, h := range cfg.Hooks {
-		ch, err := compileHook(h, i, "")
+	for _, ph := range hooks {
+		ch, err := compileHook(ph.hook, ph.id)
 		if err != nil {
 			return nil, err
 		}
@@ -171,99 +149,20 @@ func parseHookTimeout(raw string) (time.Duration, error) {
 	return d, nil
 }
 
-// checkHookChange validates the part of one config file's hooks block that a
-// write introduces: the timeout when it changed, and every entry that was not
-// already there. idPrefix scopes the error to the file being written, so a
-// message never sends the reader to the other one.
-//
-// Only the delta is compiled, and deliberately (HOOK-SPEC §3.4). Validating the
-// whole block means an entry that is already on disk refuses the write that
-// removes it: two malformed hooks in the per-user config then fail every write
-// on the machine with no way back out through `taskmgr config hook rm`.
-// Compiling only what arrives still keeps a bad hook from ever being written by
-// taskmgr, which is what the validation is for.
-func checkHookChange(curTimeout string, cur []Hook, nextTimeout string, next []Hook, idPrefix string) error {
-	if strings.TrimSpace(nextTimeout) != strings.TrimSpace(curTimeout) {
-		if _, err := parseHookTimeout(nextTimeout); err != nil {
-			return err
-		}
-	}
-	for i, h := range next {
-		if containsHook(cur, h) {
-			continue
-		}
-		if _, err := compileHook(h, i, idPrefix); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// containsHook reports whether hooks holds an entry equal to h. Position is not
-// part of the comparison: removing one entry renumbers the rest, and a hook that
-// only moved is not a hook this write introduced.
-func containsHook(hooks []Hook, h Hook) bool {
-	for _, c := range hooks {
-		if c.ID == h.ID && c.Event == h.Event && c.When == h.When && equalArgv(c.Run, h.Run) {
-			return true
-		}
-	}
-	return false
-}
-
-func equalArgv(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// cloneHooks deep-copies a hooks block, argv slices included. A shallow copy
-// shares every Run slice with the original — and a compiled hook holds that same
-// slice — so it is not a copy a caller can edit.
-func cloneHooks(hooks []Hook) []Hook {
-	if hooks == nil {
-		return nil
-	}
-	out := make([]Hook, len(hooks))
-	for i, h := range hooks {
-		h.Run = append([]string(nil), h.Run...)
-		out[i] = h
-	}
-	return out
-}
-
 // compileHook validates a single hook entry and compiles its `when` predicate.
-// idPrefix scopes the resolved id to the file the entry came from; it is empty
-// for a store's own hooks.
-func compileHook(h Hook, index int, idPrefix string) (compiledHook, error) {
+// id is the effective id the entry runs under, composed by the package it came
+// from (packages.go); it is what a denial reason and the logs report.
+func compileHook(h Hook, id string) (compiledHook, error) {
 	event := strings.TrimSpace(h.Event)
 	if event == "" {
-		return compiledHook{}, fmt.Errorf("hook %s: missing required field event", hookLabel(h, index, idPrefix))
+		return compiledHook{}, fmt.Errorf("hook %s: missing required field event", id)
 	}
 	if !validHookEvents[event] {
-		return compiledHook{}, fmt.Errorf("hook %s: unknown event %q", hookLabel(h, index, idPrefix), h.Event)
+		return compiledHook{}, fmt.Errorf("hook %s: unknown event %q", id, h.Event)
 	}
 	if len(h.Run) == 0 || strings.TrimSpace(h.Run[0]) == "" {
-		return compiledHook{}, fmt.Errorf("hook %s: run must be a non-empty argv array", hookLabel(h, index, idPrefix))
+		return compiledHook{}, fmt.Errorf("hook %s: run must be a non-empty argv array", id)
 	}
-	// '#' belongs to the defaulted "<event>#<index>" id and nothing else. A
-	// declared id may not contain it, so the two id sources cannot produce the
-	// same text: defaults are numbered over the whole list and are unique among
-	// themselves, so a collision always needs a declared id wearing the default
-	// shape. Without the rule, removing an earlier hook renumbers the rest onto
-	// a declared id and strands the second one — unnameable by `config hook rm`
-	// and ambiguous in a denial reason (HOOK-SPEC §3.2).
-	if strings.Contains(h.ID, "#") {
-		return compiledHook{}, fmt.Errorf("hook %s: declared id must not contain '#' (reserved for the defaulted \"<event>#<index>\" id)", hookLabel(h, index, idPrefix))
-	}
-
-	id := hookLabel(h, index, idPrefix)
 
 	var pred query.Predicate
 	if w := strings.TrimSpace(h.When); w != "" {
@@ -275,19 +174,4 @@ func compileHook(h Hook, index int, idPrefix string) (compiledHook, error) {
 	}
 
 	return compiledHook{id: id, event: event, when: pred, run: h.Run}, nil
-}
-
-// hookLabel names a hook for error messages and as its resolved id: its id when
-// set, else "<event>#<index>", else "#<index>" when even the event is missing.
-// idPrefix scopes the name to the config file the entry came from (HOOK-SPEC
-// §3.5) and applies to a declared id too, so an error always says which file to
-// edit.
-func hookLabel(h Hook, index int, idPrefix string) string {
-	if id := strings.TrimSpace(h.ID); id != "" {
-		return idPrefix + id
-	}
-	if e := strings.TrimSpace(h.Event); e != "" {
-		return fmt.Sprintf("%s%s#%d", idPrefix, e, index)
-	}
-	return fmt.Sprintf("%s#%d", idPrefix, index)
 }

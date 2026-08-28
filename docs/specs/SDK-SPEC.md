@@ -176,9 +176,12 @@ func (s *Store) Dir() string      // absolute path to the data directory
 func (s *Store) Name() string     // central-registry name, "" for a local store
 func (s *Store) Prefix() string   // configured ID prefix
 
-func (s *Store) Config() Config                              // a deep copy, Hooks included
+func (s *Store) Config() Config                              // a copy, the use: list included
 func (s *Store) UpdateConfig(mutate func(*Config) error) error // read-modify-write under the lock
 func (s *Store) SetConfig(cfg Config) error                  // replace the file wholesale
+
+func (s *Store) Packages() ([]PackageInfo, error) // every use: entry that gates this store
+func (s *Store) HookChain() ([]HookInfo, error)   // the effective hook chain, in run order
 ```
 
 `Name` reports the registry name the store was opened under — set by `Resolve` for
@@ -188,9 +191,16 @@ take a name from. It is what identifies a store across projects; an issue ID doe
 not, because a prefix is derived from the project directory name, so two projects
 whose directories share a name share a prefix (CONFIG-SPEC §5).
 
-`Config` returns a **deep** copy: each `Hook`'s `Run` argv is cloned too. A compiled
-hook holds the very `[]string` a `Hook` carries, so a shallow copy would leave
-`cfg.Hooks[0].Run[0] = …` rewriting the gate the next mutation executes.
+`Config` returns a copy, its `Use` slice included, so a caller editing the result cannot
+reach the configuration the store is already running with.
+
+`Packages` reports the per-user config's `use:` entries and then the store's, each with
+the directory it resolves to and a status of `ok`, `missing` or `broken` — the vocabulary
+the registry uses for its own entries (CONFIG-SPEC §3). It never fails on an entry that
+will not load; reporting those is what it is for. `HookChain` is the same two lists
+resolved into the hooks they contribute, in the order they run ([HOOK-SPEC](HOOK-SPEC.md)
+§3.5), and it does fail when a package will not load, because a chain missing a gate is
+not a chain.
 
 `UpdateConfig` is how a caller changes one key. The read, the mutation and the write
 all happen inside one hold of the store lock, so two processes editing different keys
@@ -323,21 +333,41 @@ false, which is what keeps documents out of `Ready` and `Blocked` (§4).
 
 ```go
 type Config struct {
-    Prefix      string `yaml:"prefix"`                 // prepended to allocated issue IDs
-    HookTimeout string `yaml:"hook_timeout,omitempty"` // per-hook wall-clock limit ("2s"); "" = 2s default, "0" = disabled
-    Hooks       []Hook `yaml:"hooks,omitempty"`        // lifecycle gates
+    Prefix      string       `yaml:"prefix"`                 // prepended to allocated issue IDs
+    HookTimeout string       `yaml:"hook_timeout,omitempty"` // per-hook wall-clock limit ("2s"); "" = 2s default, "0" = disabled
+    Use         []PackageRef `yaml:"use,omitempty"`          // the hook packages this store uses
 }
 
+// Hook is one entry of a package manifest, never of a config file.
 type Hook struct {
-    ID    string   `yaml:"id,omitempty"`   // label for messages/logs; defaults to "<event>#<index>"
+    ID    string   `yaml:"id,omitempty"`   // required; effective id is "pkg:<package>:<id>"
     Event string   `yaml:"event"`          // the lifecycle event that fires it
     When  string   `yaml:"when,omitempty"` // optional QUERY-SPEC filter over the new issue
     Run   []string `yaml:"run"`            // argv, executed directly (no shell); required
+
 }
+
+// PackageInfo is one use: entry and what it resolves to on this machine.
+type PackageInfo struct {
+    Name, Path, Scope string // the package, its directory, and "global" | "store"
+    Status, Detail    string // "ok" | "missing" | "broken", and why when it is not ok
+    Hooks             int    // how many hooks it contributes
+    Shadowed          bool   // an earlier entry already took this name
+}
+
+// HookInfo is one hook of the effective chain.
+type HookInfo struct {
+    ID, Event, When  string   // ID is the effective "pkg:<package>:<hook>"
+    Run              []string // argv, with argv[0] already resolved inside the package
+    Package, Scope   string   // which package supplied it, and which file named that package
+}
+
+const PackageManifestName = "taskmgr-package.yaml"
 ```
 
-`HookTimeout` and `Hooks` are validated lazily on the first write, not on read, so
-a malformed value never breaks queries. Semantics: [HOOK-SPEC](HOOK-SPEC.md) §3.
+`HookTimeout` and `Use` are read lazily on the first write, not on read, so an unusable
+package never breaks queries. Semantics: [HOOK-SPEC](HOOK-SPEC.md) §3, package format
+§3.6.
 
 ### `GlobalConfig`
 
@@ -349,28 +379,32 @@ type GlobalConfig struct {
     Version     int    `yaml:"version"`
     CentralRoot string `yaml:"central_root,omitempty"` // registry + central stores; "" = the taskmgr home
     HookTimeout string `yaml:"hook_timeout,omitempty"` // fallback limit for a store that sets none
-    Hooks       []Hook `yaml:"hooks,omitempty"`        // gates applied to every store on this machine
+    Use         []PackageRef `yaml:"use,omitempty"`    // hook packages applied to every store on this machine
+}
+
+// PackageRef is one entry of a use: list. Exactly one field is set.
+type PackageRef struct {
+    Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<name>
+    Path string `yaml:"path,omitempty"` // relative to the directory holding the config file
 }
 
 func LoadGlobalConfig() (GlobalConfig, error)  // built-in defaults when the file is absent
 func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error // read-modify-write under the home lock
 func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
-
-func HookID(h Hook, index int, global bool) string // the effective id: "gate", "pre-close#2", "global:gate"
+func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
 ```
 
-`Hooks` here run **before** a store's own on every mutation, and their effective ids
-carry a `global:` prefix ([HOOK-SPEC](HOOK-SPEC.md) §3.5). `HookID` is the one place
-that rule is implemented, so a caller listing or removing hooks derives an id rather
-than re-deriving the rule.
+The packages named here contribute hooks **before** a store's own on every mutation, and
+every hook's effective id is `pkg:<package>:<hook>` ([HOOK-SPEC](HOOK-SPEC.md) §3.5), so
+the package that supplied a gate is readable from the id alone.
 
 `UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
 home's own lock: the first is a read-modify-write inside it, the second replaces the file
-from a snapshot read outside it. Both compile a hook the write introduces — a malformed
-one would fail mutations in every store on the machine, so it is refused at the call that
-caused it — and neither re-validates one already on disk, which is what leaves a bad
-entry removable.
+from a snapshot read outside it. Both check a `use:` entry the write introduces — one
+that could never resolve would fail mutations in every store on the machine, so it is
+refused at the call that caused it — and neither re-checks one already on disk, which is
+what leaves a bad entry removable.
 
 ---
 

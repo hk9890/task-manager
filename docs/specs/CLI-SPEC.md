@@ -186,12 +186,13 @@ required, and they are mutually exclusive.
   across a symlink). `--dir`/`-C` is made absolute against the working directory before
   it is recorded.
 - A store keeps its `config.yaml` verbatim across all three modes, so the ID prefix and
-  the hooks block travel with it and existing IDs stay valid. **Hook argv paths are not
-  rewritten**: hooks run with the working directory set to the project root
-  ([HOOK-SPEC](HOOK-SPEC.md) §3.2), which `--central` does not change, so a hook whose
-  argv points into `.tasks` stops resolving once the store leaves the project. Such
-  hooks must be rewritten to an absolute path or to `["sh", "-c",
-  "$TASKMGR_STORE/…"]`.
+  the `use:` list travel with it and existing IDs stay valid. A package the store holds
+  by path — under `.tasks/packages/` — moves with the tree, and its hooks' relative
+  `argv[0]` resolves against wherever the package now is
+  ([HOOK-SPEC](HOOK-SPEC.md) §3.6), so a gate that shipped with the repository keeps
+  working after a promote. What does **not** follow the store is a `name:` entry, which
+  resolves per machine, or an argv path a hook builds itself at run time from its working
+  directory — that is still the project root, which the move does not change.
 - **Output:** the store name, store path, and project path (`storeMoveDTO` in JSON, §6).
 
 ---
@@ -213,17 +214,19 @@ Because `--global` resolves no store, it works in a directory where nothing reso
 Every write goes through the engine, which re-reads the file under its lock and applies
 the change there, so two concurrent invocations editing different keys keep both edits
 (CONFIG-SPEC §2, SDK-SPEC §1). The engine validates before a byte lands: an unparseable
-`hook_timeout` or a hook the write introduces is refused at the command that wrote it,
-rather than at the next mutation (HOOK-SPEC §3.4). A refused command leaves the file
-byte-for-byte unchanged.
+`hook_timeout` is refused at the command that wrote it, rather than at the next mutation
+(HOOK-SPEC §3.4). A refused command leaves the file byte-for-byte unchanged.
+
+`taskmgr package` (§2.3) edits the same two files under the same locks; it is a separate
+group because the `use:` list is a list rather than a scalar key.
 
 ### `taskmgr config keys`
 
 List every supported key with its scope (`store` / `global`), whether it is writable,
 and what it means. It is the static catalog, so it reads nothing and needs no store.
 
-The `hooks` block is a list, not a scalar, and is absent from this table: it is managed
-with `taskmgr config hook`.
+The `use:` list of hook packages is a list, not a scalar, and is absent from this table:
+it is managed with `taskmgr package` (§2.3).
 
 - **Output (JSON):** array of `configKeyDTO` (§6).
 
@@ -236,6 +239,9 @@ with `taskmgr config hook`.
 | `version` | global | no | Schema version of the per-user config. |
 | `central_root` | global | yes | Directory holding the registry and central stores. Unset means the taskmgr home. Setting it does **not** move existing stores. |
 | `hook_timeout` | global | yes | Fallback limit for a store that sets none (HOOK-SPEC §3.5). |
+
+A package cannot set `hook_timeout`; the limit bounds how long the store lock is held, so
+it is the machine owner's to set (HOOK-SPEC §3.1).
 
 ### `taskmgr config list [--global]`
 
@@ -262,50 +268,76 @@ key and exit `0`.
 
 Clear one key, restoring its documented default. A read-only key exits `1`.
 
-### `taskmgr config hook add [--global] --event <e> --run <arg> [--run <arg>…]`
+---
 
-Append one hook to the file's `hooks` block.
+## 2.3 Hook packages
+
+A hook package is a directory holding a manifest and the scripts its hooks run
+(HOOK-SPEC §3.6). taskmgr never creates, downloads or extracts one: a package has a
+single owner, so authoring it is making a directory and writing a YAML file, with nothing
+for taskmgr to mediate. What these commands manage is the shared, lock-protected `use:`
+list, and the merged chain that no single file shows.
+
+`taskmgr package` takes the same `--global` selector as `taskmgr config`, in either
+position, with the same two targets.
+
+### `taskmgr package add <name> [--path] [--global]`
+
+Append one entry to the target file's `use:` list.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--event <e>` | — | **Required.** One of the eight events (HOOK-SPEC §2). |
-| `--run <arg>` | — | **Required, repeatable.** One argv element per occurrence. |
-| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file and must not contain `#` (HOOK-SPEC §3.2); either violation exits `1` and writes nothing. |
-| `--when <expr>` | — | Filter expression (QUERY-SPEC) scoping the hook to matching issues. |
+| `--path` | off | Treat the argument as a directory rather than a package name. The path resolves against the directory holding the config file: `.tasks/` for a store, the taskmgr home for `--global`. |
+| `--global` | off | Act on the per-user config instead of the store's. |
 
-`--run` is repeatable rather than a single string because hooks are executed directly via
-`execve` with no shell, so there is no quoting rule to invent. For shell features, pass
-the shell:
+Without `--path` the argument is a package name, resolved to
+`<taskmgr home>/packages/<name>`. The two forms are separate because a reference states
+which it is rather than leaving a loader to guess (HOOK-SPEC §3.5).
 
-```bash
-taskmgr config hook add --event pre-close \
-  --run sh --run -c --run 'make lint && make test'
-```
+The package is **loaded and checked before the entry is written**, so one that could
+never run is refused here rather than at the next unrelated mutation. A package that is
+merely **not installed yet** is written and reported as a warning: a store's config
+travels in git, so it legitimately names a package the machine writing it does not have.
+An entry that duplicates one already in the file exits `1`.
 
-A hook's working directory is the project root (HOOK-SPEC §3.2), so a relative path in a
-`--global` hook resolves against whichever project it runs in: give a global hook an
-absolute path.
+- **Output:** the entry and what it resolves to (`packageDTO` in JSON, §6).
 
-- **Output:** the hook's effective id and event (`configHookDTO` in JSON, §6).
+### `taskmgr package list [--global]`
 
-### `taskmgr config hook list [--global]`
+List the `use:` entries that apply, each with the directory it resolves to on this
+machine and its status:
 
-List one file's hooks in the order they run, each with its **effective id** — the id a
-denial reason reports and `config hook rm` takes, including the defaulted
-`<event>#<index>` and the `global:` prefix (HOOK-SPEC §3.5).
+| Status | Means |
+|---|---|
+| `ok` | The directory is there and holds a manifest that loads. |
+| `missing` | Nothing at the resolved path. |
+| `broken` | A directory that is not a finished package: no manifest, or one that does not load. |
 
-- **Output (JSON):** array of `configHookDTO` (§6).
+The vocabulary is `store list`'s (§2.1), so a listing and a mutation never disagree about
+an entry. An entry whose package name was already taken by an earlier one is reported
+`shadowed` (HOOK-SPEC §3.5 rule 3) rather than omitted.
 
-### `taskmgr config hook rm <id> [--global]`
+Without `--global` the listing covers **both** files in the order their hooks run, because
+that is what gates the store; with `--global` it covers the per-user file alone and needs
+no store.
 
-Remove the hook with that effective id. An unknown id exits `1` and lists the ids that
-are configured.
+- **Output (JSON):** array of `packageDTO` (§6).
 
-**A defaulted id is positional.** `<event>#<index>` is derived from the entry's place in
-the file (HOOK-SPEC §3.2), so removing or inserting an entry renumbers the ones after it:
-remove `pre-create#0` and the former `pre-create#1` becomes `pre-create#0`. A script that
-removes several hooks must re-read `config hook list` between removals, or give the hooks
-an explicit `--id`, which never moves.
+### `taskmgr hook list`
+
+List every hook that gates the resolved store, in the order it runs: the per-user
+config's packages first, then the store's, each package's hooks in manifest order
+(HOOK-SPEC §3.5).
+
+This is the authoritative answer to what gates a store. Neither config file can give it
+alone — the hooks live in the packages the two files name — so ordering is settled by
+reading this rather than by tracing two files by hand.
+
+Each row carries the **effective id**, `pkg:<package>:<hook>`: the id a denial reason
+reports and the logs record. The scope column names the file whose `use:` list brought
+the package in, and therefore the file to edit.
+
+- **Output (JSON):** array of `hookDTO` (§6).
 
 ---
 
@@ -677,11 +709,18 @@ catalog, so the same array is returned wherever the command runs.
 **`configListDTO`** — emitted by `config list`: `{scope, path, keys}` where `keys` is a
 `configValueDTO[]` and `path` is the file the values came from.
 
-**`configHookDTO`** — emitted by `config hook add` (the one hook) and `config hook list`
-(an array): `{id, scope, event, when, run}`. `id` is the **effective** id — the defaulted
-`<event>#<index>` and the `global:` prefix already applied (HOOK-SPEC §3.5) — so it is
-the value `config hook rm` takes and the value a `hook_denied` error reports. `when` is
-omitted when empty. `config hook rm` emits `{removed, path}`.
+**`packageDTO`** — emitted by `package add` (the one entry) and `package list` (an
+array): `{name, path, scope, status, detail, hooks, shadowed}`. `name` is the package
+name — the `name:` given, or the base name of `path:`; `path` is the directory it
+resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `missing`
+| `broken` (§2.3). `detail` explains a status that is not `ok` and is omitted otherwise,
+`hooks` counts what the package contributes, and `shadowed` marks an entry whose name an
+earlier one already took (HOOK-SPEC §3.5).
+
+**`hookDTO`** — emitted by `hook list` (an array): `{id, event, when, run, package,
+scope}`. `id` is the **effective** id `pkg:<package>:<hook>` (HOOK-SPEC §3.2), so it is
+the value a `hook_denied` error reports and the logs record. `when` is omitted when
+empty. The array is in run order.
 
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
@@ -690,7 +729,7 @@ their output alongside the normal result. On success the JSON carries optional
 prints a structured error:
 
 ```json
-{ "error": "hook_denied", "event": "pre-close", "hook": "tests-before-close",
+{ "error": "hook_denied", "event": "pre-close", "hook": "pkg:repo-policy:tests-before-close",
   "issue_id": "proj-0042", "exit": 1, "reason": "3 unit tests failing",
   "hints": ["run `make fmt` before retrying"] }
 ```
@@ -708,8 +747,9 @@ taskmgr store    move --central [--to N]     # promote the local store here to c
                  move --relink  --to N       # entry N now tracks this directory
 taskmgr config   keys                        # supported keys, both scopes
                  list | get K | set K V | unset K          [--global]
-                 hook add --event E --run A… [--id --when] [--global]
-                 hook list | hook rm ID                    [--global]
+taskmgr package  add <name> [--path]                       [--global]
+                 list                                      [--global]
+taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
