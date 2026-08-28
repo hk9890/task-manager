@@ -20,6 +20,7 @@
 package tasks
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -173,5 +174,80 @@ func TestApplyGlobalConfigToDoc_DefaultsVersionOnAFreshFile(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "version: 1") {
 		t.Errorf("a fresh file must carry version 1:\n%s", got)
+	}
+}
+
+// TestApplyToDoc_WritesEveryModelledField is the guard for the writer's one
+// structural weakness: it names the keys it writes, one call per field, so a
+// field added to Config or GlobalConfig is decoded on read (the YAML tag is
+// enough for that) and then silently dropped on the next write. Nothing else
+// notices — the round trip through the struct looks right, and the value only
+// disappears once someone edits an unrelated key.
+//
+// Each field is filled with a sentinel and the rendered document must carry the
+// field's YAML key. A field whose type this cannot fill fails loudly rather than
+// passing vacuously: extend fillField with the new kind, and make sure the
+// writer handles it.
+func TestApplyToDoc_WritesEveryModelledField(t *testing.T) {
+	t.Run("Config", func(t *testing.T) {
+		var cfg Config
+		keys := fillStruct(t, reflect.ValueOf(&cfg).Elem())
+		got, err := applyConfigToDoc(nil, cfg)
+		if err != nil {
+			t.Fatalf("applyConfigToDoc: %v", err)
+		}
+		assertKeysWritten(t, string(got), keys)
+	})
+
+	t.Run("GlobalConfig", func(t *testing.T) {
+		var cfg GlobalConfig
+		keys := fillStruct(t, reflect.ValueOf(&cfg).Elem())
+		got, err := applyGlobalConfigToDoc(nil, cfg)
+		if err != nil {
+			t.Fatalf("applyGlobalConfigToDoc: %v", err)
+		}
+		assertKeysWritten(t, string(got), keys)
+	})
+}
+
+// fillStruct sets every field of v to a non-zero sentinel and returns the YAML
+// key of each.
+func fillStruct(t *testing.T, v reflect.Value) []string {
+	t.Helper()
+	var keys []string
+	for i := range v.NumField() {
+		field := v.Type().Field(i)
+		key, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if key == "" || key == "-" {
+			t.Fatalf("field %s has no YAML key: a modelled field needs one to survive a round trip", field.Name)
+		}
+		fillField(t, field.Name, v.Field(i))
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func fillField(t *testing.T, name string, f reflect.Value) {
+	t.Helper()
+	switch {
+	case f.Kind() == reflect.String:
+		f.SetString("sentinel-" + strings.ToLower(name))
+	case f.Kind() == reflect.Int:
+		f.SetInt(7)
+	case f.Type() == reflect.TypeOf([]Hook(nil)):
+		f.Set(reflect.ValueOf([]Hook{{ID: "sentinel-hook", Event: eventPreClose, Run: []string{"true"}}}))
+	default:
+		t.Fatalf("field %s has type %s, which this guard cannot fill — extend fillField, "+
+			"and check that the config writer handles the new type", name, f.Type())
+	}
+}
+
+func assertKeysWritten(t *testing.T, doc string, keys []string) {
+	t.Helper()
+	for _, key := range keys {
+		if !strings.Contains(doc, key+":") {
+			t.Errorf("key %q is missing from the written document — the writer names its keys one "+
+				"call at a time, so a new field is read but never written:\n%s", key, doc)
+		}
 	}
 }

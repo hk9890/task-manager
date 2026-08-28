@@ -177,6 +177,14 @@ swapped for in-memory/scripted/fake implementations in tests. Store resolution
 (CONFIG-SPEC) therefore reads `HOME` and the environment **only** through the `env`
 seam — keeping it hermetically testable with no real `HOME` touched — which is why
 the engine, not a front end, can own resolution without sacrificing test isolation.
+
+**A store carries the seams its resolution used**, rather than reaching for the OS
+ones once it is built. A write reads the per-user config through the `env` seam to
+inherit global hooks (HOOK-SPEC §3.5), so a store that swapped in `env.NewOS()`
+after an injected resolution would read the developer's real home — which makes
+that inheritance untestable anywhere else, and quietly undoes the isolation the
+seam exists for.
+
 This confinement is enforced at two levels:
 
 - **Code rule** (`CODING.md`): never import `os`/`syscall` outside `internal/vfs`,

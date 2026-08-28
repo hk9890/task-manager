@@ -301,7 +301,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 				return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 			}
 			project := canonicalize(fs, en.Path, home, croot)
-			s, err := openData(project, dir, fs, sopts)
+			s, err := openData(project, dir, fs, e, sopts)
 			if err != nil {
 				return nil, ResolveInfo{}, err
 			}
@@ -319,7 +319,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	if root, dir, found, err := findLocalStore(fs, start); err != nil {
 		return nil, ResolveInfo{}, err
 	} else if found {
-		s, err := openData(root, dir, fs, sopts)
+		s, err := openData(root, dir, fs, e, sopts)
 		if err != nil {
 			return nil, ResolveInfo{}, err
 		}
@@ -364,7 +364,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 		return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 	}
 	project := canonPaths[idx]
-	s, err := openData(project, dir, fs, sopts)
+	s, err := openData(project, dir, fs, e, sopts)
 	if err != nil {
 		return nil, ResolveInfo{}, err
 	}
@@ -441,7 +441,7 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 		prefix = DerivePrefix(project)
 	}
 	dir := filepath.Join(croot, storesSubdir, name)
-	s, err := initData(project, dir, prefix, fs, opts)
+	s, err := initData(project, dir, prefix, fs, e, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +554,7 @@ func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, o
 		}
 		return nil, err
 	}
-	s, err := openData(project, dst, fs, opts)
+	s, err := openData(project, dst, fs, e, opts)
 	if err != nil {
 		return nil, err
 	}

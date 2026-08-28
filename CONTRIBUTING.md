@@ -37,7 +37,7 @@ Details: [docs/TESTING.md](docs/TESTING.md), which owns the gate.
 The single most important rule: **the SDK (`sdk/tasks`) is the only component
 that writes the store.** The CLI is a thin layer over it. Before touching code,
 read [docs/CODING.md](docs/CODING.md) — it covers the single-writer rule, the
-three-module layout, and which kind of change belongs where.
+two-module layout, and which kind of change belongs where.
 
 ## Keep the docs in sync
 

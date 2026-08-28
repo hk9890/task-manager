@@ -119,3 +119,44 @@ func TestCheckCitations_StillFlagsWhatItIsFor(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckLinks_ChecksATitledLink: a target followed by a title matched the
+// link pattern nowhere, so the link was skipped entirely — a gate that fails
+// open is worse than no gate, because the doc reads as checked.
+func TestCheckLinks_ChecksATitledLink(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "docs", "b.md"), "# Title\n")
+
+	got := checkLinks("docs/a.md", `See [B](gone.md "The Title").`+"\n", root, map[string]map[string]bool{})
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want the dead target reported", got)
+	}
+	if !strings.Contains(got[0].msg, "gone.md") {
+		t.Errorf("finding %q does not name the target", got[0].msg)
+	}
+	// A titled link that resolves is still fine.
+	got = checkLinks("docs/a.md", `See [B](b.md "The Title").`+"\n", root, map[string]map[string]bool{})
+	if len(got) != 0 {
+		t.Errorf("a resolving titled link reported %+v", got)
+	}
+}
+
+// TestResolves_ModuleTagIsTheVersionShapeNotThePrefix: `sdk/vX.Y.Z` names a
+// release tag rather than a path, but exempting everything under `sdk/v`
+// exempted real paths too — `sdk/validate.go` is the letter v.
+func TestResolves_ModuleTagIsTheVersionShapeNotThePrefix(t *testing.T) {
+	root := t.TempDir()
+
+	exempt := []string{"sdk/v0.7.0", "sdk/vX.Y.Z", "sdk/v1.0.0-rc.1"}
+	for _, token := range exempt {
+		if !resolves(root, token) {
+			t.Errorf("%q is a module tag and must be accepted", token)
+		}
+	}
+	// None of these exist under root, and none is a tag.
+	for _, token := range []string{"sdk/validate.go", "sdk/version/build.go", "sdk/v2things.go"} {
+		if resolves(root, token) {
+			t.Errorf("%q is a path, not a tag: it must be checked against disk", token)
+		}
+	}
+}

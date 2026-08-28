@@ -285,3 +285,50 @@ func TestMemStore_FailOn_Lock_MutationFailsClosed(t *testing.T) {
 		t.Errorf("title = %q — the mutation must write nothing when the lock cannot be taken", got.Title)
 	}
 }
+
+// TestMemStore_CrossPartitionDedup_NoDuplicateID covers the cross-partition
+// merge at L2, so the fast gate carries it.
+//
+// The state under test — one issue ID present in both the hot set and closed/ —
+// is what an interrupted close leaves behind, and the Store API cannot produce
+// it. That is a reason to write the files raw, not a reason to need a real
+// filesystem: the seam takes raw bytes just as well. The L3 pair in
+// paging_l3_test.go stays, because it also proves the OS-backed Open path reads
+// such a tree.
+func TestMemStore_CrossPartitionDedup_NoDuplicateID(t *testing.T) {
+	s, m := newMemStore(t)
+	if err := m.MkdirAll(s.closedDir(), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := m.WriteAtomic(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	issue := func(id, title, status string) string {
+		return "---\nid: " + id + "\ntitle: " + title + "\nstatus: " + status +
+			"\ntype: task\npriority: 2\n---\n"
+	}
+
+	write(s.filePath("agt-0001"), issue("agt-0001", "hot only", "open"))
+	// The ghost: the same ID in both partitions, as a close that wrote closed/
+	// but had not yet removed the hot file leaves it.
+	write(s.filePath("agt-0002"), issue("agt-0002", "ghost", "open"))
+	write(s.closedFilePath("agt-0002"), issue("agt-0002", "ghost", "closed"))
+	write(s.closedFilePath("agt-0003"), issue("agt-0003", "closed only", "closed"))
+
+	issues, err := s.List(Filter{IncludeClosed: true})
+	if err != nil {
+		t.Fatalf("List(IncludeClosed=true): %v", err)
+	}
+	seen := map[string]int{}
+	for _, iss := range issues {
+		seen[iss.ID]++
+	}
+	for _, id := range []string{"agt-0001", "agt-0002", "agt-0003"} {
+		if seen[id] != 1 {
+			t.Errorf("ID %q appears %d times, want exactly 1 (full set %v)", id, seen[id], seen)
+		}
+	}
+}

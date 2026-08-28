@@ -46,12 +46,8 @@ func applyConfigToDoc(old []byte, cfg Config) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := setScalar(root, "prefix", cfg.Prefix); err != nil {
-		return nil, err
-	}
-	if err := setScalar(root, "hook_timeout", cfg.HookTimeout); err != nil {
-		return nil, err
-	}
+	setScalar(root, "prefix", cfg.Prefix)
+	setScalar(root, "hook_timeout", cfg.HookTimeout)
 	if err := setHooks(root, cfg.Hooks); err != nil {
 		return nil, err
 	}
@@ -69,17 +65,11 @@ func applyGlobalConfigToDoc(old []byte, cfg GlobalConfig) ([]byte, error) {
 	if version == 0 {
 		version = 1
 	}
-	if err := setNode(root, "version", &yaml.Node{
+	setNode(root, "version", &yaml.Node{
 		Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprintf("%d", version),
-	}); err != nil {
-		return nil, err
-	}
-	if err := setScalar(root, "central_root", cfg.CentralRoot); err != nil {
-		return nil, err
-	}
-	if err := setScalar(root, "hook_timeout", cfg.HookTimeout); err != nil {
-		return nil, err
-	}
+	})
+	setScalar(root, "central_root", cfg.CentralRoot)
+	setScalar(root, "hook_timeout", cfg.HookTimeout)
 	if err := setHooks(root, cfg.Hooks); err != nil {
 		return nil, err
 	}
@@ -130,7 +120,7 @@ func removeKey(mapping *yaml.Node, key string) {
 // setNode assigns value to key, replacing the existing value node in place (so
 // the key keeps its position and any comment attached to it) or appending the
 // pair when the key is new.
-func setNode(mapping *yaml.Node, key string, value *yaml.Node) error {
+func setNode(mapping *yaml.Node, key string, value *yaml.Node) {
 	if i := findKey(mapping, key); i >= 0 {
 		// Carry the old value's comments across: they annotate the setting, not
 		// the value that happened to be there.
@@ -138,23 +128,22 @@ func setNode(mapping *yaml.Node, key string, value *yaml.Node) error {
 		value.LineComment = mapping.Content[i].LineComment
 		value.FootComment = mapping.Content[i].FootComment
 		mapping.Content[i] = value
-		return nil
+		return
 	}
 	mapping.Content = append(mapping.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		value)
-	return nil
 }
 
 // setScalar assigns a string value, or removes the key entirely when the value
 // is empty — the `omitempty` behaviour of the struct tags, applied to a document
 // that is being edited rather than regenerated.
-func setScalar(mapping *yaml.Node, key, value string) error {
+func setScalar(mapping *yaml.Node, key, value string) {
 	if value == "" {
 		removeKey(mapping, key)
-		return nil
+		return
 	}
-	return setNode(mapping, key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
+	setNode(mapping, key, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value})
 }
 
 // setHooks writes the hooks sequence, reusing the original node of any entry
@@ -188,7 +177,8 @@ func setHooks(mapping *yaml.Node, hooks []Hook) error {
 		}
 		seq.Content = append(seq.Content, fresh)
 	}
-	return setNode(mapping, "hooks", seq)
+	setNode(mapping, "hooks", seq)
+	return nil
 }
 
 // matchHookNode returns the first unused original node that decodes to exactly
