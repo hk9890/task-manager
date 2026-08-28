@@ -112,17 +112,21 @@ func loadGlobalConfig(fs vfs.FS, home string) (GlobalConfig, error) {
 // hand-edited anyway; the atomic replace is what keeps a reader from ever seeing
 // a partial document.
 func saveGlobalConfig(fs vfs.FS, home string, cfg GlobalConfig) error {
-	if cfg.Version == 0 {
-		cfg.Version = 1
+	path := filepath.Join(home, globalConfigName)
+	old, err := fs.ReadFile(path)
+	if err != nil && !vfs.IsNotExist(err) {
+		return fmt.Errorf("read global config: %w", err)
 	}
-	data, err := yaml.Marshal(cfg)
+	// Edit the document rather than regenerate it, so unknown keys and comments
+	// survive a write (configdoc.go).
+	data, err := applyGlobalConfigToDoc(old, cfg)
 	if err != nil {
 		return err
 	}
 	if err := fs.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
-	return fs.WriteAtomic(filepath.Join(home, globalConfigName), data, 0o644)
+	return fs.WriteAtomic(path, data, 0o644)
 }
 
 // LoadGlobalConfig reads the per-user configuration (CONFIG-SPEC §2), returning

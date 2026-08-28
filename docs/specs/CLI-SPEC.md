@@ -284,6 +284,12 @@ denial reason reports and `config hook rm` takes, including the defaulted
 Remove the hook with that effective id. An unknown id exits `1` and lists the ids that
 are configured.
 
+**A defaulted id is positional.** `<event>#<index>` is derived from the entry's place in
+the file (HOOK-SPEC §3.2), so removing or inserting an entry renumbers the ones after it:
+remove `pre-create#0` and the former `pre-create#1` becomes `pre-create#0`. A script that
+removes several hooks must re-read `config hook list` between removals, or give the hooks
+an explicit `--id`, which never moves.
+
 ---
 
 ## 3. Read commands

@@ -377,12 +377,19 @@ func (s *Store) globalConfig() (GlobalConfig, error) {
 // internal/storetest). Production code uses defaultNow.
 func (s *Store) SetNow(fn func() time.Time) { s.now = fn }
 
+// writeConfig persists cfg, editing the existing document rather than
+// regenerating it, so unknown keys and comments survive (configdoc.go).
 func (s *Store) writeConfig(cfg Config) error {
-	data, err := yaml.Marshal(cfg)
+	path := filepath.Join(s.dir, ConfigFileName)
+	old, err := s.fs.ReadFile(path)
+	if err != nil && !vfs.IsNotExist(err) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	data, err := applyConfigToDoc(old, cfg)
 	if err != nil {
 		return err
 	}
-	return s.fs.WriteAtomic(filepath.Join(s.dir, ConfigFileName), data, 0o644)
+	return s.fs.WriteAtomic(path, data, 0o644)
 }
 
 func (s *Store) readConfig() (Config, error) {

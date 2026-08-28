@@ -224,11 +224,12 @@ config does not. A gate declared here holds on your machine and nowhere else —
 colleague, not in CI — so it fits personal ergonomics and not an invariant the data
 depends on. Anything in the second category belongs in the store's `config.yaml`.
 
-**Reads never touch it.** The per-user config is read at the same moment the hook set is
-compiled — the first write (§3.4) — so a store that is only queried does not read the
-home at all, and the local walk-up of store resolution stays free of global config
-(CONFIG-SPEC.md §4). A machine with no locatable home simply inherits nothing; that is
-not an error.
+**The hooks block is not read on a read path.** It is loaded where the hook set is
+compiled — the first write (§3.4) — so no query, list or show consults it, and the local
+walk-up of store resolution stays free of global config (CONFIG-SPEC.md §4). This is
+about the *hooks*, not about the file: resolving a **central** store already reads the
+per-user config on every command to find `central_root`, and that is unchanged. A machine
+with no locatable home simply inherits nothing; that is not an error.
 
 ---
 
