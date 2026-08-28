@@ -1,0 +1,41 @@
+version: 1
+
+# task-writing — the body standard, stated in prose and enforced at the gate.
+#
+# The guide fragment is the half that teaches: `taskmgr guide` prints it, so an
+# agent reads the rule before its first create. The hooks are the half that
+# holds: a body that skips a section is refused with the reason. Neither can
+# drift from the other — they ship in one directory, at one version.
+
+# The overview fragment reaches every caller that runs `taskmgr guide`, so it
+# states the rule and names the section that explains it — and stops there. The
+# 1 KiB cap is what keeps it that way.
+overview: ./guide/overview.md
+
+guide:
+  - id: bodies
+    file: ./guide/bodies.md
+
+hooks:
+  # Work types carry Context / Problem / Recommended action / Acceptance
+  # criteria. An epic carries a different four (its own hook, below) and a doc
+  # carries none at all — it holds a document, not a path through work.
+  - id: body-sections
+    event: pre-create
+    when: 'type != "doc" && type != "epic"'
+    run: ["./hooks/body-sections.sh"]
+
+  - id: body-sections-update
+    event: pre-update
+    when: 'type != "doc" && type != "epic"'
+    run: ["./hooks/body-sections.sh"]
+
+  - id: epic-sections
+    event: pre-create
+    when: 'type == "epic"'
+    run: ["./hooks/body-sections.sh", "--epic"]
+
+  - id: epic-sections-update
+    event: pre-update
+    when: 'type == "epic"'
+    run: ["./hooks/body-sections.sh", "--epic"]

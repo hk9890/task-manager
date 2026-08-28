@@ -51,12 +51,30 @@ When a spec is updated, and which one, is
 What this repository has decided not to document, and why. Re-open one here rather than
 filling the gap somewhere else.
 
-- **`cmd/guide.go` does not grow.** The binary ships a hand-maintained how-to
-  (`taskmgr guide`) so an agent in a terminal needs no files at all; that is why it is
-  plain text, links nowhere, and stays short. It overlaps [user-guide/](user-guide/) on the
-  issue model and the everyday loop, deliberately — a user guide that omitted them would
-  not be a guide. The rule that keeps the two from drifting apart is one-directional: new
-  user-facing prose goes to `user-guide/`, and `guideText` only ever changes to stay true.
+- **`cmd/guide.go` grows only by the section.** The binary ships a hand-maintained
+  how-to (`taskmgr guide`) so an agent needs no files at all; that is why it is plain
+  text and links nowhere. It overlaps [user-guide/](user-guide/) on the issue model and
+  the everyday loop, deliberately — a user guide that omitted them would not be a guide.
+  New *user-facing* prose still goes to `user-guide/`, and `guideText` still only ever
+  changes to stay true.
+
+  What replaced the old "does not grow" rule is a budget rather than a ban, because the
+  guide's reader turned out not to be a person in a terminal: it is an agent that pastes
+  the output into its own instructions, so the guide is the skill, and a section it lacks
+  is a step the caller hardcodes instead ([CLI-SPEC §5.1](specs/CLI-SPEC.md#51-guide-topics)).
+
+  Three things hold the size down in its place. **The bare command prints the overview,
+  never the whole guide** — the roster and where to go next — so what every caller pays
+  for is a constant that a new section does not move. The guide is **addressable**, so a
+  section costs only the callers that name it. And a section that is *this project's*
+  convention rather than taskmgr's belongs in a package's guide fragment
+  ([HOOK-SPEC §3.7](specs/HOOK-SPEC.md#37-guide-fragments)), not in the binary.
+
+  The budget that is actually scarce is therefore the **overview**, not the guide. A new
+  core section must be true of every store, name a mechanic of the CLI that a caller would
+  otherwise get wrong, and arrive with its id and one-line summary — the summary is what
+  lands in the overview, so it is the part to write carefully. Anything failing the first
+  test is a fragment.
 - **No prose command reference.** `taskmgr commands` is derived from the live command tree
   and cannot drift; `--help` carries the flags; [CLI-SPEC](specs/CLI-SPEC.md) is the
   normative contract. A fourth copy in a user-guide page would be the only one that could

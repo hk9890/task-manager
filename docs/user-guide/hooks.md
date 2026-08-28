@@ -44,6 +44,66 @@ directory where the reference points — `~/.taskmgr/packages/<name>` for a pack
 everywhere, or a directory inside `.tasks/` for one that belongs to a single project. Copy
 it, clone it, unzip it: `taskmgr` only ever reads it.
 
+## A package can teach as well as refuse
+
+A gate teaches by refusing. The agent files, is denied, reads the reason and retries —
+which works, and costs a round trip for every rule it has not met yet.
+
+Give the package prose and it states the rule up front. There are two places to put it,
+and the difference is when the reader gets it:
+
+```
+doc-policy/
+├── taskmgr-package.yaml
+├── guide/overview.md   ← everyone who runs `taskmgr guide` reads this
+├── guide/paths.md      ← read when someone asks for it
+└── hooks/doc-path.sh
+```
+
+```yaml
+version: 1
+overview: ./guide/overview.md
+guide:
+  - id: paths
+    file: ./guide/paths.md
+hooks:
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["./hooks/doc-path.sh"]
+```
+
+```bash
+taskmgr guide                       # the overview — your overview.md is in it
+taskmgr guide pkg:doc-policy:paths  # your full section
+taskmgr guide packages              # every package's text, and nothing built in
+```
+
+**`overview:` is the one that matters.** `taskmgr guide` with no argument prints the
+overview, and that is what an agent injects into its own instructions before it does
+anything. Text you put there reaches every caller. Keep it to the rule and the command
+that explains it — the 1 KiB cap is there to make sure you do:
+
+> Every issue but a doc carries four sections, and a write without them is refused:
+> `## Context` `## Problem` `## Recommended action` `## Acceptance criteria`.
+> Read `taskmgr guide pkg:doc-policy:paths` before you write a body.
+
+**`guide:` is where the explanation goes** — the contracts, the examples, the reasoning.
+It is capped at 8 KiB and costs nothing until someone asks for it by name.
+
+The prose and the gate ship in one directory at one version, so they cannot drift apart.
+Write the fragment as instructions to whoever files the issue, and say what the gate will
+refuse — a reader who knows the rule does not have to discover it by being denied.
+
+Two more limits are worth knowing. A fragment is a Markdown file **inside** the package,
+and an absolute path is refused — a package has to survive being copied to another
+machine. And nothing about a guide can fail a command: a fragment whose file is missing is
+reported in the output, and `taskmgr guide` still exits `0`. Fail-closed protects a write
+from running without its gate, and a guide is not a gate.
+
+A package may carry prose with no `hooks:` at all — that is the ordinary shape for a
+convention worth stating but not mechanically checkable.
+
 ### Why the script sits next to the manifest
 
 A hook runs with the **project root** as its working directory, so a path written into a

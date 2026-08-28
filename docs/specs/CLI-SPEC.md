@@ -635,7 +635,54 @@ Idempotent.
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
 | `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, and a usage example — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
-| `taskmgr guide` | A compact, workflow-shaped how-to: the issue model, the everyday command loop, the filter language in brief, and where to find more. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with a conformance test keeping its model lists in step with the SDK. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. |
+| `taskmgr guide [topic...]` | A workflow-shaped how-to in named parts: the issue model, the everyday command loop, the filter language, and what this store adds. Bare, it prints the **overview** — the roster and where to go next, not the whole guide. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with conformance tests keeping its model lists and the flags it names in step with the live tree. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. Topics: §5.1 below. |
+
+### 5.1 Guide topics
+
+The guide is in named parts, and a caller takes the part it needs.
+
+**With no argument it prints the overview** — what the tool is, the roster of parts
+with the command that fetches each, and whatever the store's packages put in the
+overview themselves (HOOK-SPEC.md §3.7). Never the whole guide. The reader injects
+this output into its own instructions before it acts, so the no-argument form is
+the small constant every caller can afford, and it names what to fetch next; a
+caller that needs the filter language and one that needs the filing loop do not
+each pay for the other's sections.
+
+The roster is **generated** from the sections the binary carries and the fragments
+the store's packages contribute. A part that exists is therefore always named, which
+is what makes fetch-on-demand safe: a caller can only ask for what the overview told
+it exists.
+
+**With arguments it prints exactly the topics named**, in the order they were named
+— the caller composes the slice it wants rather than accepting this command's order.
+
+| Topic | Selects |
+|---|---|
+| *(none)* | The overview: the roster, and the packages' overview fragments. |
+| a core id | One built-in section. `--list` is the roster as data. |
+| `pkg:<package>:<id>` | One package's fragment, its `overview` one included. |
+| `packages` | Every package fragment at once, and nothing built in. |
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--list` | off | Print the topic roster instead of the guide: id, kind (`core`/`package`), and one line of contents. `--json` gives `guideTopicDTO[]` (§6). |
+
+**This command does not fail on the state of the machine.** No store resolving, a
+`use:` entry naming an uninstalled package, a fragment whose file is missing — each
+is reported in the output, and the exit code stays `0`. The reader is an agent that
+pastes this output into its own instructions before it acts, so a non-zero exit
+denies it the whole guide in order to report one missing part. HOOK-SPEC.md §3.7
+states the rule this is the command surface for: fail-closed protects a write from
+running without its gate, and a guide is not a gate.
+
+Two consequences, both normative:
+
+- **An unknown core topic exits `1`.** No package can make one exist, so naming one
+  is only ever a mistake in the caller, catchable when it is written.
+- **An unknown `pkg:` topic exits `0`** with a line saying it is not available here.
+  Whether a package is installed is a property of the machine, so refusing would
+  turn a colleague's missing install into a failed command.
 
 ---
 
@@ -713,12 +760,20 @@ catalog, so the same array is returned wherever the command runs.
 `configValueDTO[]` and `path` is the file the values came from.
 
 **`packageDTO`** — emitted by `package add` (the one entry) and `package list` (an
-array): `{name, path, scope, status, detail, hooks, shadowed}`. `name` is the package
-name — the `name:` given, or the base name of `path:`; `path` is the directory it
+array): `{name, path, scope, status, detail, hooks, guide, shadowed}`. `name` is the
+package name — the `name:` given, or the base name of `path:`; `path` is the directory it
 resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `missing`
 | `broken` (§2.3). `detail` explains a status that is not `ok` and is omitted otherwise,
-`hooks` counts what the package contributes, and `shadowed` marks an entry whose name an
-earlier one already took (HOOK-SPEC §3.5).
+`hooks` and `guide` count the hooks and the guide fragments the package contributes
+(HOOK-SPEC §3.7), and `shadowed` marks an entry whose name an earlier one already
+took (HOOK-SPEC §3.5).
+
+**`guideTopicDTO`** — emitted by `guide --list` (an array):
+`{id, kind, summary, package, scope, detail}`. `kind` is `core` for a section the
+binary owns and `package` for one a package contributes; `package` and `scope` name
+where a `package` row came from and are omitted for a `core` one; `detail` explains a
+fragment that could not be read. The rows are in print order, so the roster and the
+guide agree about sequence.
 
 **`edgeResultDTO`** — emitted by `dep add`, `dep rm`, `rel add` and `rel rm`:
 `{op, from, to}`. `op` is one of `dep_add` | `dep_remove` | `rel_add` |
@@ -795,7 +850,7 @@ taskmgr comment  rm   <id> <comment-id> [--author]
 taskmgr labels | statuses | types
 taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)
-taskmgr guide                                # workflow how-to (start here)
+taskmgr guide    [topic...] [--list]         # workflow how-to (start here)
 
 Global: --json, -C/--dir <path>, --store-name <name>
 Env:    TASKMGR_HOME, TASKMGR_LOG

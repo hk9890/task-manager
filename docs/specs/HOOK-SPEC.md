@@ -307,6 +307,12 @@ hooks:
 |---|---|---|
 | `version` | no | Manifest schema version; defaults to `1`. |
 | `hooks` | no | The hooks this package contributes, in run order. Entry schema in §3.2. |
+| `guide` | no | The guide sections this package contributes, in print order (§3.7). |
+| `overview` | no | One fragment printed in the guide's **overview**, rather than waiting to be asked for (§3.7). |
+
+Both lists are optional, and a package that sets neither is legal but contributes
+nothing. A package with `guide` alone is the ordinary shape for a convention that
+is taught but not mechanically checkable.
 
 **Resolving `argv[0]` (normative).** When the first element of a hook's `run` is a
 relative path **containing a path separator**, it resolves against the package directory.
@@ -320,11 +326,15 @@ This one rule is what makes a package portable. Without it a hook could name its
 only by absolute path, which differs per machine, and "shipping a gate" would mean
 shipping a path the recipient has to edit.
 
-**A package carries hooks and nothing else.** No `hook_timeout` (§3.1), no `prefix`, no
+**A package sets no configuration.** No `hook_timeout` (§3.1), no `prefix`, no
 `central_root`. The config surface a package could otherwise reach is either
 store-identity (which a package must not touch) or machine policy (which the machine's
 owner sets), and ARCHITECTURE-SPEC.md §10 keeps that surface from growing: a behaviour
 that can be a hook is a hook.
+
+Besides its hooks a package carries the files they run and the prose that explains
+them (§3.7). Neither is configuration: a script and a document change nothing about
+how the store behaves for anyone who has not named the package.
 
 **Packages do not nest.** A manifest may not name other packages. There is therefore no
 cycle detection, no depth limit, and no shared-dependency resolution — a chain is exactly
@@ -335,6 +345,86 @@ one. A program cannot be executed inside an archive, so supporting one would mea
 taskmgr extracting it — and then owning the execute bit it must preserve and the
 path-traversal safety extraction demands. Installing a package is creating the directory
 and putting the manifest and scripts in it.
+
+### 3.7 Guide fragments
+
+A package may contribute **guide fragments**: Markdown files whose text
+`taskmgr guide` prints as part of its own (CLI-SPEC.md §5.1). There are two kinds,
+and the difference is *when the reader gets them*.
+
+```yaml
+version: 1
+overview: ./guide/overview.md      # printed in the overview, every time
+guide:                             # printed when the topic is named
+  - id: bodies
+    file: ./guide/bodies.md
+hooks:
+  - id: body-sections
+    event: pre-create
+    run: ["./hooks/body-sections.sh"]
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. `overview` is reserved (below). |
+| `file` | **yes** | The fragment, as a path **inside** the package directory. |
+
+**The `overview` fragment.** `overview: <file>` declares the fragment printed in
+the guide's overview — the part every caller receives, since it is what an
+unqualified `taskmgr guide` prints. It takes the reserved id `overview`, so its
+effective topic is `pkg:<package>:overview` and a `guide:` entry may not claim
+that id: one id space, one meaning.
+
+It is capped at **1 KiB**, eight times tighter than a section, and the cap is the
+design rather than a limit to work around. This text lands in the context of every
+caller of the guide, including callers with no interest in the subject, so it has
+room to state what the store expects and name the topic that explains it — and no
+room to explain it here. A package that needs more than that is describing a
+section, and `guide:` is where a section goes.
+
+**Why a package teaches as well as gates.** A gate teaches by refusing: the agent
+files, is denied, reads the reason, and retries. That loop works and costs a round
+trip per rule. A fragment states the rule before the first attempt, from the same
+directory and the same version as the hook that enforces it, so prose and gate
+cannot drift apart. The primary caller is the autonomous agent of §1, which reads
+the guide before it does anything — that is the moment a convention is cheapest to
+learn.
+
+**Resolving `file` (normative).** The path resolves against the package directory.
+An **absolute** path is refused, and so is a relative one that climbs out of the
+directory. This is deliberately stricter than a hook's `argv[0]` (§3.6): a fragment
+is a document the package ships, with no `PATH`-lookup meaning to preserve and no
+reason to name anything outside itself, and an absolute path is the
+machine-specific reference the package format exists to avoid.
+
+**When fragments are read.** Entry *validation* — a present id, no `:`, no
+duplicate, a resolvable `file` — happens when the manifest loads, so a malformed
+`guide:` list makes the package broken exactly as a malformed `hooks:` list does
+(§3.4). The **files themselves** are read only when a caller asks for the guide.
+A fragment's content is nothing a mutation depends on, so reading one on the write
+path would be I/O no write needs, and would let an unreadable document stop a write
+its package's hooks were willing to allow.
+
+**A guide never fails.** A package that will not load, a fragment whose file is
+missing, a home that cannot be located — each is reported in the guide's output,
+and the command still succeeds. This is a deliberate exception to the fail-closed
+treatment of §3.4, and the line it draws is: **fail-closed protects a write from
+running without its gate. A guide is not a gate.** The caller is an agent that
+pastes the output into its own instructions before it acts, so a failure here would
+deny it every rule in the guide in order to report one missing document — and one
+broken package on a machine would do that to every project on it.
+
+**Size.** A `guide:` section is capped at **8 KiB**, an `overview` fragment at
+**1 KiB**. Over its cap a fragment is cut at the last line break under it and
+marked as cut, never dropped: the text goes verbatim into a caller's context, so
+an uncapped fragment lets one package spend it all, while a silently absent
+section teaches nothing at all.
+
+**Trust.** A fragment's text reaches an agent's instructions unaltered, so a package
+author writes directly into the reasoning of whoever installs it. That is not a new
+exposure — the same manifest already names programs the store executes (§3.2) — but
+it is why a fragment is printed under a heading naming its package and scope: the
+reader has to be able to tell a convention this store adds from a rule of taskmgr.
 
 ---
 

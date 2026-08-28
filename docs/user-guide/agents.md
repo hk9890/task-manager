@@ -9,10 +9,48 @@ to tell one, and the conventions it can rely on.
 
 > Track work with `taskmgr`. Run `taskmgr guide` first.
 
-`taskmgr guide` prints the issue model, the everyday command loop and the filter language
-as plain text. `taskmgr commands` prints a catalog of every command with its flags and an
-example — derived from the live command tree, so it cannot fall out of date. Both ship
-inside the binary, so an agent with the binary needs no files and no network.
+`taskmgr guide` prints an overview: what the tool is, the parts of the guide, and the one
+command that fetches each. The agent reads the part it needs — `taskmgr guide loop` before
+filing, `taskmgr guide query` before searching. `taskmgr commands` prints a catalog of
+every command with its flags and an example, derived from the live command tree, so it
+cannot fall out of date. Both ship inside the binary, so an agent with the binary needs no
+files and no network.
+
+## Paste the overview into the agent's instructions
+
+The guide is written to be **injected**, not read. Most agent frameworks can run a command
+and paste its output into a prompt before the model sees it, and that is the intended use.
+
+Inject the bare `taskmgr guide`. It is the overview — small, and the same size whatever
+the agent goes on to do — and it names every part of the guide with the command that
+prints it, so the agent fetches the rest when it needs it and never pays for a part it
+does not. That is why the bare command prints an overview and not the whole guide: a
+caller that only files issues should not carry the filter language.
+
+Three properties make this work:
+
+- **The roster is generated.** Every part that exists is named in the overview, including
+  the ones this project's own packages add. An agent can only ask for what it was told
+  about, so nothing is fetchable-but-hidden.
+
+- **It never fails on the state of the machine.** No store, a package that is not
+  installed, an unreadable section — each is reported inside the output and the command
+  still exits `0`. A framework that treats a non-zero exit as "abort" never loses the
+  guide because of a project it happens to be standing in.
+- **It is addressable.** `taskmgr guide --list` names the parts;
+  `taskmgr guide <topic>...` prints only those, in the order you name them. A caller that
+  only files issues asks for `loop`, and pays nothing for the filter language.
+
+```bash
+taskmgr guide                    # the overview — inject this
+taskmgr guide model loop         # just the two an issue-filing agent needs
+taskmgr guide packages           # only this project's own conventions
+taskmgr guide --list             # the same roster as data (--json for JSON)
+```
+
+The one thing that *is* an error is naming a built-in topic that does not exist — no
+install can make it appear, so it is a typo worth catching. Naming a package topic that is
+not installed here prints a line saying so and still exits `0`.
 
 ## The conventions it can rely on
 
@@ -59,6 +97,12 @@ An agent that files and closes its own work will skip a policy that lives in pro
 [Hooks](hooks.md) are the same policy as a gate: `pre-close` runs your check, denies with a
 structured reason, and the agent reads the reason, fixes the work, and retries. That loop
 needs no supervision, and there is no flag to bypass it.
+
+**Teach the rule as well as enforcing it.** A gate alone costs a round trip per rule: the
+agent files, is refused, and tries again. A package that carries a gate can also carry the
+prose explaining it, and `taskmgr guide` prints that prose alongside its own — so the agent
+reads the rule before its first attempt, from the same package and the same version as the
+gate that enforces it. [Hooks](hooks.md) covers how to write one.
 
 ## Keep the tracker out of a repository the agent writes to
 

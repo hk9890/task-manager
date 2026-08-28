@@ -191,8 +191,9 @@ func (s *Store) Config() Config                              // a copy, the use:
 func (s *Store) UpdateConfig(mutate func(*Config) error) error // read-modify-write under the lock
 func (s *Store) SetConfig(cfg Config) error                  // replace the file wholesale
 
-func (s *Store) Packages() ([]PackageInfo, error) // every use: entry that gates this store
-func (s *Store) HookChain() ([]HookInfo, error)   // the effective hook chain, in run order
+func (s *Store) Packages() ([]PackageInfo, error)   // every use: entry that gates this store
+func (s *Store) HookChain() ([]HookInfo, error)     // the effective hook chain, in run order
+func (s *Store) GuideTopics() ([]GuideTopic, error) // the guide fragments those packages contribute
 ```
 
 `Name` reports the registry name the store was opened under — set by `Resolve` for
@@ -212,6 +213,17 @@ will not load; reporting those is what it is for. `HookChain` is the same two li
 resolved into the hooks they contribute, in the order they run ([HOOK-SPEC](HOOK-SPEC.md)
 §3.5), and it does fail when a package will not load, because a chain missing a gate is
 not a chain.
+
+`GuideTopics` is the same two lists resolved into the guide fragments they contribute
+([HOOK-SPEC](HOOK-SPEC.md) §3.7), each with its text already read. A fragment with
+`Overview` set came from the manifest's `overview:` key: it belongs in the guide's
+overview rather than waiting to be asked for, and is held to the tighter
+`MaxGuideOverviewBytes`. It fails on neither
+a package that will not load nor a fragment that cannot be read — an unreadable
+fragment is reported in its own `Detail` — because a caller asking for the guide is
+asking what it can learn, and answering nothing because one document is missing
+teaches it less than the fragments that did load. A broken package is `Packages`' to
+report.
 
 `UpdateConfig` is how a caller changes one key. The read, the mutation and the write
 all happen inside one hold of the store lock, so two processes editing different keys
@@ -363,6 +375,7 @@ type PackageInfo struct {
     Name, Path, Scope string // the package, its directory, and "global" | "store"
     Status, Detail    string // "ok" | "missing" | "broken", and why when it is not ok
     Hooks             int    // how many hooks it contributes
+    Guide             int    // how many guide fragments it contributes
     Shadowed          bool   // an earlier entry already took this name
 }
 
@@ -373,7 +386,25 @@ type HookInfo struct {
     Package, Scope   string   // which package supplied it, and which file named that package
 }
 
+// GuideEntry is one guide section declared in a package manifest (HOOK-SPEC §3.7).
+type GuideEntry struct {
+    ID   string `yaml:"id,omitempty"` // effective topic is "pkg:<package>:<id>"; no ':' in it
+    File string `yaml:"file"`         // a path inside the package directory
+}
+
+// GuideTopic is one fragment with its text read.
+type GuideTopic struct {
+    ID, Package, Scope string // ID is "pkg:<package>:<id>"; Scope is "global" | "store"
+    Overview           bool   // the manifest's overview: fragment, not a guide: entry
+    Path               string // the fragment file on this machine
+    Text, Detail       string // the text, or why it could not be read — never both
+    Truncated          bool   // cut to its cap, on a line boundary
+}
+
 const PackageManifestName = "taskmgr-package.yaml"
+const MaxGuideFragmentBytes = 8 << 10 // a guide: section's cap (HOOK-SPEC §3.7)
+const MaxGuideOverviewBytes = 1 << 10 // an overview: fragment's cap — every caller gets it
+const GuideOverviewID = "overview"    // the reserved id the overview: key declares
 ```
 
 `HookTimeout` and `Use` are read lazily on the first write, not on read, so an unusable
@@ -404,11 +435,18 @@ func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error // read-modify-w
 func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
+func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
 ```
 
 The packages named here contribute hooks **before** a store's own on every mutation, and
 every hook's effective id is `pkg:<package>:<hook>` ([HOOK-SPEC](HOOK-SPEC.md) §3.5), so
-the package that supplied a gate is readable from the id alone.
+the package that supplied a gate is readable from the id alone. Guide fragments follow
+the same order and the same id shape, so a package's prose and its gates are read the
+same way round.
+
+`GlobalGuideTopics` needs no store, so it answers in a directory where nothing
+resolves. That is the case the guide has to serve: an agent runs it before it knows
+whether it is standing in a project at all.
 
 `UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
 home's own lock: the first is a read-modify-write inside it, the second replaces the file

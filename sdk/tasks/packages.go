@@ -48,6 +48,25 @@ const (
 	// "pkg:<package>:<hook>". A declared hook id may not contain it (§3.6), so
 	// the three parts can always be told apart in a denial reason.
 	packageIDSep = ":"
+
+	// MaxGuideFragmentBytes caps one guide fragment (§3.7). The text is written
+	// verbatim into an agent's instructions, so an uncapped fragment lets one
+	// package spend the caller's whole context. A fragment over the cap is
+	// truncated at the last line break under it and marked, never dropped: a
+	// truncated section still teaches, and a silently absent one does not.
+	MaxGuideFragmentBytes = 8 << 10
+
+	// MaxGuideOverviewBytes caps a package's overview fragment — eight times
+	// tighter than a topic, because this text lands in *every* caller's context
+	// rather than in the ones that asked for the subject. The cap is the design:
+	// an overview fragment has room to say what this store expects and which
+	// topic states it, and no room to state it here.
+	MaxGuideOverviewBytes = 1 << 10
+
+	// GuideOverviewID is the reserved fragment id the `overview:` manifest key
+	// declares. A `guide:` entry may not claim it, so "pkg:<package>:overview"
+	// always names the fragment that reaches the overview.
+	GuideOverviewID = "overview"
 )
 
 // PackageRef is one entry of a config file's `use:` list: the package a
@@ -117,8 +136,118 @@ func (r PackageRef) MarshalYAML() (any, error) {
 // extend how long the store lock is held, for every project on the machine
 // (HOOK-SPEC §8).
 type packageManifest struct {
-	Version int    `yaml:"version"`
-	Hooks   []Hook `yaml:"hooks"`
+	Version  int          `yaml:"version"`
+	Hooks    []Hook       `yaml:"hooks"`
+	Guide    []GuideEntry `yaml:"guide"`
+	Overview string       `yaml:"overview"`
+}
+
+// GuideEntry is one guide fragment a package contributes (HOOK-SPEC §3.7): a
+// Markdown file whose text `taskmgr guide` appends to its own, so the package
+// that enforces a convention with a hook can also state it in prose.
+//
+// A gate teaches by refusing: the agent files, is denied, reads the reason and
+// retries. That loop works, and it costs a round trip per rule. A fragment
+// states the rule before the first attempt, from the same directory and the same
+// version as the hook that enforces it, so the two cannot drift apart.
+type GuideEntry struct {
+	// ID is the fragment's label within its package. Required, must not contain
+	// ':', and unique within the manifest — the same rules a hook id follows,
+	// for the same reason: the effective topic "pkg:<package>:<id>" is what a
+	// caller names to select it, so it must keep meaning the same fragment when
+	// the package is replaced.
+	ID string `yaml:"id,omitempty"`
+	// File is the fragment, as a path inside the package directory.
+	File string `yaml:"file"`
+}
+
+// packageGuide is one guide fragment read out of a manifest: the effective topic
+// id, and the fragment's path already resolved against the package directory.
+type packageGuide struct {
+	id   string
+	path string
+	// overview marks the fragment the `overview:` key declared. It reaches the
+	// guide's overview rather than waiting to be asked for, and is capped at
+	// MaxGuideOverviewBytes instead of MaxGuideFragmentBytes.
+	overview bool
+}
+
+// guideFromManifest turns a parsed manifest into the guide fragments it
+// contributes, each id validated and each path resolved against dir.
+//
+// Only the entries are checked here; the files themselves are read when a caller
+// asks for the guide (packageload.go). A manifest is parsed on the write path,
+// where a fragment's *content* is nothing a mutation depends on — reading one
+// there would be I/O no write needs, and would make an unreadable document able
+// to stop a write.
+func guideFromManifest(m packageManifest, name, dir string) ([]packageGuide, error) {
+	out := make([]packageGuide, 0, len(m.Guide)+1)
+	seen := make(map[string]bool, len(m.Guide)+1)
+
+	// The overview fragment comes first, so a reader of the whole set meets what
+	// the store expects before the sections that expand on it.
+	if ov := strings.TrimSpace(m.Overview); ov != "" {
+		path, err := resolveGuideFile(ov, dir)
+		if err != nil {
+			return nil, fmt.Errorf("package %s: overview: %w", name, err)
+		}
+		seen[GuideOverviewID] = true
+		out = append(out, packageGuide{id: packageGuideID(name, GuideOverviewID), path: path, overview: true})
+	}
+
+	for i, g := range m.Guide {
+		declared := strings.TrimSpace(g.ID)
+		if declared == "" {
+			return nil, fmt.Errorf("package %s: guide #%d: id is required (a guide entry has no positional default id)", name, i)
+		}
+		if declared == GuideOverviewID {
+			return nil, fmt.Errorf("package %s: guide id %q is reserved for the overview: key, which declares the fragment printed in the guide's overview", name, GuideOverviewID)
+		}
+		if strings.Contains(declared, packageIDSep) {
+			return nil, fmt.Errorf("package %s: guide %q: id must not contain %q (it separates the parts of the effective topic %q)",
+				name, declared, packageIDSep, packageGuideID(name, "<id>"))
+		}
+		if seen[declared] {
+			return nil, fmt.Errorf("package %s: guide id %q is declared twice", name, declared)
+		}
+		seen[declared] = true
+
+		path, err := resolveGuideFile(g.File, dir)
+		if err != nil {
+			return nil, fmt.Errorf("package %s: guide %q: %w", name, declared, err)
+		}
+		out = append(out, packageGuide{id: packageGuideID(name, declared), path: path})
+	}
+	return out, nil
+}
+
+// resolveGuideFile resolves a fragment's `file` against the package directory.
+//
+// Unlike a hook's argv[0], a fragment path has no PATH-lookup meaning and no
+// reason to name anything outside the package: it is a document the package
+// ships. So an absolute path is refused rather than honoured — it is
+// machine-specific, which is the one thing the package format exists to avoid —
+// and so is a relative path that climbs out of the directory.
+func resolveGuideFile(file, dir string) (string, error) {
+	f := strings.TrimSpace(file)
+	if f == "" {
+		return "", fmt.Errorf("file is required")
+	}
+	if isAbsAnyPlatform(f) {
+		return "", fmt.Errorf("file %q is an absolute path; a guide fragment is a file inside the package", file)
+	}
+	clean := filepath.Clean(filepath.FromSlash(f))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("file %q leaves the package directory", file)
+	}
+	return filepath.Join(dir, clean), nil
+}
+
+// packageGuideID composes the effective topic id a caller names to select one
+// package's fragment. It is the hook id's shape — "pkg:<package>:<id>" — so a
+// denial reason and a guide topic spell the same package the same way.
+func packageGuideID(pkg, id string) string {
+	return "pkg" + packageIDSep + pkg + packageIDSep + id
 }
 
 // packageHook is one hook read out of a package: the entry with its argv already
