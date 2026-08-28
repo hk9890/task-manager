@@ -39,7 +39,8 @@ const guideText = `taskmgr — how to use it
 
 taskmgr is an issue tracker you drive entirely through this CLI — create issues,
 link them, find what is ready to work on, and record progress. It operates on the
-project you run it from; pass -C <path> to target a project elsewhere.
+project you run it from; -C <path> targets a project elsewhere, and
+--store-name <name> one of the stores taskmgr store list reports.
 
 ## The model
 
@@ -151,34 +152,6 @@ carry the blocked status with no open blocker).
 Closed issues are excluded unless the expression selects them or you pass --all.
 taskmgr labels / statuses / types list the values actually in use.
 
-## Working across projects
-
-Each command operates on one store: the .tasks directory found by walking up from
-the working directory, else the central store registered for that project. Stores
-in the central registry are reachable from anywhere by name.
-
-  taskmgr store list                      # every registered store: name, project, path
-  taskmgr where                           # which store this directory resolves to
-  taskmgr --store-name reports ready      # read another project's work
-  taskmgr --store-name reports create --title "Export drops the BOM" --type bug
-
---store-name works on every command, reads and writes alike. Prefer it to
--C <path>: it needs only a name from store list, not the other project's location.
-
-Two things to know before you write into another project:
-
-  IDs belong to one store. A prefix is derived from the project directory name,
-  so two projects with the same directory name share one — keep the store name
-  alongside any ID you carry (reports / rep-fev72z), and never aim an ID from one
-  store at a command targeting another.
-
-  Hooks are the target project's. A write runs the hooks configured in the store
-  you named, with that project's root as the working directory — a create can
-  trigger policy scripts in a repository you are not standing in.
-
-store list reads the central registry only; a project whose store is a local
-.tasks directory is not listed, and is reachable only with -C <path>.
-
 ## Output and exit conventions
 
 Add --json to any command for stable snake_case output — parse that, do not
@@ -196,8 +169,8 @@ var guideCmd = &cobra.Command{
 	Use:   "guide",
 	Short: "Print a short how-to for working with taskmgr (start here)",
 	Long: `Print a compact, workflow-shaped how-to for taskmgr: the issue model, the
-everyday command loop, the filter language in brief, working across projects, and
-where to find more. It is the prose companion to "taskmgr commands" (the machine catalog) and is emitted by
+everyday command loop, the filter language in brief, and where to find more. It is
+the prose companion to "taskmgr commands" (the machine catalog) and is emitted by
 the binary, so it travels with the CLI.
 
 Plain text to stdout; pass --json to wrap it as {"guide": "..."}.`,

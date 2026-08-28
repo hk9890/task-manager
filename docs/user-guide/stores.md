@@ -48,6 +48,32 @@ taskmgr store list     # every registered project → store mapping
 `where` never fails and never writes. Run it whenever you are unsure — especially before a
 command that writes.
 
+## Working on another project's store
+
+`--store-name` is not only the tie-breaker above. It works on every command, read and write
+alike, so any registered store answers from anywhere.
+
+```bash
+taskmgr store list                        # the names to choose from
+taskmgr --store-name reports ready        # read another project's work
+taskmgr --store-name reports create --title "Export drops the BOM" --type bug
+```
+
+Prefer it to `-C <path>`: it takes a name, not the other project's location. This is what
+lets an agent file a bug against a project it is not working in.
+
+Two things change once the store is not the one you are standing in:
+
+- **IDs belong to one store.** The prefix comes from the project directory name, so two
+  projects with the same directory name share one. Keep the store name beside any ID you
+  carry, and pass the two together.
+- **Hooks are the target project's.** A write runs the hooks configured in the store you
+  named, with that project as the working directory, so a `create` can trigger checks in a
+  repository you are not standing in ([Hooks](hooks.md)).
+
+Only central stores are reachable by name. A project tracked by a local `.tasks/` is
+reachable with `-C <path>`, or promote it — below.
+
 ## Moving a store
 
 ```bash
@@ -87,4 +113,5 @@ written only by a command that needs to persist central state.
 
 `$TASKMGR_DIR` is **rejected**, not ignored. It used to point at a store directory; a
 command fails outright if it is set, rather than quietly writing into whichever store the
-walk-up happened to find.
+walk-up happened to find. Unset it, and name the store with `--store-name` or run from
+inside the project.
