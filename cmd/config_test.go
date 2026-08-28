@@ -278,6 +278,54 @@ func TestConfigHook_AddRejectsADuplicateID(t *testing.T) {
 	}
 }
 
+// TestConfigHook_AddRejectsAnIDThatCollidesWithADefaultedOne closes the gap the
+// declared-id-only check left: an id written in the "<event>#<index>" shape can
+// equal another entry's default, and the second hook is then unaddressable by
+// `config hook rm`.
+func TestConfigHook_AddRejectsAnIDThatCollidesWithADefaultedOne(t *testing.T) {
+	root := newStore(t)
+
+	// Direct: an undeclared hook takes "pre-create#0", so declaring that id next
+	// would produce two hooks answering to one name.
+	if _, _, code := run(t, "--dir", root, "config", "hook", "add",
+		"--event", "pre-create", "--run", "/bin/true"); code != 0 {
+		t.Fatal("setup: hook add")
+	}
+	_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
+		"--id", "pre-create#0", "--event", "pre-create", "--run", "/bin/false")
+	if code == 0 {
+		t.Fatal("declaring an id equal to another entry's default must be refused")
+	}
+	if !strings.Contains(errOut, "pre-create#0") {
+		t.Errorf("stderr = %q, want it to name the clashing effective id", errOut)
+	}
+
+	// Via renumbering, which is how this is actually reached: a removal shifts a
+	// later entry onto the index whose default a declared id already uses.
+	root2 := newStore(t)
+	for _, args := range [][]string{
+		{"--id", "gate", "--event", "pre-create", "--run", "/bin/true"},
+		{"--id", "pre-create#1", "--event", "pre-create", "--run", "/bin/true"},
+	} {
+		if _, _, code := run(t, append([]string{"--dir", root2, "config", "hook", "add"}, args...)...); code != 0 {
+			t.Fatal("setup: hook add")
+		}
+	}
+	if _, _, code := run(t, "--dir", root2, "config", "hook", "rm", "gate"); code != 0 {
+		t.Fatal("setup: hook rm")
+	}
+	// "pre-create#1" now sits at index 0, so the next undeclared entry would
+	// default to the same name.
+	_, errOut, code = run(t, "--dir", root2, "config", "hook", "add",
+		"--event", "pre-create", "--run", "/bin/false")
+	if code == 0 {
+		t.Fatal("an undeclared hook whose default collides with a declared id must be refused")
+	}
+	if !strings.Contains(errOut, "pre-create#1") {
+		t.Errorf("stderr = %q, want it to name the clashing effective id", errOut)
+	}
+}
+
 func TestConfigHook_RmUnknownIDListsTheConfiguredOnes(t *testing.T) {
 	root := newStore(t)
 	if _, _, code := run(t, "--dir", root, "config", "hook", "add",

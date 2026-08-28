@@ -422,13 +422,15 @@ an absolute path.`,
 			When:  strings.TrimSpace(configHookAddFlags.when),
 			Run:   configHookAddFlags.run,
 		}
-		// A declared id must be unique within its file, or `config hook rm`
-		// could not name one of the two.
-		if hook.ID != "" {
-			for _, h := range t.hooks() {
-				if h.ID == hook.ID {
-					return fmt.Errorf("a hook with id %q already exists in %s", hook.ID, t.path)
-				}
+		// Effective ids must stay unique within a file, or `config hook rm` could
+		// not name one of the two and the second hook would be unaddressable.
+		// Comparing *effective* ids rather than declared ones is what catches an
+		// id declared in the "<event>#<index>" shape colliding with another
+		// entry's default.
+		newID := tasks.HookID(hook, len(t.hooks()), t.global)
+		for i, h := range t.hooks() {
+			if tasks.HookID(h, i, t.global) == newID {
+				return fmt.Errorf("hook id %q is already in use in %s", newID, t.path)
 			}
 		}
 		t.setHooks(append(t.hooks(), hook))
