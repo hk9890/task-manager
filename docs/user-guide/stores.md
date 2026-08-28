@@ -102,11 +102,23 @@ There is no `unlink` command. The registry is one short YAML file at
 | What | Where |
 |---|---|
 | Your taskmgr home | `~/.taskmgr/`, or `$TASKMGR_HOME` if set (must be an absolute path) |
-| Global config | `<home>/config.yaml` — `central_root` moves the central stores and registry elsewhere |
+| Global config | `<home>/config.yaml` — `central_root`, a fallback `hook_timeout`, and hooks applied to every store on this machine |
 | The registry | `<central_root>/mapping.yaml` |
 | Central stores | `<central_root>/stores/<name>/` |
-| A store's own config | `<store>/config.yaml` — the ID prefix, and hooks |
+| A store's own config | `<store>/config.yaml` — the ID prefix, `hook_timeout`, and this project's hooks |
 | Log level | `$TASKMGR_LOG` = `debug` / `info` / `warn` (default) / `error`, always to stderr |
+
+Both config files are editable by hand and through `taskmgr config`:
+
+```bash
+taskmgr config keys                    # every settable key, and which file it belongs to
+taskmgr config list                    # this store's config, with its path
+taskmgr config list --global           # yours, machine-wide
+taskmgr config set hook_timeout 5m
+```
+
+`--global` selects the per-user file and resolves no store, so it works from any directory.
+Hooks are a list rather than a value and have their own verbs — see [Hooks](hooks.md).
 
 There is no home to create up front: everything has a built-in default, and the files are
 written only by a command that needs to persist central state.
