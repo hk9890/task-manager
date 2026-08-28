@@ -270,7 +270,7 @@ Append one hook to the file's `hooks` block.
 |---|---|---|
 | `--event <e>` | — | **Required.** One of the eight events (HOOK-SPEC §2). |
 | `--run <arg>` | — | **Required, repeatable.** One argv element per occurrence. |
-| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file. |
+| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file and must not contain `#` (HOOK-SPEC §3.2); either violation exits `1` and writes nothing. |
 | `--when <expr>` | — | Filter expression (QUERY-SPEC) scoping the hook to matching issues. |
 
 `--run` is repeatable rather than a single string because hooks are executed directly via
@@ -306,11 +306,6 @@ the file (HOOK-SPEC §3.2), so removing or inserting an entry renumbers the ones
 remove `pre-create#0` and the former `pre-create#1` becomes `pre-create#0`. A script that
 removes several hooks must re-read `config hook list` between removals, or give the hooks
 an explicit `--id`, which never moves.
-
-A removal that would renumber a hook onto an id another entry declares explicitly exits
-`1` and names the shared id, leaving the file unchanged. Two hooks answering to one id
-make the second unaddressable, and a denial reporting that id could not say which of them
-refused; rename the declared one, then remove.
 
 ---
 

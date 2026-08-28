@@ -157,7 +157,7 @@ configuration.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | no | Label used in messages, logs, and the structured denial. Defaults to `<event>#<index>`. |
+| `id` | no | Label used in messages, logs, and the structured denial. Defaults to `<event>#<index>`, where `<index>` is the entry's position in the file's whole `hooks` list. A declared `id` **must not contain `#`**: the character is reserved for the defaulted form, so the two sources of an id can never resolve to the same text. Without the rule a declared `pre-close#1` collides with another entry's default — on removal of an earlier hook the rest renumber onto it — and the second hook is then unaddressable by `config hook rm` and ambiguous in a denial reason. A declared `#` is a config error (§3.4). |
 | `event` | **yes** | One of the eight events (§2). Any other value is a config error (§3.4). |
 | `when` | no | A QUERY-SPEC.md filter expression. The hook runs only if it matches **`new`** (§3.3). Omitted → always. |
 | `run` | **yes** | Non-empty argv array, executed **directly** via `execve` — **no shell**. For shell features use `["sh", "-c", "make lint && make test"]`. |
@@ -192,8 +192,9 @@ parse is a config error (§3.4).
 ### 3.4 Config validation
 
 The `hooks:` block and `hook_timeout` are validated when the store is opened for a
-**write**. If malformed — unknown `event`, empty/missing `run`, unparseable `when` or
-`hook_timeout` — **every mutation fails** with a clear configuration error until fixed
+**write**. If malformed — unknown `event`, empty/missing `run`, a declared `id` containing
+`#` (§3.2), unparseable `when` or `hook_timeout` — **every mutation fails** with a clear
+configuration error naming the offending hook, until fixed
 (fail-closed config; §1 principle 4). **Reads are never affected.** Unknown keys within a hook
 entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
 

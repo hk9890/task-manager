@@ -252,6 +252,16 @@ func compileHook(h Hook, index int, idPrefix string) (compiledHook, error) {
 	if len(h.Run) == 0 || strings.TrimSpace(h.Run[0]) == "" {
 		return compiledHook{}, fmt.Errorf("hook %s: run must be a non-empty argv array", hookLabel(h, index, idPrefix))
 	}
+	// '#' belongs to the defaulted "<event>#<index>" id and nothing else. A
+	// declared id may not contain it, so the two id sources cannot produce the
+	// same text: defaults are numbered over the whole list and are unique among
+	// themselves, so a collision always needs a declared id wearing the default
+	// shape. Without the rule, removing an earlier hook renumbers the rest onto
+	// a declared id and strands the second one — unnameable by `config hook rm`
+	// and ambiguous in a denial reason (HOOK-SPEC §3.2).
+	if strings.Contains(h.ID, "#") {
+		return compiledHook{}, fmt.Errorf("hook %s: declared id must not contain '#' (reserved for the defaulted \"<event>#<index>\" id)", hookLabel(h, index, idPrefix))
+	}
 
 	id := hookLabel(h, index, idPrefix)
 

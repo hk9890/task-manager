@@ -278,51 +278,30 @@ func TestConfigHook_AddRejectsADuplicateID(t *testing.T) {
 	}
 }
 
-// TestConfigHook_AddRejectsAnIDThatCollidesWithADefaultedOne closes the gap the
-// declared-id-only check left: an id written in the "<event>#<index>" shape can
-// equal another entry's default, and the second hook is then unaddressable by
-// `config hook rm`.
-func TestConfigHook_AddRejectsAnIDThatCollidesWithADefaultedOne(t *testing.T) {
-	root := newStore(t)
-
-	// Direct: an undeclared hook takes "pre-create#0", so declaring that id next
-	// would produce two hooks answering to one name.
-	if _, _, code := run(t, "--dir", root, "config", "hook", "add",
-		"--event", "pre-create", "--run", "/bin/true"); code != 0 {
-		t.Fatal("setup: hook add")
-	}
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-		"--id", "pre-create#0", "--event", "pre-create", "--run", "/bin/false")
-	if code == 0 {
-		t.Fatal("declaring an id equal to another entry's default must be refused")
-	}
-	if !strings.Contains(errOut, "pre-create#0") {
-		t.Errorf("stderr = %q, want it to name the clashing effective id", errOut)
-	}
-
-	// Via renumbering, which is how this is actually reached: a removal shifts a
-	// later entry onto the index whose default a declared id already uses.
-	root2 := newStore(t)
-	for _, args := range [][]string{
-		{"--id", "gate", "--event", "pre-create", "--run", "/bin/true"},
-		{"--id", "pre-create#1", "--event", "pre-create", "--run", "/bin/true"},
-	} {
-		if _, _, code := run(t, append([]string{"--dir", root2, "config", "hook", "add"}, args...)...); code != 0 {
-			t.Fatal("setup: hook add")
+// TestConfigHook_AddRejectsAnIDContainingAHash covers the rule that keeps the
+// two id sources disjoint. Before it, an id written in the "<event>#<index>"
+// shape could equal another entry's default — directly, or after a removal
+// renumbered a later entry onto it — and the second hook was then unaddressable
+// by `config hook rm` and ambiguous in a denial reason.
+func TestConfigHook_AddRejectsAnIDContainingAHash(t *testing.T) {
+	for _, id := range []string{"pre-create#0", "pre-create#1", "gate#a"} {
+		root := newStore(t)
+		_, errOut, code := run(t, "--dir", root, "config", "hook", "add",
+			"--id", id, "--event", "pre-create", "--run", "/bin/true")
+		if code == 0 {
+			t.Fatalf("--id %q must be refused: '#' belongs to the defaulted id", id)
 		}
-	}
-	if _, _, code := run(t, "--dir", root2, "config", "hook", "rm", "gate"); code != 0 {
-		t.Fatal("setup: hook rm")
-	}
-	// "pre-create#1" now sits at index 0, so the next undeclared entry would
-	// default to the same name.
-	_, errOut, code = run(t, "--dir", root2, "config", "hook", "add",
-		"--event", "pre-create", "--run", "/bin/false")
-	if code == 0 {
-		t.Fatal("an undeclared hook whose default collides with a declared id must be refused")
-	}
-	if !strings.Contains(errOut, "pre-create#1") {
-		t.Errorf("stderr = %q, want it to name the clashing effective id", errOut)
+		if !strings.Contains(errOut, "#") {
+			t.Errorf("--id %q: stderr = %q, want it to state the rule", id, errOut)
+		}
+		// A refused add writes nothing: the store still has no hooks.
+		out, _, code := run(t, "--dir", root, "config", "hook", "list")
+		if code != 0 {
+			t.Fatalf("--id %q: hook list: exit %d", id, code)
+		}
+		if strings.Contains(out, id) {
+			t.Errorf("--id %q: refused add must write nothing, got %q", id, out)
+		}
 	}
 }
 
@@ -459,43 +438,6 @@ func TestConfigSet_RefusesAnEmptyValue(t *testing.T) {
 }
 
 // ── hook ids stay addressable ────────────────────────────────────────────────
-
-// TestConfigHookRm_RefusesARemovalThatWouldDuplicateAnID: a defaulted id is
-// "<event>#<position>", so removing an earlier hook renumbers the later ones. A
-// removal that lands one of them on an id another hook declares explicitly
-// leaves the second unaddressable, and a denial reason naming that id cannot say
-// which hook refused.
-func TestConfigHookRm_RefusesARemovalThatWouldDuplicateAnID(t *testing.T) {
-	root := newStore(t)
-	add := func(extra ...string) {
-		t.Helper()
-		args := append([]string{"--dir", root, "config", "hook", "add", "--event", "pre-close"}, extra...)
-		if _, errOut, code := run(t, args...); code != 0 {
-			t.Fatalf("hook add %v: exit %d, stderr %q", extra, code, errOut)
-		}
-	}
-	add("--run", "a")                        // defaults to pre-close#0
-	add("--id", "pre-close#1", "--run", "b") // declares the id position 1 would default to
-	add("--run", "c")                        // defaults to pre-close#2
-
-	_, errOut, code := run(t, "--dir", root, "config", "hook", "rm", "pre-close#0")
-	if code == 0 {
-		t.Fatal("a removal that collides two effective ids must be refused")
-	}
-	if !strings.Contains(errOut, "pre-close#1") {
-		t.Errorf("stderr %q does not name the id that would be shared", errOut)
-	}
-
-	out, _, code := run(t, "--dir", root, "config", "hook", "list")
-	if code != 0 {
-		t.Fatalf("hook list: exit %d", code)
-	}
-	for _, want := range []string{"pre-close#0", "pre-close#1", "pre-close#2"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the refused removal changed the file: %q missing from\n%s", want, out)
-		}
-	}
-}
 
 // TestConfigHookRm_RemovesWhenNothingCollides keeps the ordinary path working.
 func TestConfigHookRm_RemovesWhenNothingCollides(t *testing.T) {

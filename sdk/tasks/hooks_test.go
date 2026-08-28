@@ -110,6 +110,8 @@ func TestBuildHookSet_InvalidHooks(t *testing.T) {
 		{"empty run", Hook{Event: "pre-close"}, "non-empty argv"},
 		{"blank program", Hook{Event: "pre-close", Run: []string{"   "}}, "non-empty argv"},
 		{"bad when", Hook{Event: "pre-close", When: "type ==", Run: []string{"x"}}, "invalid when"},
+		{"declared id in the defaulted shape", Hook{ID: "pre-close#0", Event: "pre-close", Run: []string{"x"}}, "must not contain '#'"},
+		{"declared id with a hash anywhere", Hook{ID: "gate#a", Event: "pre-close", Run: []string{"x"}}, "must not contain '#'"},
 	}
 	for _, c := range cases {
 		_, err := buildHookSet(GlobalConfig{}, Config{Prefix: "x", Hooks: []Hook{c.hook}})
@@ -178,5 +180,27 @@ func TestStoreHooks_LazyBuildAndCache(t *testing.T) {
 	// A read still works despite the malformed config.
 	if _, err := s.All(); err != nil {
 		t.Fatalf("read All() must be unaffected by malformed hooks: %v", err)
+	}
+}
+
+// A config file written by hand can still declare an id containing '#'; the
+// compile refuses it. The refusal lands on the write path only, so the store
+// stays readable while the file is repaired.
+func TestStoreHooks_DeclaredIDWithAHashFailsWritesNotReads(t *testing.T) {
+	s, err := InitWithVFS("/", "x", vfs.NewMem())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Hooks = []Hook{{ID: "pre-create#1", Event: "pre-create", Run: []string{"/bin/true"}}}
+
+	_, err = s.Create(CreateInput{Title: "blocked by a bad config"})
+	if err == nil {
+		t.Fatal("a declared id containing '#' must fail the write")
+	}
+	if !strings.Contains(err.Error(), "pre-create#1") || !strings.Contains(err.Error(), "'#'") {
+		t.Errorf("error %q must name the id and the rule", err)
+	}
+	if _, err := s.All(); err != nil {
+		t.Fatalf("read All() must be unaffected: %v", err)
 	}
 }

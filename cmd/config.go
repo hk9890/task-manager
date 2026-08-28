@@ -422,9 +422,9 @@ pass the shell explicitly:
 --when takes a filter expression (QUERY-SPEC) evaluated against the candidate
 issue; omitted, the hook runs for every occurrence of its event.
 
-The working directory of a hook is always the project root, so a relative path in
-a --global hook resolves against whichever project it runs in: give a global hook
-an absolute path.`,
+The working directory of a hook is the project root, so a relative path in a
+--global hook resolves against whichever project it runs in: give a global hook an
+absolute path.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(configHookAddFlags.event) == "" {
@@ -432,6 +432,12 @@ an absolute path.`,
 		}
 		if len(configHookAddFlags.run) == 0 {
 			return &usageError{cmd: cmd, msg: "--run is required (repeat it once per argv element)"}
+		}
+		// The hook compile rejects this too, but that happens on the next write:
+		// without the guard here `add` would save a config file that then fails
+		// every mutation until it is hand-edited.
+		if strings.Contains(configHookAddFlags.id, "#") {
+			return &usageError{cmd: cmd, msg: `--id must not contain '#' (reserved for the defaulted "<event>#<index>" id)`}
 		}
 		t, err := loadConfigTarget(configFlags.global)
 		if err != nil {
@@ -447,9 +453,8 @@ an absolute path.`,
 		if err := t.update(func(t *configTarget) error {
 			// Effective ids must stay unique within a file, or `config hook rm`
 			// could not name one of the two and the second hook would be
-			// unaddressable. Comparing *effective* ids rather than declared ones is
-			// what catches an id declared in the "<event>#<index>" shape colliding
-			// with another entry's default.
+			// unaddressable. Since a declared id cannot contain '#', the only
+			// remaining way to collide is two entries declaring the same id.
 			id = tasks.HookID(hook, len(t.hooks()), t.global)
 			for i, h := range t.hooks() {
 				if tasks.HookID(h, i, t.global) == id {
@@ -529,16 +534,6 @@ var configHookRmCmd = &cobra.Command{
 				}
 				return fmt.Errorf("no hook %q in %s — configured: %s", args[0], t.path, strings.Join(known, ", "))
 			}
-			// A default id is "<event>#<position>", so removing an entry renumbers
-			// every later one. `config hook add` refuses a collision at the moment
-			// it would be created; a removal can create the same collision without
-			// touching either hook, and then one of the two is unaddressable and a
-			// denial reason cannot say which refused.
-			if dup, ok := duplicateHookID(kept, t.global); ok {
-				return fmt.Errorf("removing %q would leave two hooks sharing the effective id %q in %s — "+
-					"one declares that id, the other would default to it. Give the declared one a different id first",
-					args[0], dup, t.path)
-			}
 			t.setHooks(kept)
 			return nil
 		}); err != nil {
@@ -553,20 +548,6 @@ var configHookRmCmd = &cobra.Command{
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-// duplicateHookID reports the first effective id two hooks of one file would
-// share (HOOK-SPEC §3.5).
-func duplicateHookID(hooks []tasks.Hook, global bool) (string, bool) {
-	seen := make(map[string]bool, len(hooks))
-	for i, h := range hooks {
-		id := tasks.HookID(h, i, global)
-		if seen[id] {
-			return id, true
-		}
-		seen[id] = true
-	}
-	return "", false
-}
 
 func hookDTO(h tasks.Hook, id, scope string) configHookDTO {
 	return configHookDTO{ID: id, Scope: scope, Event: h.Event, When: h.When, Run: h.Run}

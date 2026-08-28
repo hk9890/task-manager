@@ -24,6 +24,10 @@ or a `&&`, ask for a shell: `--run sh --run -c --run 'make lint && make test'`.
 ([Filtering and search](queries.md)), evaluated against the issue *as it would be after the
 change*. It scopes a hook; it does not decide which event fires.
 
+`--id` is optional: a hook without one is named `<event>#<index>` after its place in the
+list, which is the name `hook rm` and every message use. An id you write yourself must not
+contain `#`, so that it can never collide with a name given out that way.
+
 `taskmgr config hook --help` has the rest. Every write is validated before a byte lands, so
 a malformed hook is refused by the command that wrote it rather than by your next `close`.
 

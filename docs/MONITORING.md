@@ -32,6 +32,11 @@ Every hook invocation emits one `hook` record regardless of outcome — only the
 level and `decision` differ — so allow/deny/warn/error are one query away from
 each other.
 
+A `hook` value beginning `global:` names a hook inherited from the per-user config
+([HOOK-SPEC](specs/HOOK-SPEC.md) §3.5), not the store's own. The two files number
+their entries independently, so `global:doc-needs-path` and `doc-needs-path` are
+different hooks in different files — group on the whole value, never on the suffix.
+
 ### What `write` covers
 
 `write` is keyed on the **lifecycle transition** ([HOOK-SPEC](specs/HOOK-SPEC.md)
