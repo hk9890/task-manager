@@ -412,6 +412,12 @@ an absolute path.`,
 		if len(configHookAddFlags.run) == 0 {
 			return &usageError{cmd: cmd, msg: "--run is required (repeat it once per argv element)"}
 		}
+		// The hook compile rejects this too, but that happens on the next write:
+		// without the guard here `add` would save a config file that then fails
+		// every mutation until it is hand-edited.
+		if strings.Contains(configHookAddFlags.id, "#") {
+			return &usageError{cmd: cmd, msg: `--id must not contain '#' (reserved for the defaulted "<event>#<index>" id)`}
+		}
 		t, err := loadConfigTarget(configHookAddFlags.global)
 		if err != nil {
 			return err
@@ -424,9 +430,8 @@ an absolute path.`,
 		}
 		// Effective ids must stay unique within a file, or `config hook rm` could
 		// not name one of the two and the second hook would be unaddressable.
-		// Comparing *effective* ids rather than declared ones is what catches an
-		// id declared in the "<event>#<index>" shape colliding with another
-		// entry's default.
+		// Since a declared id cannot contain '#', the only remaining way to
+		// collide is two entries declaring the same id.
 		newID := tasks.HookID(hook, len(t.hooks()), t.global)
 		for i, h := range t.hooks() {
 			if tasks.HookID(h, i, t.global) == newID {
