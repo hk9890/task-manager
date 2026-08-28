@@ -39,12 +39,16 @@ that writes the store.** The CLI is a thin layer over it. Before touching code,
 read [docs/CODING.md](docs/CODING.md) — it covers the single-writer rule, the
 three-module layout, and which kind of change belongs where.
 
-## Keep the specs in sync
+## Keep the docs in sync
 
 The behaviour of the CLI, SDK, storage format, query language, hooks, and config
 is specified under [docs/specs/](docs/specs/). If you change behaviour, update the
 relevant spec in the same change — the conformance tests check the code against
-the specs.
+the specs. A change a user would notice also updates the page covering it in
+[docs/user-guide/](docs/user-guide/README.md).
+
+`mise run check:docs` is the gate over the doc set; it runs inside `quality`.
+Conventions: [docs/DOCUMENTING.md](docs/DOCUMENTING.md).
 
 ## Pull requests
 
