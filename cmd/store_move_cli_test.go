@@ -481,6 +481,12 @@ func TestL4_StorePathFlagRemoved(t *testing.T) {
 	if !strings.Contains(errOut, "TASKMGR_DIR") || !strings.Contains(errOut, "no longer supported") {
 		t.Errorf("stderr = %q, want it to name TASKMGR_DIR and say it is withdrawn", errOut)
 	}
+	// The way out it offers must be a flag that exists: it read "--store" until
+	// the flag it meant was named --store-name, so the advice dead-ended in an
+	// unknown-flag error.
+	if !strings.Contains(errOut, "--store-name") {
+		t.Errorf("stderr = %q, want it to name the --store-name flag", errOut)
+	}
 
 	// A write is refused for the same reason: it must never land in the store
 	// the walk-up finds while the caller believes TASKMGR_DIR chose one.

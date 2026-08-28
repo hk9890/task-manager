@@ -39,7 +39,8 @@ const guideText = `taskmgr — how to use it
 
 taskmgr is an issue tracker you drive entirely through this CLI — create issues,
 link them, find what is ready to work on, and record progress. It operates on the
-project you run it from; pass -C <path> to target a project elsewhere.
+project you run it from; -C <path> targets a project elsewhere, and
+--store-name <name> one of the stores taskmgr store list reports.
 
 ## The model
 
