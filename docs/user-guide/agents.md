@@ -14,6 +14,32 @@ as plain text. `taskmgr commands` prints a catalog of every command with its fla
 example — derived from the live command tree, so it cannot fall out of date. Both ship
 inside the binary, so an agent with the binary needs no files and no network.
 
+## Paste the guide into the agent's instructions
+
+The guide is written to be **injected**, not read. Most agent frameworks can run a command
+and paste its output into a prompt before the model sees it, and that is the intended use:
+the agent starts holding the rules instead of being told where to find them.
+
+Two properties make that safe:
+
+- **It never fails on the state of the machine.** No store, a package that is not
+  installed, an unreadable section — each is reported inside the output and the command
+  still exits `0`. A framework that treats a non-zero exit as "abort" never loses the
+  guide because of a project it happens to be standing in.
+- **It is addressable.** `taskmgr guide --list` names the parts;
+  `taskmgr guide <topic>...` prints only those, in the order you name them. A caller that
+  only files issues asks for `loop`, and pays nothing for the filter language.
+
+```bash
+taskmgr guide --list             # what the parts are
+taskmgr guide model loop         # just the two an issue-filing agent needs
+taskmgr guide packages           # only this project's own conventions
+```
+
+The one thing that *is* an error is naming a built-in topic that does not exist — no
+install can make it appear, so it is a typo worth catching. Naming a package topic that is
+not installed here prints a line saying so and still exits `0`.
+
 ## The conventions it can rely on
 
 - **`--json` on any command** gives stable `snake_case` output. Parse that; never scrape
@@ -59,6 +85,12 @@ An agent that files and closes its own work will skip a policy that lives in pro
 [Hooks](hooks.md) are the same policy as a gate: `pre-close` runs your check, denies with a
 structured reason, and the agent reads the reason, fixes the work, and retries. That loop
 needs no supervision, and there is no flag to bypass it.
+
+**Teach the rule as well as enforcing it.** A gate alone costs a round trip per rule: the
+agent files, is refused, and tries again. A package that carries a gate can also carry the
+prose explaining it, and `taskmgr guide` prints that prose alongside its own — so the agent
+reads the rule before its first attempt, from the same package and the same version as the
+gate that enforces it. [Hooks](hooks.md) covers how to write one.
 
 ## Keep the tracker out of a repository the agent writes to
 

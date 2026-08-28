@@ -195,7 +195,7 @@ func (s *Store) hooks() (*hookSet, error) {
 		s.hookErr = err
 		return nil, s.hookErr
 	}
-	s.hookSet, s.hookErr = buildHookSet(global.HookTimeout, s.cfg.HookTimeout, chain)
+	s.hookSet, s.hookErr = buildHookSet(global.HookTimeout, s.cfg.HookTimeout, chain.hooks)
 	return s.hookSet, s.hookErr
 }
 
@@ -446,11 +446,28 @@ func (s *Store) HookChain() ([]HookInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	hooks, infos, err := packageChain(s.fs, s.env, s.dir, global, s.Config())
+	chain, infos, err := packageChain(s.fs, s.env, s.dir, global, s.Config())
 	if err != nil {
 		return nil, err
 	}
-	return hookInfos(hooks, infos), nil
+	return hookInfos(chain.hooks, infos), nil
+}
+
+// GuideTopics reports the guide fragments contributed by every package that
+// applies to this store — the per-user config's first, then the store's, each
+// package's fragments in manifest order (HOOK-SPEC §3.7).
+//
+// It never fails on a package that will not load, and never on a fragment that
+// cannot be read: a caller asking for the guide is asking what it can learn, and
+// answering "nothing, because one entry is broken" teaches it less than the
+// fragments that did load. A package's trouble is `package list`'s to report.
+func (s *Store) GuideTopics() ([]GuideTopic, error) {
+	global, err := s.globalConfig()
+	if err != nil {
+		return nil, err
+	}
+	chain, infos, _ := packageChain(s.fs, s.env, s.dir, global, s.Config())
+	return guideTopics(s.fs, chain.guide, infos), nil
 }
 
 // InspectPackage reports what one `use:` entry would resolve to for this store,

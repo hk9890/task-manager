@@ -44,6 +44,54 @@ directory where the reference points — `~/.taskmgr/packages/<name>` for a pack
 everywhere, or a directory inside `.tasks/` for one that belongs to a single project. Copy
 it, clone it, unzip it: `taskmgr` only ever reads it.
 
+## A package can teach as well as refuse
+
+A gate teaches by refusing. The agent files, is denied, reads the reason and retries —
+which works, and costs a round trip for every rule it has not met yet.
+
+Add a `guide:` list and the package states the rule up front. `taskmgr guide` prints the
+text after its own sections, so whoever reads the guide before starting has the rule
+already:
+
+```
+doc-policy/
+├── taskmgr-package.yaml
+├── guide/paths.md
+└── hooks/doc-path.sh
+```
+
+```yaml
+version: 1
+guide:
+  - id: paths
+    file: ./guide/paths.md
+hooks:
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["./hooks/doc-path.sh"]
+```
+
+```bash
+taskmgr guide                       # your text, after the built-in sections
+taskmgr guide pkg:doc-policy:paths  # just yours
+taskmgr guide packages              # every package's text, and nothing built in
+```
+
+The prose and the gate ship in one directory at one version, so they cannot drift apart.
+Write the fragment as instructions to whoever files the issue, and say what the gate will
+refuse — a reader who knows the rule does not have to discover it by being denied.
+
+Three limits are worth knowing. A fragment is a Markdown file **inside** the package, and
+an absolute path is refused — a package has to survive being copied to another machine. It
+is capped at 8 KiB, cut on a line boundary and marked, because the text lands in a
+reader's context whole. And nothing about a guide can fail a command: a fragment whose
+file is missing is reported in the output, and `taskmgr guide` still exits `0`. Fail-closed
+protects a write from running without its gate, and a guide is not a gate.
+
+A package may carry `guide:` with no `hooks:` at all — that is the ordinary shape for a
+convention worth stating but not mechanically checkable.
+
 ### Why the script sits next to the manifest
 
 A hook runs with the **project root** as its working directory, so a path written into a

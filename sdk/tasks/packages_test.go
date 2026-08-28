@@ -257,8 +257,8 @@ func TestPackageChain_AFailedEntryDoesNotShadowAWorkingOne(t *testing.T) {
 	if infos[1].Status != PackageOK || infos[1].Hooks != 1 {
 		t.Errorf("the working package must load: %+v", infos[1])
 	}
-	if len(hooks) != 1 {
-		t.Errorf("the working package must contribute its hook, got %d", len(hooks))
+	if len(hooks.hooks) != 1 {
+		t.Errorf("the working package must contribute its hook, got %d", len(hooks.hooks))
 	}
 }
 

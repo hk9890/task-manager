@@ -45,6 +45,7 @@ type packageDTO struct {
 	Status   string `json:"status"`
 	Detail   string `json:"detail,omitempty"`
 	Hooks    int    `json:"hooks"`
+	Guide    int    `json:"guide"`
 	Shadowed bool   `json:"shadowed,omitempty"`
 }
 
@@ -209,13 +210,13 @@ store.`,
 			return nil
 		}
 		w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "NAME\tSCOPE\tSTATUS\tHOOKS\tPATH")
+		_, _ = fmt.Fprintln(w, "NAME\tSCOPE\tSTATUS\tHOOKS\tGUIDE\tPATH")
 		for _, p := range out {
 			status := p.Status
 			if p.Shadowed {
 				status = "shadowed"
 			}
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", p.Name, p.Scope, status, p.Hooks, p.Path)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n", p.Name, p.Scope, status, p.Hooks, p.Guide, p.Path)
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -299,7 +300,7 @@ logs record.`,
 func packageInfoDTO(in tasks.PackageInfo) packageDTO {
 	return packageDTO{
 		Name: in.Name, Path: in.Path, Scope: in.Scope,
-		Status: in.Status, Detail: in.Detail, Hooks: in.Hooks, Shadowed: in.Shadowed,
+		Status: in.Status, Detail: in.Detail, Hooks: in.Hooks, Guide: in.Guide, Shadowed: in.Shadowed,
 	}
 }
 

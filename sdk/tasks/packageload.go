@@ -65,6 +65,9 @@ type PackageInfo struct {
 	Detail string
 	// Hooks is the number of hooks the package contributes; 0 unless ok.
 	Hooks int
+	// Guide is the number of guide fragments the package contributes; 0 unless
+	// ok (HOOK-SPEC §3.7).
+	Guide int
 	// Shadowed reports an entry whose name was already taken by an earlier one,
 	// so it contributes nothing (HOOK-SPEC §3.5).
 	Shadowed bool
@@ -92,29 +95,41 @@ const (
 	scopeStore  = "store"
 )
 
-// loadPackage reads one package directory and returns the hooks it contributes.
+// loadedPackage is what one package directory contributes: the hooks that gate a
+// write, and the guide fragments that describe them (HOOK-SPEC §3.6, §3.7).
+type loadedPackage struct {
+	hooks []packageHook
+	guide []packageGuide
+}
+
+// loadPackage reads one package directory and returns what it contributes.
 // A directory that is not there, or that holds no usable manifest, is an error:
 // a `use:` entry names a package the configuration depends on, so a mutation
 // fails closed rather than running with a gate silently absent (HOOK-SPEC §1
 // principle 4).
-func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
+//
+// Guide entries are validated here and their files are *not* read: a fragment is
+// documentation, and nothing a mutation depends on. Reading one on the write
+// path would be I/O no write needs, and would let an unreadable document stop a
+// write that its package's hooks were willing to allow.
+func loadPackage(fs vfs.FS, dir, name string) (loadedPackage, error) {
 	data, err := fs.ReadFile(filepath.Join(dir, PackageManifestName))
 	if err != nil {
 		if vfs.IsNotExist(err) {
 			if _, serr := fs.Stat(dir); serr != nil && vfs.IsNotExist(serr) {
-				return nil, fmt.Errorf("package %q is not installed: nothing at %s: %w", name, dir, ErrPackageMissing)
+				return loadedPackage{}, fmt.Errorf("package %q is not installed: nothing at %s: %w", name, dir, ErrPackageMissing)
 			}
-			return nil, fmt.Errorf("package %q at %s has no %s", name, dir, PackageManifestName)
+			return loadedPackage{}, fmt.Errorf("package %q at %s has no %s", name, dir, PackageManifestName)
 		}
-		return nil, fmt.Errorf("package %q: read %s: %w", name, PackageManifestName, err)
+		return loadedPackage{}, fmt.Errorf("package %q: read %s: %w", name, PackageManifestName, err)
 	}
 	m, err := parsePackageManifest(data, dir)
 	if err != nil {
-		return nil, err
+		return loadedPackage{}, err
 	}
 	hooks, err := hooksFromManifest(m, name, dir)
 	if err != nil {
-		return nil, err
+		return loadedPackage{}, err
 	}
 	// Compile every hook here, so "loaded" means "will run". Deferring the event,
 	// run and when checks to buildHookSet made `package list` and `hook list`
@@ -122,10 +137,14 @@ func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
 	// reader reaches for precisely when writes have stopped.
 	for _, ph := range hooks {
 		if _, err := compileHook(ph.hook, ph.id); err != nil {
-			return nil, err
+			return loadedPackage{}, err
 		}
 	}
-	return hooks, nil
+	guide, err := guideFromManifest(m, name, dir)
+	if err != nil {
+		return loadedPackage{}, err
+	}
+	return loadedPackage{hooks: hooks, guide: guide}, nil
 }
 
 // collectUse resolves one config file's `use:` list into the hooks it
@@ -139,11 +158,11 @@ func loadPackage(fs vfs.FS, dir, name string) ([]packageHook, error) {
 // The []PackageInfo is complete whether or not an error is returned, so
 // `package list` can report every entry while a mutation stops at the first one
 // that will not load.
-func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, seen map[string]string) ([]packageHook, []PackageInfo, error) {
+func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, seen map[string]string) (loadedPackage, []PackageInfo, error) {
 	var (
-		hooks []packageHook
-		infos []PackageInfo
-		first error
+		loaded loadedPackage
+		infos  []PackageInfo
+		first  error
 	)
 	for _, ref := range refs {
 		dir, name, err := packageDir(ref, home, configDir)
@@ -179,7 +198,7 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 			continue
 		}
 
-		phs, err := loadPackage(fs, dir, name)
+		lp, err := loadPackage(fs, dir, name)
 		if err != nil {
 			info.Status = PackageBroken
 			if errors.Is(err, ErrPackageMissing) {
@@ -212,11 +231,13 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 		seen[dir], seen[name] = dir, dir
 
 		info.Status = PackageOK
-		info.Hooks = len(phs)
+		info.Hooks = len(lp.hooks)
+		info.Guide = len(lp.guide)
 		infos = append(infos, info)
-		hooks = append(hooks, phs...)
+		loaded.hooks = append(loaded.hooks, lp.hooks...)
+		loaded.guide = append(loaded.guide, lp.guide...)
 	}
-	return hooks, infos, first
+	return loaded, infos, first
 }
 
 // packageChain resolves both `use:` lists into the effective hook chain: the
@@ -225,7 +246,7 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 //
 // A home that cannot be located is not an error — there is then simply nothing
 // machine-wide to inherit, exactly as before packages existed.
-func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalConfig, cfg Config) ([]packageHook, []PackageInfo, error) {
+func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalConfig, cfg Config) (loadedPackage, []PackageInfo, error) {
 	// A home that cannot be located is not an error in itself — there is then
 	// nothing machine-wide to inherit. It only becomes one for an entry that
 	// needs it, which packageDir reports per entry rather than by substituting a
@@ -234,23 +255,25 @@ func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalCo
 
 	seen := make(map[string]string)
 	var (
-		hooks []packageHook
-		infos []PackageInfo
+		loaded loadedPackage
+		infos  []PackageInfo
 	)
 
-	gh, gi, gerr := collectUse(fs, global.Use, home, home, scopeGlobal, seen)
-	hooks, infos = append(hooks, gh...), append(infos, gi...)
+	gl, gi, gerr := collectUse(fs, global.Use, home, home, scopeGlobal, seen)
+	loaded.hooks, loaded.guide = append(loaded.hooks, gl.hooks...), append(loaded.guide, gl.guide...)
+	infos = append(infos, gi...)
 
 	// Both lists are always walked. Returning at the first failing per-user entry
 	// dropped every store row from the listing — in exactly the state where a
 	// reader needs them, since that listing is the documented way out.
-	sh, si, serr := collectUse(fs, cfg.Use, home, storeDir, scopeStore, seen)
-	hooks, infos = append(hooks, sh...), append(infos, si...)
+	sl, si, serr := collectUse(fs, cfg.Use, home, storeDir, scopeStore, seen)
+	loaded.hooks, loaded.guide = append(loaded.hooks, sl.hooks...), append(loaded.guide, sl.guide...)
+	infos = append(infos, si...)
 
 	if gerr != nil {
-		return hooks, infos, gerr
+		return loaded, infos, gerr
 	}
-	return hooks, infos, serr
+	return loaded, infos, serr
 }
 
 // hookInfos turns a resolved chain into the reportable form, tagging each hook
@@ -315,4 +338,98 @@ func inspectRef(fs vfs.FS, ref PackageRef, home, configDir, scope string) Packag
 		return infos[0]
 	}
 	return PackageInfo{Name: ref.Name, Path: ref.Path, Scope: scope, Status: PackageBroken}
+}
+
+// GuideTopic is one guide fragment a package contributes, with its text already
+// read (HOOK-SPEC §3.7). It is what `taskmgr guide` appends to its own sections.
+//
+// A topic is reported whether or not its file could be read: Detail explains a
+// fragment that is missing or unreadable, and Text is then empty. Nothing about
+// a guide is allowed to fail the caller — a guide is not a gate, and a document
+// that cannot be read is a smaller problem than a command that will not run.
+type GuideTopic struct {
+	// ID is the effective topic id, "pkg:<package>:<id>" — what a caller names
+	// to select this fragment alone.
+	ID string
+	// Package is the package that contributes the fragment.
+	Package string
+	// Scope is "global" or "store": which config file's `use:` list brought the
+	// package in.
+	Scope string
+	// Path is the fragment file on this machine.
+	Path string
+	// Text is the fragment, empty when Detail is set.
+	Text string
+	// Detail explains a fragment that could not be read; empty when Text is good.
+	Detail string
+	// Truncated reports a fragment cut down to MaxGuideFragmentBytes. The text is
+	// whole lines, so a caller can print it as it stands; saying that it was cut
+	// is the caller's to render.
+	Truncated bool
+}
+
+// readGuideFragment reads one fragment through the disk seam and caps it.
+//
+// The cut falls at the last line break under the cap so the text stays whole
+// lines: a fragment is Markdown, and a document severed mid-sentence reads as
+// though the author meant it.
+func readGuideFragment(fs vfs.FS, path string) (text string, truncated bool, err error) {
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	if len(data) <= MaxGuideFragmentBytes {
+		return string(data), false, nil
+	}
+	cut := string(data[:MaxGuideFragmentBytes])
+	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
+		cut = cut[:i+1]
+	}
+	return cut, true, nil
+}
+
+// guideTopics reads every fragment of a resolved chain, tagging each with the
+// config file whose `use:` list brought its package in.
+func guideTopics(fs vfs.FS, guide []packageGuide, infos []PackageInfo) []GuideTopic {
+	scopeOf := make(map[string]string, len(infos))
+	for _, in := range infos {
+		if !in.Shadowed && in.Status == PackageOK {
+			scopeOf[in.Name] = in.Scope
+		}
+	}
+	out := make([]GuideTopic, 0, len(guide))
+	for _, pg := range guide {
+		pkg := packageOfID(pg.id)
+		t := GuideTopic{ID: pg.id, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
+		text, truncated, err := readGuideFragment(fs, pg.path)
+		if err != nil {
+			t.Detail = err.Error()
+		} else {
+			t.Text, t.Truncated = text, truncated
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// GlobalGuideTopics reports the guide fragments contributed by the per-user
+// config's packages (CONFIG-SPEC §2). It needs no store, so it answers in a
+// directory where nothing resolves — which is the case `taskmgr guide` has to
+// serve, since the guide is the one command an agent runs before it knows
+// whether it is standing in a project at all.
+func GlobalGuideTopics() ([]GuideTopic, error) {
+	return globalGuideTopics(vfs.NewOS(), env.NewOS())
+}
+
+func globalGuideTopics(fs vfs.FS, e env.Environment) ([]GuideTopic, error) {
+	home, err := taskmgrHome(e)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := loadGlobalConfig(fs, home)
+	if err != nil {
+		return nil, err
+	}
+	loaded, infos, _ := collectUse(fs, cfg.Use, home, home, scopeGlobal, make(map[string]string))
+	return guideTopics(fs, loaded.guide, infos), nil
 }
