@@ -154,6 +154,19 @@ func storeStateOf(fs vfs.FS, dir string) storeState {
 	return storeFinished
 }
 
+// healthOf maps the internal classification onto the public one Stores reports,
+// so a listing and a resolution can never disagree about an entry.
+func healthOf(fs vfs.FS, dir string) StoreHealth {
+	switch storeStateOf(fs, dir) {
+	case storeMissing:
+		return StoreDangling
+	case storePartial:
+		return StoreBroken
+	default:
+		return StoreOK
+	}
+}
+
 // storeComplete reports whether dir is a finished store: a directory holding a
 // config.yaml.
 func storeComplete(fs vfs.FS, dir string) bool {
@@ -256,6 +269,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 			if err != nil {
 				return nil, ResolveInfo{}, err
 			}
+			s.name = en.Store
 			return s, ResolveInfo{Kind: ResolvedOverrideName, StorePath: dir, ProjectPath: project}, nil
 		}
 		return nil, ResolveInfo{}, ErrStoreNotRegistered
@@ -312,6 +326,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	if err != nil {
 		return nil, ResolveInfo{}, err
 	}
+	s.name = en.Store
 	return s, ResolveInfo{Kind: ResolvedCentral, StorePath: dir, ProjectPath: project}, nil
 }
 
@@ -334,10 +349,12 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 	}
 	out := make([]StoreEntry, 0, len(entries))
 	for _, en := range entries {
+		dir := filepath.Join(croot, storesSubdir, en.Store)
 		out = append(out, StoreEntry{
 			Path:      canonicalize(fs, en.Path, home, croot),
 			Store:     en.Store,
-			StorePath: filepath.Join(croot, storesSubdir, en.Store),
+			StorePath: dir,
+			Health:    healthOf(fs, dir),
 		})
 	}
 	return out, nil
@@ -382,6 +399,7 @@ func initCentralWith(projectPath, name, prefix string, fs vfs.FS, e env.Environm
 	if err != nil {
 		return nil, err
 	}
+	s.name = name
 
 	if err := saveRegistry(fs, croot, append(entries, registryEntry{Path: project, Store: name})); err != nil {
 		return nil, err
@@ -490,7 +508,12 @@ func moveToCentralWith(projectPath, name string, fs vfs.FS, e env.Environment, o
 		}
 		return nil, err
 	}
-	return openData(project, dst, fs, opts)
+	s, err := openData(project, dst, fs, opts)
+	if err != nil {
+		return nil, err
+	}
+	s.name = name
+	return s, nil
 }
 
 // RenameCentral renames the central store oldName to newName: the subfolder

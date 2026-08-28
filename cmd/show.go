@@ -34,7 +34,7 @@ var showCmd = &cobra.Command{
 			return err
 		}
 		if flagJSON {
-			return printJSON(toDetailDTO(d))
+			return printJSON(toDetailDTO(s.Name(), d))
 		}
 		printDetail(d)
 		return nil

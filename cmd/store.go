@@ -33,6 +33,7 @@ type storeEntryDTO struct {
 	Path      string `json:"path"`
 	Store     string `json:"store"`
 	StorePath string `json:"store_path"`
+	Health    string `json:"health"`
 }
 
 // storeMoveDTO is the JSON shape of `store move` (CLI-SPEC §6).
@@ -60,7 +61,7 @@ var storeListCmd = &cobra.Command{
 		if flagJSON {
 			out := make([]storeEntryDTO, 0, len(entries))
 			for _, e := range entries {
-				out = append(out, storeEntryDTO{Path: e.Path, Store: e.Store, StorePath: e.StorePath})
+				out = append(out, storeEntryDTO{Path: e.Path, Store: e.Store, StorePath: e.StorePath, Health: e.Health.String()})
 			}
 			return printJSON(out)
 		}
@@ -69,9 +70,9 @@ var storeListCmd = &cobra.Command{
 			return nil
 		}
 		w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(w, "STORE\tPROJECT\tSTORE PATH")
+		_, _ = fmt.Fprintln(w, "STORE\tHEALTH\tPROJECT\tSTORE PATH")
 		for _, e := range entries {
-			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", e.Store, e.Path, e.StorePath)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Store, e.Health, e.Path, e.StorePath)
 		}
 		return w.Flush()
 	},

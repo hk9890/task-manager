@@ -142,6 +142,12 @@ simply unreachable until an entry is added (§5).
 `--store-name` reports a broken store the same way, since the caller named something
 that does exist in the registry.
 
+**Enumeration** classifies without opening: `Stores` labels every entry `ok`,
+`dangling` or `broken` from a `stat` (SDK-SPEC §1, surfaced by `store list`,
+CLI-SPEC §2.1). The vocabulary is the one above, so a listing and a resolution never
+disagree about an entry — a caller building a store switcher sees the entries that
+will not open before it offers them.
+
 Note that a *published* half-built store is not a state the tooling produces: a promote
 assembles the tree under a staging name and publishes it with one atomic rename (§5), so
 a broken folder means external interference or a store edited by hand.

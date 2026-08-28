@@ -42,11 +42,22 @@ In order:
 ```bash
 taskmgr where          # kind (local / central / override_name / none), store path, project path
 taskmgr where --json
-taskmgr store list     # every registered project → store mapping
+taskmgr store list     # every registered project → store mapping, and its health
 ```
 
 `where` never fails and never writes. Run it whenever you are unsure — especially before a
 command that writes.
+
+Each row of `store list` carries a health:
+
+| | Means |
+|---|---|
+| `ok` | a usable store |
+| `dangling` | the entry is registered, its store directory is gone — commands resolve past it |
+| `broken` | the directory is there without its `config.yaml` — commands stop and say so |
+
+A `dangling` or `broken` row is an entry to repair or delete by hand, not a store to
+select. Both are what a half-finished move leaves behind.
 
 ## Working on another project's store
 
@@ -65,8 +76,8 @@ lets an agent file a bug against a project it is not working in.
 Two things change once the store is not the one you are standing in:
 
 - **IDs belong to one store.** The prefix comes from the project directory name, so two
-  projects with the same directory name share one. Keep the store name beside any ID you
-  carry, and pass the two together.
+  projects with the same directory name share one. `--json` output carries the store name
+  on every issue — keep the two together, and pass them together.
 - **Hooks are the target project's.** A write runs the hooks configured in the store you
   named, with that project as the working directory, so a `create` can trigger checks in a
   repository you are not standing in ([Hooks](hooks.md)).
