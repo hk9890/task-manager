@@ -12,9 +12,39 @@ covering it.
 taskmgr where     # says what it looked at; never fails, never writes
 ```
 
-If you expected a central store, `taskmgr store list` shows which project paths are
-registered — you are probably standing outside the one that is mapped, or the project has
-moved (`taskmgr store move --relink --to <name>` re-points it).
+If you expected a central store, run `taskmgr store list` and read two columns:
+
+- **PROJECT** — you are probably standing outside the path that is mapped, or the project
+  has moved (`taskmgr store move --relink --to <name>` re-points it).
+- **HEALTH** — a `dangling` row is an entry whose store directory is gone. Resolution
+  skips it, which is why you get this message and not a more specific one
+  ([Where your tasks live](stores.md#how-a-directory-picks-its-store) has the health
+  values).
+
+**When the row says `dangling`, do not run `taskmgr init`.** The entry still claims this
+project, so a new local `.tasks/` sits in front of it: `taskmgr where` reports `local`, and
+if the store directory ever comes back its issues stay invisible behind the empty one you
+just made. Put the directory back where the STORE PATH column points instead, or drop the
+entry from `~/.taskmgr/mapping.yaml` by hand if the store is really gone.
+
+## `central store "<name>" is not a finished store … (no config.yaml)`
+
+The store directory is there but its `config.yaml` is not, so it is not something
+`taskmgr` will open — `store list` marks the row `broken`. Your issues are untouched: they
+are the `.md` files sitting in that directory.
+
+This is what a half-finished `store move` leaves behind, or a hand edit. Restore the file
+with the ID prefix your issues already carry — the part before the dash — and the store
+resolves again:
+
+```bash
+ls ~/.taskmgr/stores/<name>/        # proj-3k9f2x.md, proj-8mq04b.md, …
+printf 'prefix: proj\n' > ~/.taskmgr/stores/<name>/config.yaml
+taskmgr store list                  # the row reads ok again
+```
+
+Any hooks the store had are gone with the old file; add them back with
+`taskmgr config hook add` ([Hooks](hooks.md)).
 
 ## `issue not found: proj-xxxxxx`
 
