@@ -110,7 +110,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
 | `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback) + `Mem` (in-memory, for tests). |
 | `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
-| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the global hooks block a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
+| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
 ### Imperative-shell files (may declare `*Store` methods)
@@ -161,7 +161,9 @@ call.
 | `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and equality. |
 | `query.go` / `search.go` | The query surface: the `*Issue`→`query.Row` adapter and the `ParseError` alias, and `SearchExpr` free-text→expression. |
 | `criteria.go` | The `Criteria` builder and `Build`, which compiles it to a filter expression. The two `*Store` methods that take one, `Find` and `FindPage`, are in `list.go`. |
-| `hooks.go` | Hook config types (`Hook`), their validation (HOOK-SPEC §3), and `checkHookChange`, which validates only what a write introduces. |
+| `hooks.go` | Hook types (`Hook`) and their compilation into the runnable chain (HOOK-SPEC §3). Pure: it takes a resolved chain and returns a validated one. |
+| `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
+| `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
 | `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
 | `doc.go` | Package documentation. |
@@ -180,7 +182,7 @@ the engine, not a front end, can own resolution without sacrificing test isolati
 
 **A store carries the seams its resolution used**, rather than reaching for the OS
 ones once it is built. A write reads the per-user config through the `env` seam to
-inherit global hooks (HOOK-SPEC §3.5), so a store that swapped in `env.NewOS()`
+inherit machine-wide hook packages (HOOK-SPEC §3.5), so a store that swapped in `env.NewOS()`
 after an injected resolution would read the developer's real home — which makes
 that inheritance untestable anywhere else, and quietly undoes the isolation the
 seam exists for.

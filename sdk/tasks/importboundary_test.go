@@ -119,6 +119,10 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"config.go":   true, // global config loader (env/vfs seams)
 		"registry.go": true, // central registry + Resolve/Stores/InitCentral
 		"content.go":  true, // body-overflow sidecar I/O (rule itself is in overflow.go)
+
+		// packageload.go reads a hook package's manifest; the format itself is
+		// pure and lives in packages.go.
+		"packageload.go": true,
 	}
 	mayDeclareStoreMethods := map[string]bool{
 		"store.go":    true,
@@ -131,6 +135,9 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"import.go":   true, // bulk import
 		"hookrun.go":  true, // hook execution against the exec seam
 		"log.go":      true, // observability records emitted from the write path
+
+		// packageload.go resolves the two `use:` lists into one hook chain.
+		"packageload.go": true,
 	}
 
 	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"

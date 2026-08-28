@@ -104,10 +104,16 @@ type Config struct {
 	// on read, so a malformed value never breaks queries.
 	HookTimeout string `yaml:"hook_timeout,omitempty"`
 
-	// Hooks are the lifecycle-gate hooks run at issue transitions (HOOK-SPEC §3).
-	// Like HookTimeout they are validated lazily on the first write; unknown keys
-	// within an entry are ignored for forward-compatibility.
-	Hooks []Hook `yaml:"hooks,omitempty"`
+	// Use lists the hook packages this store takes its lifecycle gates from
+	// (HOOK-SPEC §3.5, §3.6). Like HookTimeout the list is read lazily on the
+	// first write; unknown keys within an entry are ignored for
+	// forward-compatibility.
+	//
+	// This file travels with the repository, so an entry here applies to
+	// everyone who works in it. A `name:` reference stays valid across machines;
+	// a `path:` one resolves against this store's own directory, so a package
+	// committed inside the store travels with it.
+	Use []PackageRef `yaml:"use,omitempty"`
 }
 
 // Store is the single gateway to a project's issue files. Every read and write
@@ -184,7 +190,12 @@ func (s *Store) hooks() (*hookSet, error) {
 		s.hookErr = err
 		return nil, s.hookErr
 	}
-	s.hookSet, s.hookErr = buildHookSet(global, s.cfg)
+	chain, _, err := s.packageChain(global, s.cfg)
+	if err != nil {
+		s.hookErr = err
+		return nil, s.hookErr
+	}
+	s.hookSet, s.hookErr = buildHookSet(global.HookTimeout, s.cfg.HookTimeout, chain)
 	return s.hookSet, s.hookErr
 }
 
@@ -350,16 +361,13 @@ func (s *Store) Prefix() string {
 }
 
 // Config returns a copy of the store's configuration (TASK-STORAGE-SPEC §4.2).
-// The Hooks are deep-copied, argv slices included, so a caller editing the
-// result cannot reach the hook configuration this store is already running with
-// — a compiled hook holds the very []string a Hook carries, so copying only the
-// Hook structs would leave `cfg.Hooks[0].Run[0] = …` rewriting the next
-// mutation's gate.
+// The `use:` list is copied too, so a caller editing the result cannot reach the
+// configuration this store is already running with.
 func (s *Store) Config() Config {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	cfg := s.cfg
-	cfg.Hooks = cloneHooks(s.cfg.Hooks)
+	cfg.Use = clonePackageRefs(s.cfg.Use)
 	return cfg
 }
 
@@ -382,7 +390,7 @@ func (s *Store) UpdateConfig(mutate func(*Config) error) error {
 			return err
 		}
 		next := cur
-		next.Hooks = cloneHooks(cur.Hooks)
+		next.Use = clonePackageRefs(cur.Use)
 		if err := mutate(&next); err != nil {
 			return err
 		}
@@ -392,12 +400,17 @@ func (s *Store) UpdateConfig(mutate func(*Config) error) error {
 		if next.Prefix != cur.Prefix {
 			return invalid("prefix", "prefix is immutable: %q is baked into every issue ID in this store, so it cannot be changed to %q", cur.Prefix, next.Prefix)
 		}
-		// Only what this write introduces is compiled. A malformed hook fails
+		// Only what this write introduces is checked. An unusable package fails
 		// every later mutation (HOOK-SPEC §3.4), so refusing to add one keeps the
 		// failure at the command that caused it — but refusing to write while one
 		// is already on disk would also block the command that removes it.
-		if err := checkHookChange(cur.HookTimeout, cur.Hooks, next.HookTimeout, next.Hooks, ""); err != nil {
-			return err
+		if strings.TrimSpace(next.HookTimeout) != strings.TrimSpace(cur.HookTimeout) {
+			if _, err := parseHookTimeout(next.HookTimeout); err != nil {
+				return err
+			}
+		}
+		if err := checkUseChange(cur.Use, next.Use); err != nil {
+			return fmt.Errorf("store config: %w", err)
 		}
 		if err := s.writeConfig(next); err != nil {
 			return err

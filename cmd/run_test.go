@@ -302,10 +302,15 @@ func TestRun_NilArgsIsAnEmptyArgumentList(t *testing.T) {
 // unset — and a handler bound to os.Stderr put it on the host's real stderr,
 // where no in-process test could see it.
 func TestRun_LogRecordsGoToTheGivenStderrWriter(t *testing.T) {
+	isolatedHome(t)
 	root := newStore(t)
-	if _, errOut, code := run(t, "--dir", root, "config", "hook", "add",
-		"--event", "pre-close", "--run", "/nonexistent/taskmgr-hook-probe"); code != 0 {
-		t.Fatalf("hook add: exit %d, stderr %q", code, errOut)
+	writeCmdPackage(t, storeDataDir(root), "probe", `hooks:
+  - id: probe
+    event: pre-close
+    run: ["/nonexistent/taskmgr-hook-probe"]
+`)
+	if _, errOut, code := run(t, "--dir", root, "package", "add", "--path", "packages/probe"); code != 0 {
+		t.Fatalf("package add: exit %d, stderr %q", code, errOut)
 	}
 	out, _, code := run(t, "--dir", root, "--json", "create", "--title", "gated")
 	if code != 0 {

@@ -7,52 +7,85 @@ made the change.
 
 Hooks are how a project adds its own rules without those rules being built into `taskmgr`.
 
-## Declare one
+## Hooks live in packages
 
-```bash
-taskmgr config hook add --event pre-close --id tests-before-close \
-    --when 'type == "feature"' --run make --run test
-taskmgr config hook list      # what is configured, in the order it runs
-taskmgr config hook rm tests-before-close
+You do not write a hook into a configuration file. You put it in a **package**: a
+directory holding a manifest and the scripts the hooks run. A configuration then lists the
+packages it uses.
+
+Make the directory and write the manifest:
+
 ```
-
-`--run` is repeatable, one argv element per occurrence, because a hook is executed
-**directly — there is no shell**, so there is no quoting rule to guess at. For a pipeline
-or a `&&`, ask for a shell: `--run sh --run -c --run 'make lint && make test'`.
-
-`--when` takes the same filter expressions as `taskmgr list -q`
-([Filtering and search](queries.md)), evaluated against the issue *as it would be after the
-change*. It scopes a hook; it does not decide which event fires.
-
-`--id` is optional: a hook without one is named `<event>#<index>` after its place in the
-list, which is the name `hook rm` and every message use. An id you write yourself must not
-contain `#`, so that it can never collide with a name given out that way.
-
-`taskmgr config hook --help` has the rest. Every write is validated before a byte lands, so
-a malformed hook is refused by the command that wrote it rather than by your next `close`.
-
-What lands on disk is readable, and hand-editing it stays supported:
+doc-policy/
+├── taskmgr-package.yaml
+└── hooks/doc-path.sh
+```
 
 ```yaml
-prefix: proj
-
-hook_timeout: 2s                   # max runtime for any single hook. Default 2s.
-
+# taskmgr-package.yaml
+version: 1
 hooks:
-  - id: tests-before-close
-    event: pre-close
-    when: 'type == "feature"'
-    run: ["make", "test"]
-
-  - id: notify
-    event: post-close
-    run: [".tasks/hooks/notify.sh"]
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["./hooks/doc-path.sh"]
 ```
 
-## Which file: the project's, or yours
+Then tell a store to use it:
 
-Hooks live in two places, and every `taskmgr config` command picks between them the same
-way — `--global` selects the second:
+```bash
+taskmgr package add doc-policy   # ~/.taskmgr/packages/doc-policy
+taskmgr package list             # every package that gates this store, and whether it loads
+taskmgr hook list                # every hook that gates this store, in the order it runs
+```
+
+`taskmgr` never downloads, unpacks or writes a package. Installing one is putting the
+directory where the reference points — `~/.taskmgr/packages/<name>` for a package you use
+everywhere, or a directory inside `.tasks/` for one that belongs to a single project. Copy
+it, clone it, unzip it: `taskmgr` only ever reads it.
+
+### Why the script sits next to the manifest
+
+A hook runs with the **project root** as its working directory, so a path written into a
+configuration file could only ever be an absolute one — which is different on every
+machine. Inside a package the rule is different, and that is the whole point: a **relative
+`run` path is found inside the package**, wherever the package was put. So `doc-policy`
+works on your machine and on a colleague's without either of you editing a path.
+
+Two details follow from it. Only the *first* element of `run` is treated this way; every
+other argument is passed through untouched. And a first element with no `/` in it is left
+alone, because that is a `PATH` lookup — which is what makes `["sh", "-c", "…"]` still
+find your shell.
+
+### Writing the entries
+
+`run` is a list, one argv element per item, because a hook is executed **directly — there
+is no shell**, so there is no quoting rule to guess at. For a pipeline or a `&&`, ask for
+a shell: `run: ["sh", "-c", "make lint && make test"]`.
+
+`when` takes the same filter expressions as `taskmgr list -q`
+([Filtering and search](queries.md)), evaluated against the issue *as it would be after
+the change*. It scopes a hook; it does not decide which event fires.
+
+`id` is required, and must not contain `:`. Everywhere a hook is named — a refusal,
+`taskmgr hook list`, the logs — it appears as `pkg:<package>:<id>`, so the name always
+says which package to open.
+
+### Naming a package that lives in the project
+
+A package can live inside the store, where it travels with the repository:
+
+```bash
+taskmgr package add --path packages/repo-policy
+```
+
+The path is relative to `.tasks/`, so the package is committed alongside the tasks and
+every clone of the repository has it without installing anything.
+
+## Which file names the package: the project's, or yours
+
+Two files carry a `use:` list, and `taskmgr package` picks between them the same way —
+`--global` selects the second:
 
 | File | Applies to | Travels |
 |---|---|---|
@@ -65,16 +98,17 @@ will never see it.
 
 Three consequences of the split:
 
-- **Global hooks run first**, then the project's. First deny still wins, so a machine-wide
-  gate is the one that surfaces when both would refuse.
-- **A global hook's id is prefixed `global:`** wherever it appears — in a denial, in
-  `config hook list`, and in `config hook rm`. That prefix is how a refusal tells you which
-  file to edit.
-- **Give a global hook an absolute path.** A hook's working directory is the project root,
-  which for a global hook is whichever project it happens to be running in.
+- **Your machine's packages run first**, then the project's. First deny still wins, so a
+  machine-wide gate is the one that surfaces when both would refuse.
+- **Naming the same package in both files runs it once**, from your file. `taskmgr package
+  list` marks the project's entry `shadowed` so the duplicate is visible rather than
+  puzzling.
+- **`taskmgr hook list` is the answer to "what gates this store"**, because neither file
+  can tell you on its own — the hooks are in the packages the two files name.
 
-A store cannot switch inherited hooks off. The escape hatch is editing the per-user file.
-For `hook_timeout` the store's value wins, then the global one, then the 2s default.
+A store cannot switch inherited packages off. The escape hatch is editing your own file.
+For `hook_timeout` the store's value wins, then yours, then the 2s default. A package
+cannot set it: the limit is how long everyone else waits for the lock, so it stays yours.
 
 ## The eight events
 
@@ -139,25 +173,27 @@ Refuse to close an epic that still has open children:
 
 ```sh
 #!/bin/sh
-# .tasks/hooks/epic-children.sh — pre-close
+# epic-policy/hooks/epic-children.sh — pre-close
 open=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
   -q "parent == \"$TASKMGR_ISSUE_ID\" && status != \"closed\"" | jq length)
 [ "$open" -eq 0 ] || { echo "epic still has $open open children" >&2; exit 1; }
 ```
 
 ```yaml
+# epic-policy/taskmgr-package.yaml
+version: 1
 hooks:
   - id: epic-children
     event: pre-close
     when: 'type == "epic"'
-    run: [".tasks/hooks/epic-children.sh"]
+    run: ["./hooks/epic-children.sh"]
 ```
 
 A denial reaches the caller as a message and exit code `1`, and as a structured error under
 `--json`:
 
 ```json
-{ "error": "hook_denied", "event": "pre-close", "hook": "epic-children",
+{ "error": "hook_denied", "event": "pre-close", "hook": "pkg:epic-policy:epic-children",
   "issue_id": "proj-3k9f2x", "exit": 1, "reason": "epic still has 2 open children" }
 ```
 
@@ -173,12 +209,13 @@ nothing is written; hints from the ones that already ran are still passed along.
   that long; a slow check is usually better as a post-hook, or left to CI.
 - **Pre-hooks fail closed.** A missing script, a bad command, a timeout — all deny. This is
   the point: a gate you can skip is not a gate, and **there is no bypass flag**. To relax
-  one, remove it with `taskmgr config hook rm <id>` — adding `--global` when the id is
-  prefixed `global:`.
-- **A broken `hooks:` block blocks every write** until you fix it, with a clear
-  configuration error. Reads are never affected, so you can still `list` and `show` your
-  way out. A broken block in the per-user file blocks writes in *every* project on the
-  machine.
+  one, edit the package, or take it out of the `use:` list.
+- **A package that will not load blocks every write** until you fix it, with a clear
+  configuration error naming it. That includes a package you have not installed: a
+  `use:` entry says the project depends on it, so `taskmgr` stops rather than running
+  with the gate quietly absent. Reads are never affected, so you can still `list`,
+  `show` and `taskmgr package list` your way out. A bad entry in your own file blocks
+  writes in *every* project on the machine.
 - **Never run a `taskmgr` mutation from a hook.** A pre-hook would deadlock against the
   lock it is already holding, and a post-hook would trigger further hooks. Read-only
   commands are fine — the example above is one.

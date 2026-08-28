@@ -485,20 +485,23 @@ func TestLoadRegistry_Validation(t *testing.T) {
 // TestResolve_StoreInheritsTheResolutionEnvironment: the store a resolution
 // returns must carry the environment seam that resolution used. It did not — the
 // constructors replaced it with env.NewOS() — so a store resolved through an
-// injected home still read the real ~/.taskmgr for the global hooks a write
-// inherits (HOOK-SPEC §3.5), and that inheritance was testable nowhere but a
-// developer's own home directory.
+// injected home still read the real ~/.taskmgr for the machine-wide packages a
+// write inherits (HOOK-SPEC §3.5), and that inheritance was testable nowhere but
+// a developer's own home directory.
 func TestResolve_StoreInheritsTheResolutionEnvironment(t *testing.T) {
 	m := vfs.NewMem()
 	makeStore(t, m, "/proj", "/proj/.tasks", "prj")
 	if err := m.MkdirAll(testCentral, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	// A global hook that exists only in the injected home.
-	raw := "version: 1\nhooks:\n  - id: gate\n    event: pre-create\n    run: [\"true\"]\n"
+	// A machine-wide package that exists only in the injected home.
+	raw := "version: 1\nuse:\n    - name: machine\n"
 	if err := m.WriteAtomic(filepath.Join(testCentral, globalConfigName), []byte(raw), 0o644); err != nil {
 		t.Fatalf("write global config: %v", err)
 	}
+	writePackage(t, m, testCentral, "machine", []Hook{
+		{ID: "gate", Event: "pre-create", Run: []string{"true"}},
+	})
 
 	s, _, err := resolveWith(ResolveOptions{WorkDir: "/proj"}, m, fakeEnv(nil), nil)
 	if err != nil {
@@ -509,7 +512,7 @@ func TestResolve_StoreInheritsTheResolutionEnvironment(t *testing.T) {
 		t.Fatalf("hooks: %v", err)
 	}
 	got := hs.forEvent(eventPreCreate)
-	if len(got) != 1 || got[0].id != globalHookIDPrefix+"gate" {
+	if len(got) != 1 || got[0].id != "pkg:machine:gate" {
 		t.Fatalf("pre-create hooks = %+v, want the one inherited from the injected home", got)
 	}
 }

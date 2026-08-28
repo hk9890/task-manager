@@ -56,19 +56,26 @@ directory resolves to.
 ## Drive a hook by hand
 
 A hook is the only path that runs code this repository did not write, so it is the one
-reproduction with a moving part. Declare it in the scratch store's `.tasks/config.yaml`,
-then trigger its transition:
+reproduction with a moving part. A hook lives in a package, so write one into the scratch
+store, point the store at it, then trigger the transition:
 
 ```bash
-cat >> "$scratch/.tasks/config.yaml" <<'EOF'
+mkdir -p "$scratch/.tasks/packages/probe"
+cat > "$scratch/.tasks/packages/probe/taskmgr-package.yaml" <<'EOF'
+version: 1
 hooks:
   - id: probe
     event: pre-close
     run: ["sh", "-c", "echo refused >&2; exit 1"]
 EOF
+./bin/taskmgr -C "$scratch" package add --path packages/probe
+./bin/taskmgr -C "$scratch" hook list           # the effective chain, in run order
 ./bin/taskmgr -C "$scratch" close <id>          # exits 1, prints the hook's reason
 ./bin/taskmgr -C "$scratch" close <id> --json   # the structured hook_denied error
 ```
+
+The denial names the hook `pkg:probe:probe`, so a reproduction that spans several
+packages still says which one refused.
 
 A write that hangs is a pre-hook running: it holds the store lock until
 `hook_timeout` ends it.

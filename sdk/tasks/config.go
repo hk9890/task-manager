@@ -19,6 +19,7 @@ package tasks
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -59,9 +60,9 @@ const (
 // GlobalConfig is the per-user configuration (CONFIG-SPEC §2). Every field is
 // optional; the zero value plus defaults is valid. Unknown keys are ignored.
 //
-// HookTimeout and Hooks configure lifecycle gates for every store on this
-// machine (HOOK-SPEC §3.5). Like a store's own hooks they are validated lazily
-// on the first write, so a malformed block never breaks a read — but it then
+// HookTimeout and Use configure lifecycle gates for every store on this
+// machine (HOOK-SPEC §3.5). Like a store's own packages they are read lazily on
+// the first write, so an unusable package never breaks a read — but it then
 // fails mutations in every store on the machine, not just one.
 type GlobalConfig struct {
 	Version     int    `yaml:"version"`
@@ -72,10 +73,12 @@ type GlobalConfig struct {
 	// are set.
 	HookTimeout string `yaml:"hook_timeout,omitempty"`
 
-	// Hooks run before the store's own hooks, in config order (HOOK-SPEC §3.5).
-	// They are machine-local — they do not travel with a repository — so an
-	// invariant the data depends on belongs in the store's config, not here.
-	Hooks []Hook `yaml:"hooks,omitempty"`
+	// Use lists the hook packages that apply to every store on this machine
+	// (HOOK-SPEC §3.5, §3.6). Their hooks run before the store's own packages,
+	// in list order. This file is machine-local — it does not travel with a
+	// repository — so an invariant the data depends on belongs in the store's
+	// config, not here.
+	Use []PackageRef `yaml:"use,omitempty"`
 }
 
 // taskmgrHome returns the per-user home (CONFIG-SPEC §1): $TASKMGR_HOME if set,
@@ -147,12 +150,17 @@ func updateGlobalConfig(fs vfs.FS, e env.Environment, mutate func(*GlobalConfig)
 		return err
 	}
 	next := cur
-	next.Hooks = cloneHooks(cur.Hooks)
+	next.Use = clonePackageRefs(cur.Use)
 	if err := mutate(&next); err != nil {
 		return err
 	}
-	if err := checkHookChange(cur.HookTimeout, cur.Hooks, next.HookTimeout, next.Hooks, globalHookIDPrefix); err != nil {
-		return err
+	if strings.TrimSpace(next.HookTimeout) != strings.TrimSpace(cur.HookTimeout) {
+		if _, err := parseHookTimeout(next.HookTimeout); err != nil {
+			return err
+		}
+	}
+	if err := checkUseChange(cur.Use, next.Use); err != nil {
+		return fmt.Errorf("per-user config: %w", err)
 	}
 	return saveGlobalConfig(fs, home, next)
 }
@@ -176,12 +184,12 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 // mutate receives the configuration as it is on disk right now, not a snapshot
 // read earlier. Returning an error from it abandons the write.
 //
-// A hook the write introduces is compiled before anything is written: a global
-// hook that fails to compile blocks mutations in *every* store on the machine
+// A `use:` entry the write introduces is checked before anything is written: a
+// malformed reference here blocks mutations in *every* store on the machine
 // (HOOK-SPEC §3.4/§3.5), so it is refused at the command that adds it rather
-// than left for the next write in some unrelated project to discover. A
-// malformed hook that is already on disk is not re-validated — that is what
-// leaves `taskmgr config hook rm` able to remove it.
+// than left for the next write in some unrelated project to discover. An entry
+// already on disk is not re-checked — that is what leaves the write that removes
+// a bad one able to succeed.
 func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error {
 	return updateGlobalConfig(vfs.NewOS(), env.NewOS(), mutate)
 }

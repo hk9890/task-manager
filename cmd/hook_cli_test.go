@@ -18,8 +18,8 @@
 
 // hook_cli_test.go — L4 CLI tests for lifecycle hooks (HOOK-SPEC §6.2): the
 // hook_denied JSON, hints/warnings surfacing, fail-closed config, and the
-// import --run-hooks flag. Hooks are real `sh -c` scripts in config.yaml,
-// executed by the actual taskmgr binary.
+// import --run-hooks flag. Hooks are real `sh -c` scripts inside a package the
+// store uses, executed by the actual taskmgr binary.
 package cmd_test
 
 import (
@@ -33,24 +33,33 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-// initStoreWithConfig creates a store and overwrites its config.yaml with the
-// given content (so a test can declare hooks).
-func initStoreWithConfig(t *testing.T, prefix, configYAML string) string {
+// initStoreWithPackage creates a store, writes a package holding the given
+// manifest hooks inside it, and points the store's `use:` list at that package —
+// the shape a repository ships (HOOK-SPEC §3.6).
+func initStoreWithPackage(t *testing.T, prefix, hooksYAML string) string {
 	t.Helper()
 	root := t.TempDir()
 	if _, err := tasks.Init(root, prefix); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
+	pkg := filepath.Join(root, ".tasks", "packages", "test")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatalf("mkdir package: %v", err)
+	}
+	manifest := "version: 1\n" + hooksYAML
+	if err := os.WriteFile(filepath.Join(pkg, tasks.PackageManifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
 	cfg := filepath.Join(root, ".tasks", "config.yaml")
-	if err := os.WriteFile(cfg, []byte(configYAML), 0o644); err != nil {
+	body := fmt.Sprintf("prefix: %s\nuse:\n    - path: packages/test\n", prefix)
+	if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	return root
 }
 
 func TestL4_PreCloseGate_DeniedJSON(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
+	root := initStoreWithPackage(t, "hk", `hooks:
   - id: tests
     event: pre-close
     run: ["sh", "-c", "echo '3 tests failing' >&2; exit 1"]
@@ -65,7 +74,9 @@ hooks:
 	if err := json.Unmarshal([]byte(stdout), &dto); err != nil {
 		t.Fatalf("stdout is not the hook_denied JSON: %v\n%s", err, stdout)
 	}
-	if dto["error"] != "hook_denied" || dto["event"] != "pre-close" || dto["hook"] != "tests" {
+	// The denial names the hook by its effective id, so the reader knows which
+	// package to open (HOOK-SPEC §3.5).
+	if dto["error"] != "hook_denied" || dto["event"] != "pre-close" || dto["hook"] != "pkg:test:tests" {
 		t.Errorf("hook_denied JSON = %v", dto)
 	}
 	if r, _ := dto["reason"].(string); !strings.Contains(r, "3 tests failing") {
@@ -81,8 +92,7 @@ hooks:
 }
 
 func TestL4_PreCloseGate_DeniedTextMode(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
+	root := initStoreWithPackage(t, "hk", `hooks:
   - id: tests
     event: pre-close
     run: ["sh", "-c", "echo 'not green' >&2; exit 1"]
@@ -102,8 +112,7 @@ hooks:
 }
 
 func TestL4_AllowHint_SurfacedInJSON(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
+	root := initStoreWithPackage(t, "hk", `hooks:
   - id: remind
     event: pre-create
     run: ["sh", "-c", "echo 'remember CHANGELOG'; exit 0"]
@@ -128,8 +137,7 @@ hooks:
 }
 
 func TestL4_PostCloseWarning_DoesNotFailClose(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
+	root := initStoreWithPackage(t, "hk", `hooks:
   - id: notify
     event: post-close
     run: ["sh", "-c", "echo 'notify failed' >&2; exit 1"]
@@ -155,16 +163,16 @@ hooks:
 	}
 }
 
-func TestL4_MalformedHooksConfig_FailsClosedButReadsWork(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
-  - event: not-a-real-event
+func TestL4_MalformedPackage_FailsClosedButReadsWork(t *testing.T) {
+	root := initStoreWithPackage(t, "hk", `hooks:
+  - id: g
+    event: not-a-real-event
     run: ["true"]
 `)
 	// A mutation fails closed with a config error.
 	_, stderr, code := taskmgr(t, root, "create", "--title", "x")
 	if code == 0 {
-		t.Fatal("malformed hooks config must fail create closed")
+		t.Fatal("a malformed package must fail create closed")
 	}
 	if !strings.Contains(stderr, "taskmgr:") {
 		t.Errorf("expected a taskmgr: config error, got %q", stderr)
@@ -172,7 +180,31 @@ hooks:
 	// Reads are unaffected.
 	_, _, lcode := taskmgr(t, root, "list")
 	if lcode != 0 {
-		t.Errorf("list must work despite a malformed hooks config, exit %d", lcode)
+		t.Errorf("list must work despite a malformed package, exit %d", lcode)
+	}
+}
+
+// A `use:` entry naming a package that is not there fails every mutation and
+// names what is missing, while reads keep working (HOOK-SPEC §1 principle 4).
+func TestL4_MissingPackage_FailsClosedButReadsWork(t *testing.T) {
+	root := t.TempDir()
+	if _, err := tasks.Init(root, "hk"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cfg := filepath.Join(root, ".tasks", "config.yaml")
+	if err := os.WriteFile(cfg, []byte("prefix: hk\nuse:\n    - name: never-installed\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, stderr, code := taskmgr(t, root, "create", "--title", "x")
+	if code == 0 {
+		t.Fatal("a use entry that does not resolve must fail create closed")
+	}
+	if !strings.Contains(stderr, "never-installed") {
+		t.Errorf("stderr = %q, want it to name the missing package", stderr)
+	}
+	if _, _, lcode := taskmgr(t, root, "list"); lcode != 0 {
+		t.Errorf("list must work despite a missing package, exit %d", lcode)
 	}
 }
 
@@ -181,8 +213,7 @@ hooks:
 // issueDTO (`show --json`) — the engine-owned serializer and the CLI DTO are
 // contractually the same shape (HOOK-SPEC §5.1).
 func TestL4_HookPayload_MatchesCLIIssueShape(t *testing.T) {
-	root := initStoreWithConfig(t, "hk", `prefix: hk
-hooks:
+	root := initStoreWithPackage(t, "hk", `hooks:
   - id: capture
     event: post-create
     run: ["sh", "-c", "cat > payload.json"]
@@ -193,6 +224,8 @@ hooks:
 	}
 	id := strings.Fields(out)[len(strings.Fields(out))-1]
 
+	// The working directory is the project root, not the package: only argv[0]
+	// is resolved inside a package (HOOK-SPEC §3.6).
 	data, err := os.ReadFile(filepath.Join(root, "payload.json"))
 	if err != nil {
 		t.Fatalf("hook did not capture payload: %v", err)
@@ -225,9 +258,30 @@ hooks:
 	}
 }
 
+// A relative argv[0] is found inside the package, so a package ships its own
+// script and works wherever it was put (HOOK-SPEC §3.6).
+func TestL4_PackageScriptIsFoundInsideThePackage(t *testing.T) {
+	root := initStoreWithPackage(t, "hk", `hooks:
+  - id: gate
+    event: pre-create
+    run: ["./deny.sh"]
+`)
+	script := filepath.Join(root, ".tasks", "packages", "test", "deny.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'package said no' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	_, stderr, code := taskmgr(t, root, "create", "--title", "x")
+	if code == 0 {
+		t.Fatal("the package's own script must run and deny")
+	}
+	if !strings.Contains(stderr, "package said no") {
+		t.Errorf("stderr = %q, want the script's reason", stderr)
+	}
+}
+
 func TestL4_ImportRunHooksFlag(t *testing.T) {
-	cfg := `prefix: hk
-hooks:
+	hooks := `hooks:
   - id: gate
     event: pre-create
     run: ["sh", "-c", "exit 1"]
@@ -242,7 +296,7 @@ hooks:
 	}
 
 	// Default: hooks omitted -> import succeeds despite the pre-create deny.
-	root := initStoreWithConfig(t, "hk", cfg)
+	root := initStoreWithPackage(t, "hk", hooks)
 	f := write(root, "env.json", envelope)
 	_, stderr, code := taskmgr(t, root, "import", "--file", f)
 	if code != 0 {
@@ -250,7 +304,7 @@ hooks:
 	}
 
 	// --run-hooks -> the gate applies and the import is denied.
-	root = initStoreWithConfig(t, "hk", cfg)
+	root = initStoreWithPackage(t, "hk", hooks)
 	f = write(root, "env.json", envelope)
 	_, _, code = taskmgr(t, root, "import", "--run-hooks", "--file", f)
 	if code == 0 {
