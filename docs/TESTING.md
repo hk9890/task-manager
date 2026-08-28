@@ -22,17 +22,35 @@ tests — anything asserting on what a command printed — run untagged through
 `cmd.Run`; see [implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
 A change is not green until `quality:full` passes; it covers everything
-`.github/workflows/ci.yml` checks, so a green gate should mean a green PR. There is
-no `make lint` — linting is `mise run lint`.
+`.github/workflows/ci.yml` checks **except** the vulnerability scan, which runs
+only in CI because it reaches the network: run `mise run vuln` by hand to check it
+early. There is no `make lint` — linting is `mise run lint`.
+
+`mise run test:coverage` runs every layer with a coverage threshold
+(`COVERAGE_THRESHOLD`, default 75). It is a **manual** task and gates nothing: the
+threshold is a policy nobody has adopted, so it stays available without failing
+anyone's build.
 
 ## Conventions
 
 - Tests sit next to the code (`sdk/tasks/*_test.go`).
-- Fixtures: `sdk/tasks/internal/storetest` — `.Mem()` for L2, `.TempDir(t)` for L3.
-  Never hand-roll a real `.tasks/`. `cmd/` tests can't import it; they use the
-  public `Store` API, or the built binary at L4.
-- **Deterministic time:** `Store.now` inside package `tasks`, `Store.SetNow` from
-  `cmd/` and external consumers. Never assert the wall clock.
+- Fixtures: `sdk/tasks/internal/storetest` — `.Mem()` for L2, `.TempDir(t)` for L3,
+  `.NewRawFixture(t, root)` to write raw bytes into a `.tasks/` tree (malformed
+  frontmatter, a hand-seeded `closed/` entry). Never hand-roll a real `.tasks/`:
+  the raw fixture is what you reach for instead. `cmd/` tests can't import it;
+  they use the public `Store` API, or the built binary at L4.
+- **Deterministic time:** `Store.now` inside package `tasks`, `tasks.WithClock`
+  at construction from `cmd/` and external consumers. Never assert the wall clock,
+  and never set a clock after construction — a test that must move time gives its
+  `WithClock` closure state the test still owns.
+- **Naming:** a test function is `TestSubject_Behaviour`
+  (`TestRemoveDep_Absent_WritesNothing`), and a test file separates words with
+  underscores (`store_move_test.go`), except where it mirrors a source file of the
+  same name. Both were the tree's habit before they were written down here, which
+  is why a reviewer could not apply either.
+- A test that touches a real disk is L3 and belongs in an `_l3_test.go` file
+  behind `//go:build integration`, whatever the subject is. The default
+  `mise run test` must stay disk-free.
 - Assert errors with `errors.Is` against the sentinels; validation failures are
   `*ValidationError` with a `Field`.
 

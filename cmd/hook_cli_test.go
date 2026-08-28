@@ -311,3 +311,70 @@ func TestL4_ImportRunHooksFlag(t *testing.T) {
 		t.Fatal("import --run-hooks must be gated by the pre-create hook")
 	}
 }
+
+// TestL4_ImportRunHooks_HintSurfacedInJSON: `import --run-hooks --json` must
+// carry hook hints and warnings like every other mutation (CLI-SPEC §6). It did
+// not, and the caller of this command is by definition a migration adapter
+// reading JSON — so a hook that had something to say said it to nobody.
+func TestL4_ImportRunHooks_HintSurfacedInJSON(t *testing.T) {
+	hooks := `hooks:
+  - id: remind
+    event: pre-create
+    run: ["sh", "-c", "echo 'imported via adapter'; exit 0"]
+`
+	envelope := `{"source_id": "SRC-1", "title": "imported"}`
+	writeEnvelope := func(root string) string {
+		p := filepath.Join(root, "env.json")
+		if err := os.WriteFile(p, []byte(envelope), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Single-envelope mode: one object carrying hints.
+	root := initStoreWithPackage(t, "hk", hooks)
+	f := writeEnvelope(root)
+	stdout, _, code := taskmgr(t, root, "--json", "import", "--run-hooks", "--file", f)
+	if code != 0 {
+		t.Fatalf("allowed import: exit %d\n%s", code, stdout)
+	}
+	var one struct {
+		ID    string   `json:"id"`
+		Hints []string `json:"hints"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &one); err != nil {
+		t.Fatalf("parse import JSON: %v\n%s", err, stdout)
+	}
+	if one.ID == "" {
+		t.Error("import JSON must carry the new id")
+	}
+	if len(one.Hints) != 1 || one.Hints[0] != "imported via adapter" {
+		t.Errorf("hints = %v, want [imported via adapter]", one.Hints)
+	}
+
+	// Batch mode: the same hints, per record. This half has no human branch to
+	// fall back on, so it is the one where dropping them lost everything.
+	root = initStoreWithPackage(t, "hk", hooks)
+	f = writeEnvelope(root)
+	stdout, _, code = taskmgr(t, root, "--json", "import", "--batch", "--run-hooks", "--file", f)
+	if code != 0 {
+		t.Fatalf("allowed batch import: exit %d\n%s", code, stdout)
+	}
+	var batch []struct {
+		SourceID string   `json:"source_id"`
+		ID       string   `json:"id"`
+		Hints    []string `json:"hints"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &batch); err != nil {
+		t.Fatalf("parse batch import JSON: %v\n%s", err, stdout)
+	}
+	if len(batch) != 1 {
+		t.Fatalf("batch results = %d, want 1\n%s", len(batch), stdout)
+	}
+	if batch[0].SourceID != "SRC-1" || batch[0].ID == "" {
+		t.Errorf("batch result = %+v, want the source id mapped to a new id", batch[0])
+	}
+	if len(batch[0].Hints) != 1 || batch[0].Hints[0] != "imported via adapter" {
+		t.Errorf("batch hints = %v, want [imported via adapter]", batch[0].Hints)
+	}
+}

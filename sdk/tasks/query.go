@@ -20,7 +20,7 @@
 //   - type ParseError = query.ParseError  (re-exported for callers)
 //   - issueRow adapts *Issue → query.Row  (field mapping per QUERY-SPEC.md §2)
 //
-// Store.Query is defined in list.go (it delegates to List).
+// The listing entry points are Store.List and Store.ListPage, in list.go.
 // List uses query.Compile + issueRow to apply the expression filter.
 //
 // import-cycle rule: internal/query must NOT import tasks; tasks imports query.
@@ -63,18 +63,16 @@ type issueRow struct {
 // newIssueRow builds an issueRow for iss. ready and blocked are pre-computed
 // by the caller (List) using openBlockers so the evaluator doesn't need to
 // re-run that logic per-expression-node.
-// The ready/blocked predicates must agree with Store.Ready and Store.Blocked —
-// they are the same question asked through a different surface — so the
-// not-work exclusion for documents is applied here too (TASK-STORAGE-SPEC §9).
+//
+// The rule itself is isReady/isBlocked in ready.go, shared with Store.Ready and
+// Store.Blocked — they are the same question asked through a different surface,
+// so they must not be able to disagree.
 func newIssueRow(iss *Issue, idx map[string]*Issue, closedStat func(string) bool) *issueRow {
 	var open []string
 	if !iss.Status.IsClosed() {
 		open = openBlockers(idx, closedStat, iss)
 	}
-	work := iss.Type.IsWork()
-	ready := work && iss.Status == StatusOpen && len(open) == 0
-	blocked := work && !iss.Status.IsClosed() && len(open) > 0
-	return &issueRow{iss: iss, isReady: ready, isBlocked: blocked}
+	return &issueRow{iss: iss, isReady: isReady(iss, open), isBlocked: isBlocked(iss, open)}
 }
 
 // Field implements query.Row.

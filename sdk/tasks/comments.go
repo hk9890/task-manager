@@ -16,7 +16,13 @@
 
 package tasks
 
-// comments.go — sidecar append/read/resolve primitives for the comment log.
+// comments.go — the comment log: the public *Store methods and the sidecar
+// append/read/resolve primitives underneath them.
+//
+// The four methods lived in store.go, while ARCHITECTURE-SPEC §5's file table
+// named this file as the owner of the comment sidecar — so the table and the
+// code disagreed, and store.go carried a sixth responsibility it was not
+// credited with. The methods sit here now, next to the primitives they drive.
 //
 // The comment sidecar is an append-only multi-document YAML stream stored at
 // .tasks/comments/<id>.yml. Each YAML document represents one comment
@@ -435,4 +441,226 @@ func validateReplaces(replacesID string, stream []Comment) error {
 		}
 	}
 	return invalid("replaces", "comment %q does not exist as an earlier comment in the issue's comment stream", replacesID)
+}
+
+// Comments returns the resolved effective comment log for an issue: each
+// replaces-chain collapsed to its newest document, tombstoned comments omitted.
+// The on-disk stream keeps full history; this returns the current view.
+// All() / Ready() / List() never read sidecars; Comments() loads it lazily.
+func (s *Store) Comments(id string) ([]Comment, error) {
+	// Verify the issue exists first. Existence only: the comment log is a
+	// separate sidecar, so the issue body is never looked at.
+	if _, err := s.getUnresolved(id); err != nil {
+		return nil, err
+	}
+	stream, err := readCommentStream(s.fs, s.commentsPath(id))
+	if err != nil {
+		return nil, err
+	}
+	return resolveComments(stream), nil
+}
+
+// migrateInlineComments checks whether the issue .md at issueFilePath still
+// contains old-style inline comments in its frontmatter. If it does, it
+// appends them to the sidecar and rewrites the issue .md without the
+// comments field. This is a one-time migration run on first sidecar touch.
+// The caller must hold the store lock.
+//
+// issueFilePath is the actual on-disk path to the .md file (hot or closed/).
+func (s *Store) migrateInlineComments(issueFilePath string) error {
+	data, err := s.fs.ReadFile(issueFilePath)
+	if err != nil {
+		return err
+	}
+	iss, legacy, err := unmarshalWithLegacy(data)
+	if err != nil {
+		return err
+	}
+	if len(legacy) == 0 {
+		return nil // nothing to migrate
+	}
+
+	// Append legacy comments to the sidecar, in order.
+	sidecarPath := s.commentsPath(iss.ID)
+	for _, lc := range legacy {
+		created, tsErr := parseTimestamp(lc.Created)
+		if tsErr != nil {
+			// Use a fallback time if the timestamp is unparseable.
+			created = s.now()
+		}
+		c := Comment{
+			ID:      newCommentID(),
+			Author:  lc.Author,
+			Created: created,
+			Body:    sanitizeCommentBody(lc.Body),
+		}
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			return fmt.Errorf("migrate comment to sidecar: %w", err)
+		}
+	}
+
+	// Rewrite the issue .md to the same path (hot or closed/) without the
+	// inline comments field (Marshal now omits it). For closed files this is
+	// an internal migration-only rewrite, not a user mutation.
+	migrated, err := Marshal(iss)
+	if err != nil {
+		return err
+	}
+	return s.fs.WriteAtomic(issueFilePath, migrated, 0o644)
+}
+
+// issueFilePath returns the actual on-disk path for an issue's .md file,
+// checking the hot directory first and falling through to closed/.
+// Returns ErrNotFound if the issue does not exist in either partition.
+func (s *Store) issueFilePath(id string) (string, error) {
+	hotPath := s.filePath(id)
+	if _, err := s.fs.Stat(hotPath); err == nil {
+		return hotPath, nil
+	}
+	closedPath := s.closedFilePath(id)
+	if _, err := s.fs.Stat(closedPath); err == nil {
+		return closedPath, nil
+	}
+	return "", errNotFound(id)
+}
+
+// prepareCommentMutation verifies the issue exists, migrates any legacy inline
+// comments, and returns the issue plus its sidecar path (keyed on iss.ID, not
+// the input id). Caller must hold the store lock.
+func (s *Store) prepareCommentMutation(id string) (*Issue, string, error) {
+	// Unresolved: only iss.ID is used, to key the sidecar. A comment append never
+	// rewrites the issue .md (TASK-STORAGE-SPEC §4.4), so the body is not needed
+	// — and reading it would make commenting on a large doc cost the whole body.
+	iss, err := s.getUnresolved(id)
+	if err != nil {
+		return nil, "", err
+	}
+	issPath, err := s.issueFilePath(id)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.migrateInlineComments(issPath); err != nil {
+		return nil, "", fmt.Errorf("migrate inline comments: %w", err)
+	}
+	return iss, s.commentsPath(iss.ID), nil
+}
+
+// requireReplaceTarget verifies commentID names an earlier comment in the
+// sidecar stream at sidecarPath. Caller must hold the store lock.
+//
+// The empty check is not redundant with validateReplaces: that helper answers
+// "is this document's optional replaces field valid?", for which empty means
+// "this is not a revision" and is correct. Edit and Delete are the opposite
+// case — the id is the whole point of the call — so an empty one has to be
+// rejected here, or `EditComment(id, "", …)` silently appends a fresh comment
+// instead of revising anything.
+func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
+	if commentID == "" {
+		return invalid("comment_id", "comment id is required")
+	}
+	stream, err := readCommentStream(s.fs, sidecarPath)
+	if err != nil {
+		return err
+	}
+	return validateReplaces(commentID, stream)
+}
+
+// AddComment appends a new comment to the issue sidecar and returns the new
+// comment (including its freshly allocated random ID). The issue .md file is
+// NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
+// Comment appends are allowed on closed issues (TASK-STORAGE-SPEC §4.4.6).
+func (s *Store) AddComment(id, author, body string) (*Comment, error) {
+	var out *Comment
+	err := s.withLock(func() error {
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
+		if err != nil {
+			return err
+		}
+
+		body = sanitizeCommentBody(body)
+		c := Comment{
+			ID:      newCommentID(),
+			Author:  author,
+			Created: s.now(),
+			Body:    body,
+		}
+		if err := validateCommentDoc(c); err != nil {
+			return err
+		}
+
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentAdd, iss.ID, err)
+			return err
+		}
+		out = &c
+		return nil
+	})
+	return out, err
+}
+
+// EditComment appends a revision to the issue sidecar with Replaces set to
+// commentID, and returns the new effective comment. The issue .md file is NOT
+// rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
+func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
+	var out *Comment
+	err := s.withLock(func() error {
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
+		if err != nil {
+			return err
+		}
+
+		// Validate that the target comment exists.
+		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
+			return err
+		}
+
+		body = sanitizeCommentBody(body)
+		c := Comment{
+			ID:       newCommentID(),
+			Author:   author,
+			Created:  s.now(),
+			Replaces: commentID,
+			Body:     body,
+		}
+		if err := validateCommentDoc(c); err != nil {
+			return err
+		}
+
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentEdit, iss.ID, err)
+			return err
+		}
+		out = &c
+		return nil
+	})
+	return out, err
+}
+
+// DeleteComment appends a tombstone to the issue sidecar with Replaces set to
+// commentID and Deleted: true. The issue .md file is NOT rewritten.
+func (s *Store) DeleteComment(id, commentID, author string) error {
+	return s.withLock(func() error {
+		iss, sidecarPath, err := s.prepareCommentMutation(id)
+		if err != nil {
+			return err
+		}
+
+		if err := s.requireReplaceTarget(sidecarPath, commentID); err != nil {
+			return err
+		}
+
+		c := Comment{
+			ID:       newCommentID(),
+			Author:   author,
+			Created:  s.now(),
+			Replaces: commentID,
+			Deleted:  true,
+		}
+
+		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
+			s.logIOError(opCommentDelete, iss.ID, err)
+			return err
+		}
+		return nil
+	})
 }

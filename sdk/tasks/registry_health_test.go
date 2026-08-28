@@ -16,7 +16,7 @@
 
 package tasks
 
-// registryhealth_test.go — L2: how a registry entry's folder is classified
+// registry_health_test.go — L2: how a registry entry's folder is classified
 // (CONFIG-SPEC §3). The distinction under test is between "the folder is not
 // there" and "the folder could not be read": they take different repairs, and
 // collapsing them reports an intact store as dangling.

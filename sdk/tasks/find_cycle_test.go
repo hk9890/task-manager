@@ -16,7 +16,7 @@
 
 package tasks
 
-// findcycle_test.go — unit tests for the iterative findCycle implementation.
+// find_cycle_test.go — unit tests for the iterative findCycle implementation.
 //
 // These tests verify:
 //   - deep linear chains do not overflow the stack (no crash)

@@ -21,7 +21,6 @@
 package tasks_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -152,17 +151,14 @@ func TestNextID_L3_ScansClosedPartition(t *testing.T) {
 		t.Fatalf("Init: %v", err)
 	}
 
-	// Manually create a closed/ dir and place a high-numbered file there.
-	// (At-zib.2.2 will wire the real Close→move flow; here we seed it directly
-	// so the test is self-contained and does not depend on at-zib.2.2.)
-	closedDir := root + "/.tasks/closed"
-	if err := os.MkdirAll(closedDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll closed: %v", err)
-	}
-	highFile := closedDir + "/tst-0099.md"
-	if err := os.WriteFile(highFile, []byte("---\nid: tst-0099\ntitle: old\nstatus: closed\ntype: task\npriority: 2\ncreated: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nclosed: 2026-01-01T00:00:00Z\n---\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	// Seed a high-numbered file straight into closed/, through the raw fixture
+	// rather than by hand-rolling the tree with os calls: writing a real .tasks/
+	// by hand in a test is what storetest exists to stop (TESTING.md).
+	// (At-zib.2.2 wires the real Close→move flow; seeding directly keeps this
+	// test self-contained.)
+	storetest.NewRawFixture(t, root).WriteIssue("closed/tst-0099.md",
+		[]byte("---\nid: tst-0099\ntitle: old\nstatus: closed\ntype: task\npriority: 2\n"+
+			"created: 2026-01-01T00:00:00Z\nupdated: 2026-01-01T00:00:00Z\nclosed: 2026-01-01T00:00:00Z\n---\n"))
 
 	// The hot directory has no active issues; closed/ has tst-0099. Create must
 	// read closed/ without error and allocate a fresh ID, never the closed one.

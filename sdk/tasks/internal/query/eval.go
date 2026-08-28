@@ -27,7 +27,7 @@ package query
 //
 //	type Row interface { Field(name string) (Value, bool); Ready() bool; Blocked() bool }
 //	type Predicate interface { Match(row Row) bool }
-//	func Compile(expr string) (Predicate, error)  // *ParseError on malformed
+//	func Compile(expr string) (*Compiled, error)  // *ParseError on malformed
 
 import (
 	"strings"
@@ -85,28 +85,53 @@ type Predicate interface {
 
 // ---- Compile ---------------------------------------------------------------
 
-// Compile parses the filter expression and returns a Predicate ready to
-// evaluate against Row values. An empty or whitespace-only expression returns
-// the always-true predicate. A malformed expression returns a *ParseError
+// Compile parses the filter expression and returns a *Compiled ready to
+// evaluate against Row values. An empty or whitespace-only expression compiles
+// to the always-true predicate. A malformed expression returns a *ParseError
 // (Pos = byte offset of the first error).
 //
 // Compile never touches disk, never imports tasks. It is safe to call from
 // multiple goroutines.
-func Compile(expr string) (Predicate, error) {
+func Compile(expr string) (*Compiled, error) {
 	node, err := Parse(expr)
 	if err != nil {
 		return nil, err
 	}
-	return &compiledPredicate{node: node}, nil
+	return &Compiled{
+		node:        node,
+		NeedsClosed: nodeReferencesClosedWork(node),
+		NeedsText:   nodeReferencesText(node),
+	}, nil
 }
 
 // ---- compiled predicate implementation -------------------------------------
 
-type compiledPredicate struct {
+// Compiled is a parsed filter expression: the predicate, plus the scope facts
+// the caller must know before it decides what to read.
+//
+// The scope travels with the predicate deliberately. Both facts were once
+// separate exported functions taking the expression as a string, so listing one
+// page of issues parsed the same expression three times and — because their
+// return type was a bare bool — two of the three discarded the parse error. The
+// cost that mattered was not the extra parses: a caller could simply forget to
+// ask, and the failure mode is the wrong partition scanned with no error at
+// all. Deriving both during the one parse Compile already performs makes that
+// unforgettable, and a new scope question later edits one walk instead of
+// adding a fourth entry point.
+type Compiled struct {
 	node Node
+
+	// NeedsClosed reports whether the expression refers to closed work and so
+	// requires the cold partition to be scanned (QUERY-SPEC §5).
+	NeedsClosed bool
+
+	// NeedsText reports whether the expression compares against the "text"
+	// virtual field and so needs each issue's body. Structured filters never
+	// touch a body and must not pay to read one.
+	NeedsText bool
 }
 
-func (p *compiledPredicate) Match(row Row) bool {
+func (p *Compiled) Match(row Row) bool {
 	return evalNode(p.node, row)
 }
 

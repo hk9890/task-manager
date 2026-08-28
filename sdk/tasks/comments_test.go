@@ -322,7 +322,7 @@ func TestNewCommentID_Unique(t *testing.T) {
 
 // ── L2 (Mem): appendCommentDoc + readCommentStream ─────────────────────────
 
-func TestAppendAndReadCommentStream(t *testing.T) {
+func TestCommentStream_AppendAndRead(t *testing.T) {
 	_, m := newMemStore(t)
 
 	path := "/.tasks/comments/agt-0001.yml"
@@ -462,7 +462,7 @@ func TestStoreAll_NeverOpensSidecar(t *testing.T) {
 
 // ── L2 (Mem): commentsPath ─────────────────────────────────────────────────
 
-func TestCommentsPath(t *testing.T) {
+func TestCommentsPath_IsSidecarLocation(t *testing.T) {
 	s, _ := newMemStore(t)
 	got := s.commentsPath("agt-0001")
 	want := "/.tasks/comments/agt-0001.yml"

@@ -28,7 +28,7 @@ import (
 
 // ---- L1: pure interpretation of an exec.Result (HOOK-SPEC §6.1/§7) ----
 
-func TestClassifyResult(t *testing.T) {
+func TestClassifyResult_FromExecResult(t *testing.T) {
 	cases := []struct {
 		name     string
 		res      exec.Result
@@ -314,7 +314,8 @@ func TestRunPre_NoHooksForEventIsNoop(t *testing.T) {
 // hook's argv.
 func TestHookDir_FallsBackWhenTheProjectRootIsGone(t *testing.T) {
 	m := vfs.NewMem()
-	s, err := initData("/gone", "/central/stores/x", "tst", m, env.NewOS(), nil)
+	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Allow("") }}
+	s, err := initData("/gone", "/central/stores/x", "tst", m, env.NewOS(), []Option{withRunner(fake)})
 	if err != nil {
 		t.Fatalf("initData: %v", err)
 	}
@@ -323,8 +324,6 @@ func TestHookDir_FallsBackWhenTheProjectRootIsGone(t *testing.T) {
 	}
 
 	// The spawn sees the same directory.
-	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Allow("") }}
-	s.runner = fake
 	s.runOne(compiledHook{id: "gate", event: "pre-close", run: []string{"true"}}, "pre-close", "tst-1", nil, 0)
 	calls := fake.Calls()
 	if len(calls) != 1 || calls[0].Dir != s.dir {

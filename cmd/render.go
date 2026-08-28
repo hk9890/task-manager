@@ -95,6 +95,47 @@ type createResultDTO struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
+// The operation names carried in the "op" field of the five DTOs below. They
+// are the SDK's own log op values (MONITORING.md § What `write` covers), copied
+// rather than imported because they are unexported there — a mismatch is caught
+// by TestSpec_CLI_EdgeJSON_OpVocabulary, which pins each string.
+const (
+	opDepAdd        = "dep_add"
+	opDepRemove     = "dep_remove"
+	opRelAdd        = "rel_add"
+	opRelRemove     = "rel_remove"
+	opCommentDelete = "comment_delete"
+)
+
+// edgeResultDTO is the --json shape of the four edge commands: `dep add`,
+// `dep rm`, `rel add` and `rel rm`. commentDeleteDTO below is the fifth of the
+// same family, `comment rm`.
+//
+// These five printed an inline map[string]string with three different key
+// vocabularies — "dependent"/"blocker" for one pair, "a"/"b" for the other, and
+// an "op" that read "add"/"rm" while the log records for the identical
+// operations read "dep_add"/"dep_remove". None of the shapes appeared in
+// CLI-SPEC §6 and no test covered them, so nothing held the keys in place: a
+// rename during ordinary work would have changed a released command's output
+// with nothing to report it. The op values below are the log's own constants
+// (log.go), so one operation now has one name across the JSON and the records.
+//
+// The edge is named "from"/"to" for both pairs. A dependency reads from the
+// dependent to its blocker; a related link is stored on "from" and derived on
+// the other side, which is the direction `rel add` actually writes.
+type edgeResultDTO struct {
+	Op   string `json:"op"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// commentDeleteDTO is the --json shape of `comment rm`.
+type commentDeleteDTO struct {
+	Op        string `json:"op"`
+	Issue     string `json:"issue"`
+	CommentID string `json:"comment_id"`
+}
+
 // hookDeniedDTO is the --json error printed when a pre-hook denies a transition
 // (HOOK-SPEC §6.2). "error" is always "hook_denied".
 type hookDeniedDTO struct {

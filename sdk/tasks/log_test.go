@@ -193,24 +193,28 @@ func TestLogIOError_NonTransitionWrites(t *testing.T) {
 	}
 
 	cases := []struct {
-		name   string
-		op     string
-		vfsOp  string
-		path   func(s *Store, target *Issue) string
-		mutate func(s *Store, target, other *Issue) error
+		name  string
+		op    string
+		vfsOp string
+		path  func(s *Store, target *Issue) string
+		// prepare runs before the fault is injected, for a mutation that needs
+		// existing state to act on. A removal that finds nothing to remove
+		// writes nothing, so it would never reach the faulted call.
+		prepare func(s *Store, target, other *Issue) error
+		mutate  func(s *Store, target, other *Issue) error
 	}{
-		{"comment add", "comment_add", "Append", sidecar, func(s *Store, target, _ *Issue) error {
+		{"comment add", "comment_add", "Append", sidecar, nil, func(s *Store, target, _ *Issue) error {
 			_, err := s.AddComment(target.ID, "a", "body")
 			return err
 		}},
-		{"comment edit", "comment_edit", "Append", sidecar, nil}, // set below; needs an existing comment
-		{"dep add", "dep_add", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
+		{"comment edit", "comment_edit", "Append", sidecar, nil, nil}, // mutate set below; needs an existing comment
+		{"dep add", "dep_add", "WriteAtomic", issueFile, nil, func(s *Store, target, other *Issue) error {
 			return s.AddDep(target.ID, other.ID)
 		}},
-		{"dep remove", "dep_remove", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
-			return s.RemoveDep(target.ID, other.ID)
-		}},
-		{"rel add", "rel_add", "WriteAtomic", issueFile, func(s *Store, target, other *Issue) error {
+		{"dep remove", "dep_remove", "WriteAtomic", issueFile,
+			func(s *Store, target, other *Issue) error { return s.AddDep(target.ID, other.ID) },
+			func(s *Store, target, other *Issue) error { return s.RemoveDep(target.ID, other.ID) }},
+		{"rel add", "rel_add", "WriteAtomic", issueFile, nil, func(s *Store, target, other *Issue) error {
 			return s.AddRelated(target.ID, other.ID)
 		}},
 	}
@@ -244,6 +248,11 @@ func TestLogIOError_NonTransitionWrites(t *testing.T) {
 				c.mutate = func(s *Store, target, _ *Issue) error {
 					_, err := s.EditComment(target.ID, existing.ID, "a", "revised")
 					return err
+				}
+			}
+			if c.prepare != nil {
+				if err := c.prepare(s, target, other); err != nil {
+					t.Fatalf("prepare: %v", err)
 				}
 			}
 			buf.Reset()

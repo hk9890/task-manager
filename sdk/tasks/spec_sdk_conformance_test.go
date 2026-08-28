@@ -141,7 +141,7 @@ func TestSpec_SDK_ParseError_HasPosAndMessage(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, queryErr := s.Query(`foobar == "x"`) // unknown field → ParseError
+	_, queryErr := s.List(tasks.Filter{Expr: `foobar == "x"`}) // unknown field → ParseError
 	if queryErr == nil {
 		t.Fatal("Query with unknown field: expected error, got nil")
 	}

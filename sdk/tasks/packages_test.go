@@ -32,7 +32,7 @@ import (
 
 // ── argv[0] resolution (§3.6) ───────────────────────────────────────────────
 
-func TestResolveHookArgv(t *testing.T) {
+func TestResolveHookArgv_InsidePackage(t *testing.T) {
 	cases := []struct {
 		name string
 		run  []string
@@ -66,7 +66,7 @@ func TestResolveHookArgv_SlashCountsOnEveryPlatform(t *testing.T) {
 
 // ── reference shape (§3.5) ──────────────────────────────────────────────────
 
-func TestRefShape(t *testing.T) {
+func TestPackageRef_Shape(t *testing.T) {
 	cases := []struct {
 		name    string
 		ref     PackageRef

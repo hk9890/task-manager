@@ -22,7 +22,8 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
 └── docs/
     ├── specs/                    the normative contract — the table below
-    └── implementation/           orientation maps that own nothing; the specs are normative
+    ├── implementation/           orientation maps that own nothing; the specs are normative
+    └── user-guide/               the pages for someone who installed taskmgr (DOCUMENTING.md)
 ```
 
 ## Key concepts
@@ -73,7 +74,7 @@ rg -n 'Use:\s+"' cmd/                                    # every command the CLI
 rg -n '^func \(s \*Store\)' sdk/tasks/                   # every operation the engine offers
 rg -n '^\tErr\w+' sdk/tasks/store.go                     # the error sentinels callers match with errors.Is
 rg -n 'kind: field' sdk/tasks/internal/query/parse.go    # every query field and the operators it allows
-rg -n 'mayImportVFS|mayDeclareStoreMethods' -A12 sdk/tasks/importboundary_test.go  # the two shell exemption lists
+rg -n 'mayImport\w+|mayDeclareStoreMethods' -A12 sdk/tasks/importboundary_test.go  # the four shell exemption lists
 rg -n '^func validateFields' -A90 sdk/tasks/validate.go  # every field constraint enforced before a write
 rg -n 'MaxInlineBody|joinInlineBody' sdk/tasks/overflow.go      # the body-overflow watermarks
 rg -n '<field-name>' sdk/tasks/frontmatter.go            # how a stored field is read and written

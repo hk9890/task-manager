@@ -248,11 +248,10 @@ func (b *Builder) materialize(s *tasks.Store) {
 func (b *Builder) Mem() *tasks.Store {
 	b.t.Helper()
 	m := vfs.NewMem()
-	s, err := tasks.InitWithVFS("/", b.prefix, m)
+	s, err := tasks.InitWithVFS("/", b.prefix, m, tasks.WithClock(fixedClock()))
 	if err != nil {
 		b.t.Fatalf("storetest: InitWithVFS: %v", err)
 	}
-	s.SetNow(fixedClock())
 	b.materialize(s)
 	return s
 }
@@ -263,11 +262,10 @@ func (b *Builder) Mem() *tasks.Store {
 func (b *Builder) TempDir(t *testing.T) *tasks.Store {
 	t.Helper()
 	root := t.TempDir()
-	s, err := tasks.Init(root, b.prefix)
+	s, err := tasks.Init(root, b.prefix, tasks.WithClock(fixedClock()))
 	if err != nil {
 		t.Fatalf("storetest: Init: %v", err)
 	}
-	s.SetNow(fixedClock())
 	b.materialize(s)
 	return s
 }

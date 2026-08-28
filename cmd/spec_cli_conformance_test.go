@@ -177,15 +177,10 @@ func TestSpec_CLI_CloseIdempotent(t *testing.T) {
 // CLI-SPEC §4: "taskmgr dep add … Idempotent."
 func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
+	s, err := tasks.Init(root, "tst", tasks.WithClock(newTestClock(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
@@ -457,15 +452,10 @@ func TestSpec_CLI_VersionJSON_Shape(t *testing.T) {
 // a JSON array of blockedDTO. CLI-SPEC §6: blockedDTO.
 func TestSpec_CLI_BlockedJSON_IsArray(t *testing.T) {
 	root := t.TempDir()
-	s, err := tasks.Init(root, "tst")
+	s, err := tasks.Init(root, "tst", tasks.WithClock(newTestClock(time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)
@@ -495,5 +485,85 @@ func TestSpec_CLI_BlockedJSON_IsArray(t *testing.T) {
 		if _, ok := dto["blocked_by_refs"]; !ok {
 			t.Errorf("blockedDTO[%d] missing 'blocked_by_refs'; keys: %v", i, mapKeys(dto))
 		}
+	}
+}
+
+// TestSpec_CLI_EdgeJSON_OpVocabulary pins the --json shapes of the five edge and
+// comment-removal commands (CLI-SPEC §6).
+//
+// These five printed an inline map with three different key vocabularies, no
+// spec entry and no test, so the keys a caller reads were held in place by
+// nothing at all. The "op" values are the SDK's own log op names, so one
+// operation carries one name in the JSON and in the log records.
+func TestSpec_CLI_EdgeJSON_OpVocabulary(t *testing.T) {
+	root := t.TempDir()
+	s, err := tasks.Init(root, "tst", tasks.WithClock(newTestClock(defaultFixtureStart).Now))
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	a, err := unwrap(s.Create(tasks.CreateInput{Title: "a"}))
+	if err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	b, err := unwrap(s.Create(tasks.CreateInput{Title: "b"}))
+	if err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+
+	edge := []struct {
+		name   string
+		args   []string
+		wantOp string
+	}{
+		{"dep add", []string{"dep", "add", a.ID, b.ID}, "dep_add"},
+		{"dep rm", []string{"dep", "rm", a.ID, b.ID}, "dep_remove"},
+		{"rel add", []string{"rel", "add", a.ID, b.ID}, "rel_add"},
+		{"rel rm", []string{"rel", "rm", a.ID, b.ID}, "rel_remove"},
+	}
+	for _, tc := range edge {
+		t.Run(tc.name, func(t *testing.T) {
+			out, stderr, code := taskmgr(t, root, append([]string{"--json"}, tc.args...)...)
+			if code != 0 {
+				t.Fatalf("%s failed (exit %d): %s", tc.name, code, stderr)
+			}
+			var dto struct {
+				Op   string `json:"op"`
+				From string `json:"from"`
+				To   string `json:"to"`
+			}
+			if err := json.Unmarshal([]byte(out), &dto); err != nil {
+				t.Fatalf("parse %s JSON: %v\n%s", tc.name, err, out)
+			}
+			if dto.Op != tc.wantOp {
+				t.Errorf("op = %q, want %q", dto.Op, tc.wantOp)
+			}
+			if dto.From != a.ID || dto.To != b.ID {
+				t.Errorf("edge = %s -> %s, want %s -> %s", dto.From, dto.To, a.ID, b.ID)
+			}
+		})
+	}
+
+	// comment rm is the fifth of the family and carries its own key set.
+	cmt, err := s.AddComment(a.ID, "alice", "note")
+	if err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+	out, stderr, code := taskmgr(t, root, "--json", "comment", "rm", a.ID, cmt.ID)
+	if code != 0 {
+		t.Fatalf("comment rm failed (exit %d): %s", code, stderr)
+	}
+	var del struct {
+		Op        string `json:"op"`
+		Issue     string `json:"issue"`
+		CommentID string `json:"comment_id"`
+	}
+	if err := json.Unmarshal([]byte(out), &del); err != nil {
+		t.Fatalf("parse comment rm JSON: %v\n%s", err, out)
+	}
+	if del.Op != "comment_delete" {
+		t.Errorf("op = %q, want %q", del.Op, "comment_delete")
+	}
+	if del.Issue != a.ID || del.CommentID != cmt.ID {
+		t.Errorf("comment rm = issue %s comment %s, want %s / %s", del.Issue, del.CommentID, a.ID, cmt.ID)
 	}
 }

@@ -24,7 +24,7 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-func TestReadyAndBlocked(t *testing.T) {
+func TestReady_AndBlocked(t *testing.T) {
 	s, _ := newMemStore(t)
 	blocker := mustCreate(t, s, CreateInput{Title: "blocker"})
 	dependent := mustCreate(t, s, CreateInput{Title: "dependent", BlockedBy: []string{blocker.ID}})
@@ -62,7 +62,7 @@ func TestReadyAndBlocked(t *testing.T) {
 	}
 }
 
-func TestReadyExcludesNonOpen(t *testing.T) {
+func TestReady_ExcludesNonOpen(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	ip := StatusInProgress
@@ -75,7 +75,7 @@ func TestReadyExcludesNonOpen(t *testing.T) {
 	}
 }
 
-func TestReadyOrderingByPriority(t *testing.T) {
+func TestReady_OrderingByPriority(t *testing.T) {
 	s, _ := newMemStore(t)
 	p3 := 3
 	p0 := 0
@@ -88,7 +88,7 @@ func TestReadyOrderingByPriority(t *testing.T) {
 	}
 }
 
-func TestDetailDerivesInverseEdges(t *testing.T) {
+func TestDetail_DerivesInverseEdges(t *testing.T) {
 	s, _ := newMemStore(t)
 	epic := mustCreate(t, s, CreateInput{Title: "epic", Type: TypeEpic})
 	child := mustCreate(t, s, CreateInput{Title: "child", Parent: epic.ID})
@@ -114,7 +114,7 @@ func TestDetailDerivesInverseEdges(t *testing.T) {
 	_ = related
 }
 
-func TestListFilters(t *testing.T) {
+func TestList_Filters(t *testing.T) {
 	s, _ := newMemStore(t)
 	p1 := 1
 	bug := mustCreate(t, s, CreateInput{Title: "a bug", Type: TypeBug, Priority: &p1, Labels: []string{"x"}})
@@ -161,9 +161,9 @@ func TestListFilters(t *testing.T) {
 	}
 }
 
-// TestSortCreatedTieBreakByID verifies that SortCreated uses ID as a tie-break
+// TestSortCreated_TieBreakByID verifies that SortCreated uses ID as a tie-break
 // when two issues have identical Created timestamps, producing deterministic order.
-func TestSortCreatedTieBreakByID(t *testing.T) {
+func TestSortCreated_TieBreakByID(t *testing.T) {
 	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	a := &Issue{ID: "agt-0001", Created: ts, Updated: ts}
 	b := &Issue{ID: "agt-0002", Created: ts, Updated: ts}
@@ -182,9 +182,9 @@ func TestSortCreatedTieBreakByID(t *testing.T) {
 	}
 }
 
-// TestSortUpdatedTieBreakByID verifies that SortUpdated uses ID as a tie-break
+// TestSortUpdated_TieBreakByID verifies that SortUpdated uses ID as a tie-break
 // when two issues have identical Updated timestamps.
-func TestSortUpdatedTieBreakByID(t *testing.T) {
+func TestSortUpdated_TieBreakByID(t *testing.T) {
 	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	a := &Issue{ID: "agt-0001", Updated: ts}
 	b := &Issue{ID: "agt-0002", Updated: ts}
@@ -202,9 +202,9 @@ func TestSortUpdatedTieBreakByID(t *testing.T) {
 	}
 }
 
-// TestSortClosedTieBreakByID verifies that SortClosed uses ID as a tie-break
+// TestSortClosed_TieBreakByID verifies that SortClosed uses ID as a tie-break
 // when two issues have identical Closed timestamps.
-func TestSortClosedTieBreakByID(t *testing.T) {
+func TestSortClosed_TieBreakByID(t *testing.T) {
 	ts := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	a := &Issue{ID: "agt-0001", Closed: ts}
 	b := &Issue{ID: "agt-0002", Closed: ts}

@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// globalhooks_test.go — the hook chain a store actually runs: packages named by
+// global_hooks_test.go — the hook chain a store actually runs: packages named by
 // the per-user config, then packages named by the store's own (HOOK-SPEC §3.5),
 // plus the public config API (Store.Config/SetConfig, LoadGlobalConfig).
 //
@@ -37,7 +37,8 @@ import (
 func globalHookStore(t *testing.T, globalYAML string) (*Store, *exec.Fake) {
 	t.Helper()
 	fs := vfs.NewMem()
-	s, err := InitWithVFS("/", "x", fs)
+	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Allow("") }}
+	s, err := InitWithVFS("/", "x", fs, withRunner(fake))
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
@@ -50,8 +51,6 @@ func globalHookStore(t *testing.T, globalYAML string) (*Store, *exec.Fake) {
 			t.Fatalf("write global config: %v", err)
 		}
 	}
-	fake := &exec.Fake{Func: func(exec.Spec) exec.Result { return exec.Allow("") }}
-	s.runner = fake
 	return s, fake
 }
 
@@ -191,7 +190,7 @@ func TestStoreHooks_ReadsDoNotTouchTheGlobalConfig(t *testing.T) {
 	if _, err := s.Ready(); err != nil {
 		t.Errorf("Ready() must not read the global config: %v", err)
 	}
-	if _, err := s.Query(`type == "task"`); err != nil {
+	if _, err := s.List(Filter{Expr: `type == "task"`}); err != nil {
 		t.Errorf("Query() must not read the global config: %v", err)
 	}
 	if _, err := s.Create(CreateInput{Title: "x"}); err == nil {

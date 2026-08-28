@@ -25,7 +25,7 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
-func TestSearchExpr(t *testing.T) {
+func TestSearchExpr_BuildsAndOfWords(t *testing.T) {
 	cases := []struct {
 		name  string
 		query string

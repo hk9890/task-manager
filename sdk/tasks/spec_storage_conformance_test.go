@@ -35,7 +35,7 @@ package tasks
 // Already well-covered elsewhere (not duplicated here):
 //   - Timestamp truncation to whole seconds → frontmatter_test.go
 //     (TestMarshal_TruncatesSubSecondTimestamps)
-//   - Marshal/Unmarshal round-trip → frontmatter_test.go (TestMarshalUnmarshalRoundTrip)
+//   - Marshal/Unmarshal round-trip → frontmatter_test.go (TestFrontmatter_MarshalUnmarshalRoundTrip)
 //   - Hot/cold partition moves → close_reopen_test.go
 //   - Sidecar stays in comments/ after close → close_reopen_test.go
 //     (TestClose_SidecarStaysInComments)
@@ -375,11 +375,7 @@ func TestSpec_Storage_SidecarBodyBlockScalar(t *testing.T) {
 // not created until the first comment is added. TASK-STORAGE-SPEC §4.4:
 // "Created lazily on first comment."
 func TestSpec_Storage_SidecarCreatedLazily(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
+	s, m := newMemStore(t)
 	s.cfg = Config{Prefix: "tst"}
 	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time {
@@ -414,11 +410,7 @@ func TestSpec_Storage_SidecarCreatedLazily(t *testing.T) {
 // TASK-STORAGE-SPEC §4.4 rule 6: "The sidecar always lives in comments/<id>.yml
 // regardless of the task's state; only the task .md moves on close."
 func TestSpec_Storage_SidecarPathUnchangedAfterClose(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
+	s, m := newMemStore(t)
 	s.cfg = Config{Prefix: "tst"}
 	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time {
@@ -460,11 +452,7 @@ func TestSpec_Storage_SidecarPathUnchangedAfterClose(t *testing.T) {
 //
 // TASK-STORAGE-SPEC §2, §5.
 func TestSpec_Storage_ClosedLayout(t *testing.T) {
-	m := vfs.NewMem()
-	if err := m.MkdirAll("/.tasks", 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	s := openWithFS("/", m)
+	s, m := newMemStore(t)
 	s.cfg = Config{Prefix: "tst"}
 	tick := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time {

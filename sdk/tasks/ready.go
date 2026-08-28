@@ -22,9 +22,9 @@
 // rules be unit-tested at L1 with no store at all. The methods that fetch the
 // index and answer that predicate live in list.go, the imperative shell.
 //
-// The boundary is enforced by TestImportBoundary_PureCoreNoVfs, which fails a
-// pure-core file that imports the vfs seam OR declares a method on *Store —
-// a method reaches the seam through s.fs, which no import list reveals.
+// The boundary is enforced by TestImportBoundary_PureCoreNoSeams, which fails a
+// pure-core file that imports any of the three seams OR declares a method on
+// *Store — a method reaches the seam through s.fs, which no import list reveals.
 
 package tasks
 
@@ -64,6 +64,28 @@ func openBlockers(idx map[string]*Issue, closedStat func(id string) bool, iss *I
 		}
 	}
 	return open
+}
+
+// isReady reports whether iss is available to work on: open work with no open
+// blocker. isBlocked reports the opposite face of the same rule: non-closed
+// work that something open is holding back.
+//
+// These two are the single definition of the classification. Two public
+// surfaces ask the question — Store.Ready/Store.Blocked and the query engine's
+// `ready`/`blocked` predicates (QUERY-SPEC §4) — and they must agree, because
+// `taskmgr ready` and `taskmgr list -q ready` are the same question through
+// different front ends. They were written out twice, in two files and two
+// expressions, so a change to the rule could land in one and not the other with
+// nothing to catch it.
+//
+// Documents (type doc) are not work and are excluded from both
+// (TASK-STORAGE-SPEC §9). open is the result of openBlockers for iss.
+func isReady(iss *Issue, open []string) bool {
+	return iss.Type.IsWork() && iss.Status == StatusOpen && len(open) == 0
+}
+
+func isBlocked(iss *Issue, open []string) bool {
+	return iss.Type.IsWork() && !iss.Status.IsClosed() && len(open) > 0
 }
 
 // BlockedIssue pairs a blocked issue with the open blockers holding it back.

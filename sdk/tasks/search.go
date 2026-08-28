@@ -30,7 +30,7 @@ package tasks
 // (order-independent). Matching is per-word substring (inherited from `~`), so
 // "cat dog" also matches "category dogma". An empty or whitespace-only query yields
 // "" (the always-true predicate). The result is always a valid filter expression,
-// usable as Filter.Expr or with Store.Query.
+// usable as Filter.Expr.
 //
 // SearchExpr is total by contract: it always returns a usable expression and never
 // reports an error — a search box must never reject what a user typed. (This is why

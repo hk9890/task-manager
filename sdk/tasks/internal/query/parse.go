@@ -393,20 +393,16 @@ func opAllowed(allowed []string, op string) bool {
 	return false
 }
 
-// ---- §5 helpers (ReferencesClosedWork for Store.List) ----------------------
+// ---- §5 scope walks (surfaced as Compiled.NeedsClosed / .NeedsText) --------
 
-// ReferencesClosedWork reports whether the expression refers to closed work
-// that requires the cold partition to be scanned. It delegates to a proper
-// parse so it is accurate (no heuristic).
-func ReferencesClosedWork(expr string) bool {
-	n, err := Parse(expr)
-	if err != nil || n == nil {
+// nodeReferencesClosedWork reports whether the expression refers to closed work
+// that requires the cold partition to be scanned. It walks the parsed tree, so
+// it is accurate rather than a heuristic over the expression text. Compile runs
+// it once and publishes the answer as Compiled.NeedsClosed.
+func nodeReferencesClosedWork(n Node) bool {
+	if n == nil {
 		return false
 	}
-	return nodeReferencesClosedWork(n)
-}
-
-func nodeReferencesClosedWork(n Node) bool {
 	switch v := n.(type) {
 	case *TrueNode:
 		return false
@@ -434,24 +430,20 @@ func nodeReferencesClosedWork(n Node) bool {
 	return false
 }
 
-// ReferencesText reports whether the expression compares against the "text"
+// nodeReferencesText reports whether the expression compares against the "text"
 // virtual field, and therefore needs each issue's body to evaluate.
 //
 // Store.List uses this to decide whether to read content sidecars for issues
 // whose bodies overflowed. Structured filters (status, type, priority, labels,
 // dates) never touch a body, so they must not pay for one — and `list` with no
-// text term at all is the common path. Like ReferencesClosedWork it parses
-// rather than guessing, so a bareword or a quoted string that merely contains
-// the word "text" does not trigger it.
-func ReferencesText(expr string) bool {
-	n, err := Parse(expr)
-	if err != nil || n == nil {
+// text term at all is the common path. It walks the parsed tree rather than
+// guessing, so a bareword or a quoted string that merely contains the word
+// "text" does not trigger it. Compile publishes the answer as
+// Compiled.NeedsText.
+func nodeReferencesText(n Node) bool {
+	if n == nil {
 		return false
 	}
-	return nodeReferencesText(n)
-}
-
-func nodeReferencesText(n Node) bool {
 	switch v := n.(type) {
 	case *NotNode:
 		return nodeReferencesText(v.Operand)

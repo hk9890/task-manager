@@ -32,17 +32,18 @@
 package storetest
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // RawFixture holds a temp directory that has been initialised as a .tasks/ root
 // so that tasks.Open can load it after raw files have been written.
 type RawFixture struct {
 	t       *testing.T
+	fs      vfs.FS // the disk seam, as every other writer in the SDK uses
 	taskDir string // path to the .tasks/ subdirectory
 }
 
@@ -51,22 +52,23 @@ type RawFixture struct {
 // root must already exist (e.g. t.TempDir()).
 func NewRawFixture(t *testing.T, root string) *RawFixture {
 	t.Helper()
+	fs := vfs.NewOS()
 	taskDir := filepath.Join(root, tasks.DataDirName)
 	for _, sub := range []string{
 		taskDir,
 		filepath.Join(taskDir, "comments"),
 	} {
-		if err := os.MkdirAll(sub, 0o755); err != nil {
+		if err := fs.MkdirAll(sub, 0o755); err != nil {
 			t.Fatalf("RawFixture: MkdirAll(%q): %v", sub, err)
 		}
 	}
 	// Write a minimal .tasks/config.yaml so tasks.Open succeeds.
 	cfgPath := filepath.Join(taskDir, tasks.ConfigFileName)
 	cfgData := []byte("prefix: tst\n")
-	if err := os.WriteFile(cfgPath, cfgData, 0o644); err != nil {
+	if err := fs.WriteAtomic(cfgPath, cfgData, 0o644); err != nil {
 		t.Fatalf("RawFixture: write config: %v", err)
 	}
-	return &RawFixture{t: t, taskDir: taskDir}
+	return &RawFixture{t: t, fs: fs, taskDir: taskDir}
 }
 
 // WriteIssue writes raw bytes to .tasks/<name>. name must be a bare filename
@@ -75,10 +77,10 @@ func (rf *RawFixture) WriteIssue(name string, data []byte) {
 	rf.t.Helper()
 	path := filepath.Join(rf.taskDir, name)
 	// Ensure the parent directory exists (handles "closed/" prefix).
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := rf.fs.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		rf.t.Fatalf("RawFixture.WriteIssue: MkdirAll(%q): %v", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := rf.fs.WriteAtomic(path, data, 0o644); err != nil {
 		rf.t.Fatalf("RawFixture.WriteIssue(%q): %v", name, err)
 	}
 }
@@ -88,7 +90,7 @@ func (rf *RawFixture) WriteIssue(name string, data []byte) {
 func (rf *RawFixture) WriteSidecar(name string, data []byte) {
 	rf.t.Helper()
 	path := filepath.Join(rf.taskDir, "comments", name)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := rf.fs.WriteAtomic(path, data, 0o644); err != nil {
 		rf.t.Fatalf("RawFixture.WriteSidecar(%q): %v", name, err)
 	}
 }

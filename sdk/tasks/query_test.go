@@ -14,7 +14,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// query_test.go — L1/L2/L3 tests for the Row adapter, Store.Query, and
+// query_test.go — L1/L2/L3 tests for the Row adapter, Store.List, and
 // the reworked Filter{Expr} / List(f) plumbing.
 //
 // L1 (pure): TestParseError_TypeAlias — verifies type ParseError = query.ParseError.
@@ -44,7 +44,7 @@ func TestParseError_TypeAlias(t *testing.T) {
 		Issue("tst-0001").
 		Mem()
 
-	_, err := store.Query(`foobar == "x"`) // unknown field → ParseError
+	_, err := store.List(tasks.Filter{Expr: `foobar == "x"`}) // unknown field → ParseError
 	if err == nil {
 		t.Fatal("Query with malformed expression: expected error, got nil")
 	}
@@ -75,7 +75,7 @@ func TestQuery_MalformedExpr_ParseError(t *testing.T) {
 	}
 
 	for _, expr := range cases {
-		_, err := store.Query(expr)
+		_, err := store.List(tasks.Filter{Expr: expr})
 		if err == nil {
 			t.Errorf("Query(%q): expected error, got nil", expr)
 			continue
@@ -99,7 +99,7 @@ func TestQuery_MalformedExpr_NothingWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, queryErr := store.Query(`foobar == "x"`)
+	_, queryErr := store.List(tasks.Filter{Expr: `foobar == "x"`})
 	if queryErr == nil {
 		t.Fatal("expected error")
 	}
@@ -122,7 +122,7 @@ func TestQuery_EmptyExpr_AllHot(t *testing.T) {
 		Closed("tst-0003").
 		Mem()
 
-	issues, err := store.Query("")
+	issues, err := store.List(tasks.Filter{Expr: ""})
 	if err != nil {
 		t.Fatalf("Query(\"\"): %v", err)
 	}
@@ -144,7 +144,7 @@ func TestQuery_StatusExpr(t *testing.T) {
 		Mem()
 
 	// status == "open" should return only tst-0001
-	issues, err := store.Query(`status == "open"`)
+	issues, err := store.List(tasks.Filter{Expr: `status == "open"`})
 	if err != nil {
 		t.Fatalf("Query(status==open): %v", err)
 	}
@@ -160,7 +160,7 @@ func TestQuery_ClosedExpr_IncludesColdPartition(t *testing.T) {
 		Mem()
 
 	// status == "closed" must auto-include the cold partition
-	issues, err := store.Query(`status == "closed"`)
+	issues, err := store.List(tasks.Filter{Expr: `status == "closed"`})
 	if err != nil {
 		t.Fatalf("Query(status==closed): %v", err)
 	}
@@ -175,7 +175,7 @@ func TestQuery_TypeExpr(t *testing.T) {
 		Issue("tst-0002", storetest.IssueType(tasks.TypeTask)).
 		Mem()
 
-	issues, err := store.Query(`type == bug`)
+	issues, err := store.List(tasks.Filter{Expr: `type == bug`})
 	if err != nil {
 		t.Fatalf("Query(type==bug): %v", err)
 	}
@@ -190,7 +190,7 @@ func TestQuery_PriorityExpr(t *testing.T) {
 		Issue("tst-0002", storetest.Priority(3)).
 		Mem()
 
-	issues, err := store.Query(`priority <= 1`)
+	issues, err := store.List(tasks.Filter{Expr: `priority <= 1`})
 	if err != nil {
 		t.Fatalf("Query(priority<=1): %v", err)
 	}
@@ -205,7 +205,7 @@ func TestQuery_LabelExpr(t *testing.T) {
 		Issue("tst-0002", storetest.Label("area:ui")).
 		Mem()
 
-	issues, err := store.Query(`label == "area:db"`)
+	issues, err := store.List(tasks.Filter{Expr: `label == "area:db"`})
 	if err != nil {
 		t.Fatalf("Query(label==area:db): %v", err)
 	}
@@ -220,7 +220,7 @@ func TestQuery_LabelTildeExpr(t *testing.T) {
 		Issue("tst-0002", storetest.Label("priority:high")).
 		Mem()
 
-	issues, err := store.Query(`label ~ "area"`)
+	issues, err := store.List(tasks.Filter{Expr: `label ~ "area"`})
 	if err != nil {
 		t.Fatalf("Query(label~area): %v", err)
 	}
@@ -236,7 +236,7 @@ func TestQuery_TextExpr(t *testing.T) {
 		Mem()
 
 	// text ~ "0001" should match tst-0001 (by ID or title)
-	issues, err := store.Query(`text ~ "0001"`)
+	issues, err := store.List(tasks.Filter{Expr: `text ~ "0001"`})
 	if err != nil {
 		t.Fatalf("Query(text~0001): %v", err)
 	}
@@ -251,7 +251,7 @@ func TestQuery_ReadyPredicate(t *testing.T) {
 		Issue("tst-0002", storetest.Open, storetest.BlockedBy("tst-0001")). // not ready
 		Mem()
 
-	issues, err := store.Query(`ready`)
+	issues, err := store.List(tasks.Filter{Expr: `ready`})
 	if err != nil {
 		t.Fatalf("Query(ready): %v", err)
 	}
@@ -261,13 +261,82 @@ func TestQuery_ReadyPredicate(t *testing.T) {
 	}
 }
 
+// TestReadyBlocked_SurfacesAgree pins the property that made the classification
+// worth having one definition of: `taskmgr ready` and `taskmgr list -q ready`
+// are the same question through different front ends, and must return the same
+// issues in the same order.
+//
+// The rule was written out twice, in list.go and query.go, in two different
+// expressions. Nothing here failed while they agreed, so a change to one copy
+// would have shipped a silent disagreement about which work is available. Both
+// now call isReady/isBlocked in ready.go, and this test is what notices if that
+// stops being true. The fixture carries every case the rule turns on: a plain
+// ready issue, one held by an open blocker, a non-open status, and a document,
+// which is not work and belongs to neither answer (TASK-STORAGE-SPEC §9).
+func TestReadyBlocked_SurfacesAgree(t *testing.T) {
+	store := storetest.New(t).
+		Issue("tst-0001", storetest.Open, storetest.Priority(1)).
+		Issue("tst-0002", storetest.Open, storetest.Priority(0), storetest.BlockedBy("tst-0001")).
+		Issue("tst-0003", storetest.InProgress).
+		Issue("tst-0004", storetest.Open, storetest.IssueType(tasks.TypeDoc)).
+		Issue("tst-0005", storetest.Open, storetest.IssueType(tasks.TypeDoc), storetest.BlockedBy("tst-0001")).
+		Mem()
+
+	ready, err := store.Ready()
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	readyViaQuery, err := store.List(tasks.Filter{Expr: `ready`})
+	if err != nil {
+		t.Fatalf("List(ready): %v", err)
+	}
+	if got, want := issueIDs(readyViaQuery), issueIDs(ready); !equalIDs(got, want) {
+		t.Errorf("list -q ready = %v; ready = %v — the two surfaces disagree", got, want)
+	}
+
+	blocked, err := store.Blocked()
+	if err != nil {
+		t.Fatalf("Blocked: %v", err)
+	}
+	blockedIDs := make([]string, len(blocked))
+	for i, b := range blocked {
+		blockedIDs[i] = b.Issue.ID
+	}
+	blockedViaQuery, err := store.List(tasks.Filter{Expr: `blocked`})
+	if err != nil {
+		t.Fatalf("List(blocked): %v", err)
+	}
+	if got := issueIDs(blockedViaQuery); !equalIDs(got, blockedIDs) {
+		t.Errorf("list -q blocked = %v; blocked = %v — the two surfaces disagree", got, blockedIDs)
+	}
+
+	// Guard the fixture itself: an empty answer on both sides would satisfy the
+	// comparisons above without exercising the rule.
+	if len(ready) == 0 || len(blocked) == 0 {
+		t.Fatalf("fixture exercises nothing: ready=%v blocked=%v", issueIDs(ready), blockedIDs)
+	}
+}
+
+// equalIDs compares two ID slices element-wise, order included.
+func equalIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestQuery_BlockedPredicate(t *testing.T) {
 	store := storetest.New(t).
 		Issue("tst-0001", storetest.Open).                                  // not blocked
 		Issue("tst-0002", storetest.Open, storetest.BlockedBy("tst-0001")). // blocked
 		Mem()
 
-	issues, err := store.Query(`blocked`)
+	issues, err := store.List(tasks.Filter{Expr: `blocked`})
 	if err != nil {
 		t.Fatalf("Query(blocked): %v", err)
 	}
@@ -283,7 +352,7 @@ func TestQuery_AndExpr(t *testing.T) {
 		Issue("tst-0003", storetest.IssueType(tasks.TypeTask), storetest.Priority(1)).
 		Mem()
 
-	issues, err := store.Query(`type == bug && priority <= 2`)
+	issues, err := store.List(tasks.Filter{Expr: `type == bug && priority <= 2`})
 	if err != nil {
 		t.Fatalf("Query(type==bug && priority<=2): %v", err)
 	}

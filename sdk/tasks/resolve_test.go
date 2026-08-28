@@ -29,7 +29,7 @@ import (
 
 // --- pure helpers (L1) ----------------------------------------------------
 
-func TestExpandHomeAndLexCanon(t *testing.T) {
+func TestResolve_ExpandHomeAndLexCanon(t *testing.T) {
 	const home = "/home/u"
 	cases := []struct{ in, base, want string }{
 		{"~", "/x", "/home/u"},
@@ -61,7 +61,7 @@ func TestIsAncestorOrEqual_SegmentBoundary(t *testing.T) {
 	}
 }
 
-func TestLongestAncestorIndex(t *testing.T) {
+func TestResolve_LongestAncestorIndex(t *testing.T) {
 	paths := []string{"/a", "/a/b", "/other"}
 	if got := longestAncestorIndex("/a/b/c", paths); got != 1 {
 		t.Errorf("longest = %d, want 1 (/a/b)", got)
@@ -74,7 +74,7 @@ func TestLongestAncestorIndex(t *testing.T) {
 	}
 }
 
-func TestValidStoreName(t *testing.T) {
+func TestValidStoreName_Grammar(t *testing.T) {
 	ok := []string{"a", "my-project", "Proj_1", "a.b", "x" + string(make([]byte, 0))}
 	bad := []string{"", ".", "..", ".hidden", "-leading", "with/slash", "with space"}
 	for _, n := range ok {
@@ -96,7 +96,7 @@ func TestValidStoreName(t *testing.T) {
 	}
 }
 
-func TestDerivePrefix(t *testing.T) {
+func TestDerivePrefix_FromProjectName(t *testing.T) {
 	cases := map[string]string{
 		"/home/u/My-Project": "myprojec", // lowercased, non-alnum stripped, truncated to 8
 		"/home/u/123abc":     "abc",      // leading digits removed

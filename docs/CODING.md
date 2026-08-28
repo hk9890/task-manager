@@ -57,7 +57,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
   behind the `integration` tag.
 - Build fixtures with `sdk/tasks/internal/storetest`; never hand-roll a real
   `.tasks/`. Deterministic time via `Store.now` inside package `tasks`, via
-  `Store.SetNow` from `cmd/` and external consumers. Details in
+  `tasks.WithClock` at construction from `cmd/` and external consumers. Details in
   [TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
 ## Keep specs in sync

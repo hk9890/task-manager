@@ -363,7 +363,7 @@ func TestOverflow_QueryTextReadsSidecars(t *testing.T) {
 	big := mustCreate(t, s, CreateInput{Title: "big one", Description: bigBody("zebrafish")})
 	mustCreate(t, s, CreateInput{Title: "small one", Description: "nothing here"})
 
-	got, err := s.Query(`text ~ "zebrafish"`)
+	got, err := s.List(Filter{Expr: `text ~ "zebrafish"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestOverflow_QueryTextReadsSidecars(t *testing.T) {
 	}
 
 	// The same search through the free-text entry point must agree exactly.
-	viaSearch, err := s.Query(SearchExpr("zebrafish"))
+	viaSearch, err := s.List(Filter{Expr: SearchExpr("zebrafish")})
 	if err != nil {
 		t.Fatalf("Query(SearchExpr): %v", err)
 	}
@@ -397,7 +397,7 @@ func TestOverflow_QueryWithoutTextSkipsSidecars(t *testing.T) {
 		t.Fatalf("Remove: %v", err)
 	}
 
-	got, err := s.Query(`status == "open"`)
+	got, err := s.List(Filter{Expr: `status == "open"`})
 	if err != nil {
 		t.Fatalf("a structured query must not touch content sidecars: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestOverflow_QueryWithoutTextSkipsSidecars(t *testing.T) {
 	}
 
 	// A text query, by contrast, genuinely needs the body and now cannot read it.
-	if _, err := s.Query(`text ~ "anything"`); err == nil {
+	if _, err := s.List(Filter{Expr: `text ~ "anything"`}); err == nil {
 		t.Fatal("a text query must surface a missing sidecar rather than silently miss")
 	}
 }
@@ -428,7 +428,7 @@ func TestDocs_ExcludedFromReadyAndBlocked(t *testing.T) {
 	}
 
 	// The `ready` query predicate must agree with Store.Ready.
-	viaQuery, err := s.Query("ready")
+	viaQuery, err := s.List(Filter{Expr: "ready"})
 	if err != nil {
 		t.Fatalf("Query(ready): %v", err)
 	}
@@ -451,7 +451,7 @@ func TestDocs_ExcludedFromReadyAndBlocked(t *testing.T) {
 	if len(blocked) != 1 || blocked[0].Issue.ID != task.ID {
 		t.Fatalf("Blocked must contain only the task, got %d", len(blocked))
 	}
-	viaQuery, err = s.Query("blocked")
+	viaQuery, err = s.List(Filter{Expr: "blocked"})
 	if err != nil {
 		t.Fatalf("Query(blocked): %v", err)
 	}
@@ -479,7 +479,7 @@ func TestDocs_StillListedAndSearchable(t *testing.T) {
 		t.Fatal("a doc must still appear in All")
 	}
 
-	got, err := s.Query(`text ~ "refresh"`)
+	got, err := s.List(Filter{Expr: `text ~ "refresh"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestDocs_StillListedAndSearchable(t *testing.T) {
 		t.Fatal("a doc must still be searchable")
 	}
 
-	got, err = s.Query(`type == "doc" && label ~ "kind:design"`)
+	got, err = s.List(Filter{Expr: `type == "doc" && label ~ "kind:design"`})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestOverflow_ClosedIssueTextSearch(t *testing.T) {
 	}
 
 	// Hot-only scope must not see it (it is closed), and must not error.
-	hot, err := s.Query(`text ~ "supersededmarker"`)
+	hot, err := s.List(Filter{Expr: `text ~ "supersededmarker"`})
 	if err != nil {
 		t.Fatalf("hot-scope text query: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestComments_CapEnforcedThroughStore(t *testing.T) {
 	}
 }
 
-// TestMetadataReadsDoNotNeedTheSidecar pins that operations which only need an
+// TestComments_MetadataReadsDoNotNeedTheSidecar pins that operations which only need an
 // issue's metadata or its existence do not read its body.
 //
 // Resolving inside the shared read primitive made every such caller pay a full
@@ -845,7 +845,7 @@ func TestComments_CapEnforcedThroughStore(t *testing.T) {
 // that never touch the body, so a comment could not be added to a doc whose
 // sidecar had gone missing. A removed sidecar is the observable stand-in for
 // "did it read the body?".
-func TestMetadataReadsDoNotNeedTheSidecar(t *testing.T) {
+func TestComments_MetadataReadsDoNotNeedTheSidecar(t *testing.T) {
 	m := vfs.NewMem()
 	s, err := InitWithVFS("/p", "tst", m)
 	if err != nil {

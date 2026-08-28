@@ -133,15 +133,10 @@ func TestL4_Create_CreatorDefaultsToUSER(t *testing.T) {
 // for show, list, search, and ready when it was set at create time.
 func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 	root := t.TempDir()
-	s, err := tasks.Init(root, "crt")
+	s, err := tasks.Init(root, "crt", tasks.WithClock(newTestClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "creator present", Creator: "alice"}))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -214,15 +209,10 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 // (not set), the "creator" key is absent from the issueDTO (omitempty semantics).
 func TestL4_IssueDTO_CreatorOmittedWhenEmpty(t *testing.T) {
 	root := t.TempDir()
-	s, err := tasks.Init(root, "crt")
+	s, err := tasks.Init(root, "crt", tasks.WithClock(newTestClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	// Create with no creator (engine keeps it empty — the CLI normally fills $USER,
 	// but we bypass the CLI here to test the DTO omitempty path directly).
 	iss, err := unwrap(s.Create(tasks.CreateInput{Title: "no creator"}))
@@ -248,15 +238,10 @@ func TestL4_IssueDTO_CreatorOmittedWhenEmpty(t *testing.T) {
 // nested issueDTO embedded in a blockedDTO.
 func TestL4_NestedDTO_CreatorInBlockedDTO(t *testing.T) {
 	root := t.TempDir()
-	s, err := tasks.Init(root, "crt")
+	s, err := tasks.Init(root, "crt", tasks.WithClock(newTestClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)).Now))
 	if err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	tick := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	s.SetNow(func() time.Time {
-		tick = tick.Add(time.Second)
-		return tick
-	})
 	blocker, err := unwrap(s.Create(tasks.CreateInput{Title: "blocker", Creator: "alice"}))
 	if err != nil {
 		t.Fatalf("Create blocker: %v", err)

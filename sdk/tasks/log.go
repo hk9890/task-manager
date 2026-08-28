@@ -26,6 +26,7 @@ package tasks
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 )
@@ -42,6 +43,51 @@ func WithLogger(l *slog.Logger) Option {
 	return func(s *Store) {
 		if l != nil {
 			s.logger = l
+		}
+	}
+}
+
+// WithClock sets the clock the store stamps Created/Updated/Closed with. A nil
+// function is ignored (the wall clock stays).
+//
+// This is the supported way to get deterministic timestamps, and it replaces
+// the former Store.SetNow. SetNow wrote the field after construction, on a type
+// SDK-SPEC §1 documents as safe for concurrent use, with no synchronization —
+// so the escape hatch for deterministic time was itself a data race. Injecting
+// at construction removes the race, and it reaches stores the caller never
+// builds directly: Resolve and Open pass their options down (CONFIG-SPEC §4),
+// where a post-construction setter could only reach a store already handed back.
+//
+// A test that must move time mid-run gives the closure its own state:
+//
+//	var mu sync.Mutex
+//	at := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+//	s, err := tasks.Open(dir, tasks.WithClock(func() time.Time {
+//		mu.Lock()
+//		defer mu.Unlock()
+//		return at
+//	}))
+func WithClock(now func() time.Time) Option {
+	return func(s *Store) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
+// withRunner sets the process seam hooks are spawned through (HOOK-SPEC). A nil
+// runner is ignored (exec.NewOS() stays).
+//
+// It is unexported deliberately: exec.Runner lives in an internal package, so no
+// consumer outside this module can name one. An exported WithRunner would appear
+// in the published API as a function nobody outside could call. Inside the
+// module it does the job the exported options do — a store resolved through
+// Resolve or Open carries the runner it was resolved with, rather than being
+// handed back with a real one and patched afterwards.
+func withRunner(r exec.Runner) Option {
+	return func(s *Store) {
+		if r != nil {
+			s.runner = r
 		}
 	}
 }

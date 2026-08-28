@@ -27,18 +27,21 @@
 //     issue (hot or closed/) — no dangling refs.
 //
 // The checker is implemented via the public Store API (Dir()) plus a single
-// os.ReadDir call for the closed partition. storetest is a test-only support
-// package (it never ships in a binary), so importing os here is acceptable.
+// ReadDir of the closed partition, taken through the disk seam (internal/vfs)
+// like every other reader in the SDK. Being test-only support would have
+// excused an os import, but there is nothing to excuse: the seam does the job,
+// so this package is held to the same rule as the rest and the import-boundary
+// guard checks it rather than skipping it.
 package storetest
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
 // AssertStoreInvariants verifies the four store-wide consistency invariants
@@ -60,9 +63,8 @@ func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 	}
 
 	// --- collect the closed set via direct directory scan -------------------
-	// We use os.ReadDir here because the closed partition is not exposed by the
-	// public Store API. storetest is test-only infrastructure, so importing os
-	// is acceptable (the import-boundary test skips this package).
+	// The scan goes through the disk seam because the closed partition is not
+	// exposed by the public Store API.
 	closedDir := filepath.Join(s.Dir(), "closed")
 	closedIssues, err := readClosedIssues(s, closedDir)
 	if err != nil {
@@ -133,9 +135,9 @@ func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 // readClosedIssues reads and parses all issue .md files in closedDir.
 // Returns an empty slice if closedDir does not exist.
 func readClosedIssues(s *tasks.Store, closedDir string) ([]*tasks.Issue, error) {
-	entries, err := os.ReadDir(closedDir)
+	entries, err := vfs.NewOS().ReadDir(closedDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if vfs.IsNotExist(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("ReadDir %s: %w", closedDir, err)

@@ -28,7 +28,7 @@ import (
 	"testing"
 )
 
-func TestInitRejectsDuplicate(t *testing.T) {
+func TestInit_RejectsDuplicate(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root, "agt"); err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestInitRejectsDuplicate(t *testing.T) {
 	}
 }
 
-func TestInitRejectsBadPrefix(t *testing.T) {
+func TestInit_RejectsBadPrefix(t *testing.T) {
 	for _, p := range []string{"", "A", "1x", "has-dash", "has space"} {
 		if _, err := Init(t.TempDir(), p); err == nil {
 			t.Errorf("prefix %q: expected error", p)
@@ -46,7 +46,7 @@ func TestInitRejectsBadPrefix(t *testing.T) {
 	}
 }
 
-func TestOpenWalksUp(t *testing.T) {
+func TestOpen_WalksUp(t *testing.T) {
 	root := t.TempDir()
 	if _, err := Init(root, "agt"); err != nil {
 		t.Fatal(err)
@@ -64,16 +64,16 @@ func TestOpenWalksUp(t *testing.T) {
 	}
 }
 
-func TestOpenNoStore(t *testing.T) {
+func TestOpen_NoStore(t *testing.T) {
 	if _, err := Open(t.TempDir()); !errors.Is(err, ErrNoStore) {
 		t.Errorf("expected ErrNoStore, got %v", err)
 	}
 }
 
-// TestAtomicWriteLeavesNoTemp proves the temp-file half of WriteAtomic: the
+// TestWriteAtomic_LeavesNoTemp proves the temp-file half of WriteAtomic: the
 // staging file must not survive the rename. vfs.Mem cannot show this — its
 // WriteAtomic is a single map update with no temp file to leak.
-func TestAtomicWriteLeavesNoTemp(t *testing.T) {
+func TestWriteAtomic_LeavesNoTemp(t *testing.T) {
 	s, err := Init(t.TempDir(), "agt")
 	if err != nil {
 		t.Fatalf("Init: %v", err)

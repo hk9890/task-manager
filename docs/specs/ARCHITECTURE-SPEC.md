@@ -111,7 +111,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback) + `Mem` (in-memory, for tests). |
 | `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
 | `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
-| `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
+| `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec, plus `RawFixture` for raw on-disk bytes. Reaches disk through the `vfs` seam, and is held to the seam rule like any other package. |
 
 ### Imperative-shell files (may declare `*Store` methods)
 
@@ -121,11 +121,21 @@ definition, so a new file is pure core unless it is added to the guard's
 boundary erodes — a file belongs on this list only when it genuinely cannot do
 its job over plain values.
 
-Importing `internal/vfs` / `internal/env` is a **second, narrower** exemption
-(`mayImportVFS`: `store.go`, `comments.go`, `content.go`, `config.go`,
-`registry.go`, `packageload.go`). The two lists are separate because the two rules
-exempt different files: one list short-circuited both checks, so a file added for
-its `*Store` methods silently stopped having its imports checked as well.
+Importing a seam is a **second, narrower** exemption, and each of the three seams
+carries its own list:
+
+| Seam | Exemption list | Files |
+|---|---|---|
+| `internal/vfs` (disk) | `mayImportVFS` | `store.go`, `comments.go`, `content.go`, `config.go`, `registry.go`, `packageload.go` |
+| `internal/env` (user environment) | `mayImportEnv` | `store.go`, `config.go`, `registry.go`, `packageload.go` |
+| `internal/exec` (hook processes) | `mayImportExec` | `store.go`, `hookrun.go`, `log.go` |
+
+The lists are separate because the rules exempt different files. A single shared
+list short-circuits every check at once: a file added for its `*Store` methods
+would silently stop having its imports checked as well. The guard also compared
+imports against the vfs path **alone** until v0.9.0, so a pure-core file could
+import `internal/env` and read the process environment with every gate green —
+one third of a guard that read as if it were whole.
 
 `packageload.go` is the case that shows the split working. It reads package
 directories through the seam, so it needs the import exemption — but it does its
@@ -137,11 +147,11 @@ already on both.
 
 | File | Responsibility |
 |---|---|
-| `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
-| `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
+| `store.go` | Discovery, CRUD, ID allocation, and the four dependency/related edge mutations over one shared `addEdge`/`removeEdge` pair; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
+| `comments.go` | Comment sidecar: the `Comments`/`AddComment`/`EditComment`/`DeleteComment` methods, plus append and `replaces`/tombstone resolution to the effective log. The methods lived in `store.go` while this table already named this file their owner. |
 | `content.go` | Body-overflow sidecar I/O: the two-file write ordering, sidecar read/removal, `ResolveBody` (TASK-STORAGE-SPEC §4.6). The rule it applies is pure and lives in `overflow.go`. |
 | `config.go` / `registry.go` | Load/persist the global config (`LoadGlobalConfig`/`SaveGlobalConfig`) and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
-| `list.go` | `Ready`/`Blocked`/`Detail`/`Query`/`List`/`ListPage`, and `Find`/`FindPage` over a `Criteria`: read the hot index, the `closed/` partition and comment sidecars through the seam, then apply the pure rules in `ready.go`. |
+| `list.go` | `Ready`/`Blocked`/`Detail`/`List`/`ListPage`: read the hot index and the `closed/` partition through the seam, then apply the pure rules in `ready.go`. |
 | `mutation.go` | `MutationResult` and the gated-write sequence every mutation shares — validate+index (§6 step 3), pre-hooks around the write (step 4), hints/warnings after post-hooks (step 7). |
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
@@ -150,8 +160,8 @@ already on both.
 
 ### Pure-core files (no filesystem access)
 
-The complement of the table above, and what `TestImportBoundary_PureCoreNoVfs`
-enforces. A pure-core file may not import `os` or `internal/vfs`, **and may not
+The complement of the table above, and what `TestImportBoundary_PureCoreNoSeams`
+enforces. A pure-core file may not import `os` or any of the three seams, **and may not
 declare a method on `*Store`**: a method reaches the seam through the `s.fs`
 field, which no import list reveals, and cannot be called without constructing a
 store — which is the property that makes L1 testing impossible. Checking only the
@@ -201,8 +211,16 @@ This confinement is enforced at two levels:
   `internal/exec`, and `internal/env`.
 - **Guard test** (`importboundary_test.go`): `TestImportBoundary_OnlyVfsImportsOS`
   fails the build if any non-test file outside those three seams imports `os` or
-  `syscall`; `TestImportBoundary_PureCoreNoVfs` fails if a pure-core file gains an
-  `internal/vfs` import.
+  `syscall`; `TestImportBoundary_PureCoreNoSeams` fails if a pure-core file gains
+  an import of any of the three.
+
+  The rule has **no exception for test support**. `internal/storetest` is
+  test-only and never ships in a binary, which would have excused an `os` import,
+  and the guard skipped the package on exactly that reasoning while two of its
+  files called `os` directly. Its fixtures reach disk through `vfs.NewOS()` like
+  every other writer instead, so the package is checked rather than trusted — a
+  rule that reads as absolute with a whole package outside it is worse than an
+  honest exception, and here no exception was needed.
 
 ---
 

@@ -46,11 +46,14 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		// Only inspect .go files; skip test files; skip the two seams that are
-		// permitted os/syscall (vfs = disk, exec = hook processes) and the
-		// storetest package (test-only support package; may use os like vfs).
+		// Only inspect .go files; skip test files; skip the three seams that are
+		// permitted os/syscall (vfs = disk, exec = hook processes, env = user
+		// environment). internal/storetest is deliberately NOT skipped: it is
+		// test-only support, which would have excused an os import, but its
+		// fixtures reach disk through the vfs seam like everything else, so it
+		// is held to the rule instead of sitting outside it unwatched.
 		if d.IsDir() {
-			if d.Name() == "vfs" || d.Name() == "exec" || d.Name() == "env" || d.Name() == "storetest" {
+			if d.Name() == "vfs" || d.Name() == "exec" || d.Name() == "env" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -80,39 +83,44 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 	}
 }
 
-// TestImportBoundary_PureCoreNoVfs verifies that pure-core files in the tasks
+// TestImportBoundary_PureCoreNoSeams verifies that pure-core files in the tasks
 // package stay pure: they take in-memory inputs and return values/errors, so
 // they can be unit-tested at L1 with no filesystem at all.
 //
 // A file breaks that rule two ways, and checking only the first is what let
 // ready.go read disk on every call while this test passed it:
 //
-//  1. It imports internal/vfs, the disk seam.
+//  1. It imports one of the three seams — internal/vfs (disk),
+//     internal/env (user environment) or internal/exec (hook processes).
 //  2. It declares a method on *Store. A method needs no import to reach disk —
 //     it goes through the s.fs field, which no import list reveals — and it
 //     cannot be called without constructing a store, which is the property that
 //     actually makes L1 testing impossible.
 //
-// The two rules are checked against two separate exemption lists below: a file
-// that hangs methods off *Store still has its imports checked unless it is also
-// on the vfs list. Pure-core files — ids.go, model.go, frontmatter.go,
-// validate.go, ready.go, criteria.go, doc.go, and any future file on neither
-// list — are held to both.
-func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
+// All three seams are checked, each against its own exemption list. The guard
+// once compared imports against the vfs path alone, so a pure-core file could
+// import internal/env and read the process environment with every gate green —
+// the boundary had a third of a guard and read as if it had a whole one.
+//
+// The lists are per-rule as well as per-seam: a file that hangs methods off
+// *Store still has its imports checked unless it is also on that seam's list.
+// Pure-core files — ids.go, model.go, frontmatter.go, validate.go, ready.go,
+// criteria.go, doc.go, and any future file on no list — are held to all of them.
+func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 	sdkTasksDir, err := findSDKTasksDir()
 	if err != nil {
 		t.Skipf("cannot locate sdk/tasks dir: %v", err)
 	}
 
-	// Two exemption lists, one per rule, because the two rules exempt different
-	// files. A single list short-circuits both checks at once: adding a file so it
-	// may declare a *Store method silently stops checking its imports too, and the
-	// vfs guard then covers neither it nor the five shell files that never needed
-	// the import exemption in the first place.
+	// One exemption list per seam, plus one for the *Store-method rule, because
+	// they exempt different files. A single shared list short-circuits every check
+	// at once: adding a file so it may declare a *Store method would silently stop
+	// checking its imports too, and the seam guards would then cover neither it nor
+	// the shell files that never needed an import exemption in the first place.
 	//
-	// Keep both minimal: every entry is a file the guard stops checking, so adding
-	// one to make a build pass is how the boundary erodes. A file belongs on a list
-	// only if it genuinely cannot do its job over plain values.
+	// Keep every list minimal: each entry is a file the guard stops checking, so
+	// adding one to make a build pass is how the boundary erodes. A file belongs on
+	// a list only if it genuinely cannot do its job over plain values.
 	mayImportVFS := map[string]bool{
 		"store.go":    true,
 		"comments.go": true,
@@ -123,6 +131,17 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		// packageload.go reads a hook package's manifest; the format itself is
 		// pure and lives in packages.go.
 		"packageload.go": true,
+	}
+	mayImportEnv := map[string]bool{
+		"store.go":       true, // carries the env seam its resolution used
+		"config.go":      true, // the per-user home (CONFIG-SPEC)
+		"registry.go":    true, // central registry resolution
+		"packageload.go": true, // global package directory under the user home
+	}
+	mayImportExec := map[string]bool{
+		"store.go":   true, // carries the runner hooks are spawned with
+		"hookrun.go": true, // spawns the hook process
+		"log.go":     true, // records a hook process failure
 	}
 	mayDeclareStoreMethods := map[string]bool{
 		"store.go":    true,
@@ -137,7 +156,16 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 		"log.go":      true, // observability records emitted from the write path
 	}
 
-	const vfsPkg = "github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
+	const seamRoot = "github.com/hk9890/task-manager/sdk/tasks/internal/"
+	seams := []struct {
+		name   string
+		pkg    string
+		exempt map[string]bool
+	}{
+		{"vfs (disk)", seamRoot + "vfs", mayImportVFS},
+		{"env (user environment)", seamRoot + "env", mayImportEnv},
+		{"exec (hook processes)", seamRoot + "exec", mayImportExec},
+	}
 
 	entries, err := os.ReadDir(sdkTasksDir)
 	if err != nil {
@@ -152,17 +180,20 @@ func TestImportBoundary_PureCoreNoVfs(t *testing.T) {
 			continue
 		}
 		path := filepath.Join(sdkTasksDir, name)
-		if !mayImportVFS[name] {
-			fset := token.NewFileSet()
-			f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
-			if err != nil {
-				t.Errorf("parse %s: %v", path, err)
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Errorf("parse %s: %v", path, err)
+			continue
+		}
+		for _, seam := range seams {
+			if seam.exempt[name] {
 				continue
 			}
 			for _, imp := range f.Imports {
 				pkg := strings.Trim(imp.Path.Value, `"`)
-				if pkg == vfsPkg || strings.HasPrefix(pkg, vfsPkg+"/") {
-					t.Errorf("file %s must not import vfs (got %q)", name, pkg)
+				if pkg == seam.pkg || strings.HasPrefix(pkg, seam.pkg+"/") {
+					t.Errorf("pure-core file %s must not import the %s seam (got %q)", name, seam.name, pkg)
 				}
 			}
 		}

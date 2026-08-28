@@ -37,10 +37,11 @@ import (
 
 // ── L1: pure-function tests ───────────────────────────────────────────────────
 
-// TestReferencesClosedWork verifies the closed-scope detection used by
-// List/Query to decide whether to include the cold partition.
-// This now delegates to query.ReferencesClosedWork (parser-based, not heuristic).
-func TestReferencesClosedWork(t *testing.T) {
+// TestCompiled_NeedsClosed_ScopeTable verifies the closed-scope detection List
+// uses to decide whether to read the cold partition. The answer rides on the
+// compiled predicate (query.Compiled.NeedsClosed), derived from the one parse
+// Compile already performs.
+func TestCompiled_NeedsClosed_ScopeTable(t *testing.T) {
 	cases := []struct {
 		expr string
 		want bool
@@ -76,9 +77,12 @@ func TestReferencesClosedWork(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got := query.ReferencesClosedWork(tc.expr)
-		if got != tc.want {
-			t.Errorf("query.ReferencesClosedWork(%q) = %v, want %v", tc.expr, got, tc.want)
+		c, err := query.Compile(tc.expr)
+		if err != nil {
+			t.Fatalf("query.Compile(%q): %v", tc.expr, err)
+		}
+		if c.NeedsClosed != tc.want {
+			t.Errorf("query.Compile(%q).NeedsClosed = %v, want %v", tc.expr, c.NeedsClosed, tc.want)
 		}
 	}
 }
@@ -241,7 +245,7 @@ func TestQuery_ClosedExpr_IncludesClosed(t *testing.T) {
 
 	// An expression that explicitly asks for closed issues must include the cold
 	// partition; otherwise closed issues are unreachable.
-	issues, err := s.Query(`status == "closed"`)
+	issues, err := s.List(Filter{Expr: `status == "closed"`})
 	if err != nil {
 		t.Fatalf("Query(status==closed): %v", err)
 	}
@@ -267,7 +271,7 @@ func TestQuery_ClosedExpr_IncludesClosed(t *testing.T) {
 func TestQuery_EmptyExpr_HotOnly(t *testing.T) {
 	s, _, _, _, closedID := newScopedMemStore(t)
 
-	issues, err := s.Query("")
+	issues, err := s.List(Filter{Expr: ""})
 	if err != nil {
 		t.Fatalf("Query(\"\"): %v", err)
 	}
@@ -286,7 +290,7 @@ func TestQuery_EmptyExpr_HotOnly(t *testing.T) {
 func TestQuery_NonClosedExpr_HotOnly(t *testing.T) {
 	s, _, _, _, closedID := newScopedMemStore(t)
 
-	issues, err := s.Query(`status == "open"`)
+	issues, err := s.List(Filter{Expr: `status == "open"`})
 	if err != nil {
 		t.Fatalf("Query(status==open): %v", err)
 	}

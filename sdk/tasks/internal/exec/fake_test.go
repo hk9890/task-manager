@@ -72,7 +72,7 @@ func TestFake_FuncDrivesResult(t *testing.T) {
 	}
 }
 
-func TestAllowDenyHelpers(t *testing.T) {
+func TestExec_AllowDenyHelpers(t *testing.T) {
 	if a := Allow(""); a.ExitCode != 0 || a.Stdout != nil {
 		t.Fatalf("Allow(\"\") = %+v, want exit 0 no stdout", a)
 	}

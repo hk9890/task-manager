@@ -151,20 +151,31 @@ In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;
 hermetic tests inject in-memory/fake seams through the same internal hooks the store
 already uses for `vfs.Mem`, so resolution is exercised with no real `HOME` or disk.
 
-Two further symbols are exported but **not part of the consumer API**, because
-their argument types live under `internal/` and no outside package can name them:
+One further symbol is exported but **not part of the consumer API**, because its
+argument type lives under `internal/` and no outside package can name it:
 
 ```go
 func InitWithVFS(root, prefix string, fs vfs.FS, opts ...Option) (*Store, error)
-func (s *Store) SetNow(fn func() time.Time)
 ```
 
 `InitWithVFS` is the in-memory creation seam used by `internal/storetest` and the
 engine's own tests. It routes through the same creation path as `Init`, so it
 applies the identical `ErrStoreExists` guard, prefix validation and `Option`
 values — a fixture must not be able to construct a store production could not.
-`SetNow` overrides the clock for deterministic timestamps and is the one of the
-two that a front end may legitimately call (the CLI uses it in its tests).
+
+A clock is supplied at construction, through `WithClock`, and never afterwards:
+
+```go
+func WithClock(now func() time.Time) Option
+```
+
+This replaces a former `Store.SetNow` method. `SetNow` wrote the `now` field
+after construction, with no synchronization, on a type this section documents as
+safe for concurrent use — so the supported way to get deterministic timestamps
+was itself a data race. Construction-time injection also reaches the stores a
+caller never builds directly: `Resolve` and `Open` pass their options down
+(CONFIG-SPEC §4), where a setter could only reach a store already handed back. A
+caller that must move time mid-run gives the closure its own state.
 
 `Store` is the single gateway to a project's files; every read and write goes
 through it. It is safe for concurrent use within a process and across processes; the
@@ -607,7 +618,7 @@ on whitespace and every word must appear in the issue's id/title/description
 (order-independent). Matching is per-word **substring** (inherited from `~`), so
 `cat dog` also matches "category dogma" — not whole-word/token matching. An empty or
 whitespace-only query yields `""` (the always-true predicate). The result is always a
-valid expression usable as `Filter.Expr` or with `Store.Query`, so the CLI `search`
+valid expression usable as `Filter.Expr`, so the CLI `search`
 command and any UI share one definition of search. `SearchExpr` is **total** — it
 never returns an error (a search box must not reject input), which is why it returns a
 bare `string` rather than mirroring `Build`'s `(string, error)`. To combine search
@@ -623,11 +634,8 @@ than concatenating expression strings.
 ```go
 func (s *Store) Get(id string) (*Issue, error)        // one issue (falls through to closed/)
 func (s *Store) All() ([]*Issue, error)               // hot (active) set only, sorted by ID
-func (s *Store) Query(expr string) ([]*Issue, error)  // select by filter expression (QUERY-SPEC.md)
-func (s *Store) List(f Filter) ([]*Issue, error)      // Query + scope/sort/offset/limit via Filter
+func (s *Store) List(f Filter) ([]*Issue, error)      // select by expression + scope/sort/offset/limit
 func (s *Store) ListPage(f Filter) (Page, error)      // List window + total match count (paging)
-func (s *Store) Find(c Criteria, opt FindOptions) ([]*Issue, error)  // Criteria.Build + List
-func (s *Store) FindPage(c Criteria, opt FindOptions) (Page, error)  // Criteria.Build + ListPage
 func (s *Store) Ready() ([]*Issue, error)             // open work, no open blockers (never docs)
 func (s *Store) Blocked() ([]BlockedIssue, error)     // non-closed work with an open blocker (never docs)
 func (s *Store) Detail(id string) (*Detail, error)    // issue + resolved + derived edges + comments
@@ -667,34 +675,23 @@ type BlockedIssue struct {
     BlockedBy []Ref
 }
 
-// Page is a windowed List/Find result plus the total number of matches in scope
+// Page is a windowed List result plus the total number of matches in scope
 // (before Offset/Limit) — the value a viewer needs to size a scrollbar.
 type Page struct {
     Issues []*Issue // the window: matches[Offset : Offset+Limit] (matches[Offset:] when Limit == 0)
     Total  int      // total matches in scope, before Offset/Limit
-}
-
-// FindOptions is the presentation subset of Filter (scope/sort/paging) used with a
-// Criteria. The selection comes from the Criteria, not from an Expr. Offset/Limit
-// behave exactly as on Filter (§3): negatives clamp to 0, Limit 0 = no limit.
-type FindOptions struct {
-    IncludeClosed bool
-    Sort          SortField
-    Reverse       bool
-    Offset        int
-    Limit         int
 }
 ```
 
 - **`All`** returns only the hot (active) set — it never descends into `closed/` or
   `comments/`. It is the cheapest scan: O(open issues), regardless of how many
   closed issues exist. Use `List(Filter{IncludeClosed:true})` to read history.
-- **`Query`** / **`List`** parse and evaluate the **filter-expression language**;
+- **`List`** parses and evaluates the **filter-expression language**;
   the engine is its sole implementation (the CLI just forwards a string). The
   grammar, fields, operators, and error semantics are defined in
   [QUERY-SPEC.md](QUERY-SPEC.md); a malformed expression returns a `*ParseError`
   (§6), not a match.
-- **`Query`** / **`List`** read the active set by default; passing
+- **`List`** reads the active set by default; passing
   `IncludeClosed:true` **or** an expression that satisfies the cold-scope predicate
   (QUERY-SPEC.md §5) includes the cold partition. See Filter scope semantics in §3.
 - **`ListPage`** runs the same selection/sort/paging as `List` and additionally
@@ -704,13 +701,22 @@ type FindOptions struct {
   tie-break, so ordering is **deterministic for a given store state**; but each call
   is its own snapshot, so paging is not isolated across calls — a store mutated
   between page fetches can skip or repeat an item at a window boundary.
-- **`Find`** / **`FindPage`** are `Criteria.Build` + `List` / `ListPage`:
-  `Find(c, opt) ≡ List(Filter{Expr: c.Build(), …})`. Cold scope is derived by
-  applying the cold-scope predicate (QUERY-SPEC.md §5) to the **built expression** —
-  the same detector `List` uses — so a `Criteria` and its hand-written `Expr` always
-  scope identically; `FindOptions.IncludeClosed` is the explicit override. If
-  `Criteria.Build` fails (the `*ValidationError` cases above — unknown `Status` /
-  `Type`, or a negative priority bound), that error is returned and no scan runs.
+- A structured caller reaches the same place through `Criteria.Build`:
+  `List(Filter{Expr: c.Build(), …})`. Cold scope is derived by applying the
+  cold-scope predicate (QUERY-SPEC.md §5) to the **built expression** — the same
+  detector any expression goes through — so a `Criteria` and a hand-written `Expr`
+  always scope identically, and `Filter.IncludeClosed` is the explicit override.
+  If `Criteria.Build` fails (the `*ValidationError` cases above — unknown `Status`
+  / `Type`, or a negative priority bound), that error is returned and no scan runs.
+
+  > **Removed.** `Store.Query`, `Store.Find`, `Store.FindPage` and `FindOptions`
+  > were part of this surface until v0.9.0. Each forwarded to `List` or
+  > `ListPage` and none had a caller outside the engine's own tests, while
+  > `FindOptions` restated five of `Filter`'s six fields — so every new `Filter`
+  > field cost three declarations and two copy blocks, and a field left out of one
+  > of them was silently ignored rather than rejected. `Query(expr)` becomes
+  > `List(Filter{Expr: expr})`; `Find(c, opt)` becomes the `Criteria.Build` call
+  > above. `Criteria` and `Build` are unchanged.
 - **`Ready`** / **`Blocked`** / **`Labels`** are always hot-only. They are O(open)
   and never read `closed/`. Use `List(Filter{IncludeClosed:true})` for history.
 - **`Ready`** / **`Blocked`** additionally exclude `TypeDoc`: a document is not
@@ -808,6 +814,17 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   inverse edges, so the link shows from both issues. `RemoveRelated(a, b)` severs
   the edge from **both** stored sides; `a` must be writable (`ErrImmutable` if
   closed), and the inverse side is best-effort (skipped if `b` is closed/absent).
+- **The four edge methods share one no-op contract.** Adding an edge that is
+  already present, and removing one that is not, both succeed and **write
+  nothing**: no file is rewritten, `updated` is not bumped, and no log record is
+  emitted. Only a call that actually changes the stored list writes.
+
+  This is stated once, for all four, because they diverged on it: `RemoveDep`
+  rewrote the file and bumped `updated` unconditionally, while its peer
+  `RemoveRelated` detected the no-op. A caller could not reason about the family
+  — `dep rm` on an absent edge churned the `.md`, reordered `--sort updated`
+  results and produced a git diff for a command that changed nothing, while the
+  identical `rel rm` did not.
 
 ---
 
