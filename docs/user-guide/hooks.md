@@ -104,10 +104,14 @@ A change that would alter nothing writes nothing and fires nothing.
 }
 ```
 
-`old` is `null` for a create. Both carry the issue's fields plus its `description`. The
-same values arrive as environment variables for convenience — `TASKMGR_HOOK_EVENT`,
-`TASKMGR_HOOK_ID`, `TASKMGR_ISSUE_ID`, `TASKMGR_STORE` (the absolute path to the store) —
-and the working directory is always the project root.
+`old` is `null` for a create. Both carry the issue's fields and its `description`, and
+**an empty field is left out** rather than sent empty — `description` included, so a
+validator that reads the body has to treat "absent" as "no body" instead of expecting an
+empty string.
+
+The same values arrive as environment variables for convenience — `TASKMGR_HOOK_EVENT`,
+`TASKMGR_HOOK_ID`, `TASKMGR_ISSUE_ID`, `TASKMGR_STORE` (the absolute path to the store)
+and `TASKMGR_PAYLOAD_SCHEMA` — and the working directory is always the project root.
 
 **Out:** the exit code is the decision, and the message is stdout, or stderr if stdout is
 empty.
