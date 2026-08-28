@@ -75,15 +75,19 @@ on a clean, up-to-date tree.
    mise run verify:pin      # GOWORK=off go build ./...
    ```
 
-   This is the one check that sees a stale pin. `mise run quality:full` and every
-   CI job build inside the committed `go.work`, which wires the CLI to the
-   in-tree SDK — so a `go.mod` still pinning the *previous* `sdk` version passes
-   all of them, while `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for
-   every user. The release workflow runs the same check before GoReleaser — on a
-   tag push, though, the tag is already public by then, which is the other reason
-   to dry-run first (step 5). The weekly dry run skips this check: between
-   releases the CLI legitimately uses SDK symbols that are not published yet, so
-   on an arbitrary `main` it is expected to fail.
+   **This is the check to run by hand — nothing else stops a stale pin before the
+   tag.** `mise run quality:full` and every CI job build inside the committed
+   `go.work`, which wires the CLI to the in-tree SDK, so a `go.mod` still pinning
+   the *previous* `sdk` version passes all of them while
+   `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for every user.
+
+   The release workflow runs the same build, but it is **fatal only on a tag
+   push** — where the tag is already public by the time it fires. A dry run and
+   the weekly schedule log a warning and continue: between releases the CLI
+   legitimately uses SDK symbols that are not published yet, so the build is
+   expected to fail on an arbitrary `main`, and failing the job on that would
+   make the dry run unrunnable outside a release sequence — which is the window
+   where a signing change can be rehearsed with no version at stake.
 
 5. **Dry-run the release workflow on the commit you are about to tag.** This is
    the same job that runs on a tag push — same build, same signing, same SBOMs —
@@ -111,8 +115,8 @@ on a clean, up-to-date tree.
 
 7. GoReleaser builds linux / macOS / Windows archives (amd64 + arm64), a
    `checksums.txt`, a **CycloneDX SBOM per archive**, a **keyless cosign signature
-   over `checksums.txt`** (`checksums.txt.sig` + `checksums.txt.pem`, which is why
-   the workflow grants `id-token: write`), and a **draft** release named
+   over `checksums.txt`** (`checksums.txt.bundle`, which is why the workflow grants
+   `id-token: write`), and a **draft** release named
    `task-manager vX.Y.Z` with a grouped changelog. Open the release, edit the notes
    if you want, and **publish**.
 
@@ -144,18 +148,18 @@ tag push is the first execution.
 
 > **The cosign binary is pinned** (`cosign-release` in `release.yml`), not just the
 > installer action, so a new cosign cannot arrive unannounced. That is how `v0.7.0`
-> failed: cosign 3.x makes `--new-bundle-format` the default, which ignores the
-> `--output-signature` / `--output-certificate` flags `.goreleaser.yaml` passes and
-> then aborts on an empty `--bundle` path. Moving to that format is a deliberate
-> change — it replaces the published `checksums.txt.sig` + `.pem` with one
-> `.bundle` and rewrites the `verify-blob` invocation under
-> [Verifying](#verifying) — not something to inherit by drift. GoReleaser itself is
-> still a floating `~> v2` constraint; the weekly dry run is what covers it.
+> failed: the config then passed `--output-signature` / `--output-certificate`,
+> which the newly-released 3.x does not accept, and the run aborted on an empty
+> `--bundle` path. The pin is now `v3.1.3` and the signature is one bundle; a
+> cosign major is still a deliberate upgrade, because each one can change the
+> published artifact and the verify command under [Verifying](#verifying).
+> GoReleaser itself is still a floating `~> v2` constraint; the weekly dry run is
+> what covers it.
 
 ## Verifying
 
 The release carries the archives, `checksums.txt`, per-archive SBOMs, and
-`checksums.txt.sig` / `.pem`. From a downloaded set:
+`checksums.txt.bundle`. Needs cosign 3.x. From a downloaded set:
 
 ```bash
 # 1. Contents match the manifest
@@ -163,11 +167,13 @@ sha256sum -c checksums.txt
 
 # 2. The manifest itself is authentically ours (keyless / Sigstore)
 cosign verify-blob checksums.txt \
-  --certificate checksums.txt.pem \
-  --signature checksums.txt.sig \
+  --bundle checksums.txt.bundle \
   --certificate-identity-regexp '^https://github\.com/hk9890/task-manager/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+The bundle carries the signature, the Fulcio certificate and the transparency-log
+entry together, so it is the only file `verify-blob` needs.
 
 Then confirm the binary and the module resolve as expected:
 

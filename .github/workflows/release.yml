@@ -53,39 +53,48 @@ jobs:
       # in-tree SDK, so none of them sees a go.mod that still pins an older sdk —
       # while `go install .../cmd/taskmgr@<tag>` compiles against exactly that pin
       # and fails for every user. On a tag push this is the last point at which a
-      # stale pin can be caught, and the tag is already public by then; on a
-      # dispatched dry run it is a real gate, which is the point of running one.
+      # stale pin can be caught, and the tag is already public by then.
       #
-      # Skipped on the weekly schedule: this is a release-readiness gate, not a
-      # drift check. Between releases the CLI legitimately uses SDK symbols that
-      # are not published yet, so it is *expected* to fail on an arbitrary main —
-      # which is why `.mise.toml` keeps `verify:pin` out of `quality` too. Running
-      # it every Monday would just teach everyone to ignore a red release run.
+      # Fatal only on a tag push. Between releases the CLI legitimately uses SDK
+      # symbols that are not published yet, so the build is *expected* to fail on
+      # an arbitrary main — which is why `.mise.toml` keeps `verify:pin` out of
+      # `quality` too. Failing the job on that would make the dry run unrunnable
+      # in exactly the window it is most useful: outside a release sequence,
+      # where signing can be rehearsed without a version at stake. So a dispatch
+      # and the weekly schedule report the stale pin and carry on to the build
+      # and signing steps this run exists to exercise. `mise run verify:pin` is
+      # the check to run by hand before tagging (RELEASING.md step 4).
       - name: Verify the SDK pin resolves (go install path)
-        if: github.event_name != 'schedule'
         run: |
-          if ! GOWORK=off go build ./...; then
+          if GOWORK=off go build ./...; then
+            exit 0
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then
             echo "::error::go.mod pins an SDK version this commit does not build against."
             echo "::error::Push the matching sdk/vX.Y.Z tag and re-pin the CLI before tagging — docs/RELEASING.md step 4."
             exit 1
           fi
+          echo "::warning::go.mod pins an SDK version this commit does not build against — expected between releases; RELEASING.md step 4 clears it before a tag."
 
       # cosign-release pins the cosign BINARY, not just the action. Without it the
       # installer fetches the latest cosign, so a new major lands in the release
-      # job unannounced — which is how v0.7.0 failed: cosign 3.x makes
-      # --new-bundle-format the default, which silently ignores the
-      # --output-signature / --output-certificate flags .goreleaser.yaml passes and
-      # then aborts on an empty --bundle path ("create bundle file: open : no such
-      # file or directory"). Every other supply-chain input here is pinned; this
-      # one was the exception.
+      # job unannounced — which is how v0.7.0 failed: the 2.x config here passed
+      # --output-signature / --output-certificate, which 3.x does not accept, and
+      # the run aborted on an empty --bundle path ("create bundle file: open : no
+      # such file or directory"). Every other supply-chain input here is pinned;
+      # this one was the exception.
       #
-      # Moving to the 3.x bundle format is a separate change: it replaces the
-      # published checksums.txt.sig + .pem with a single .bundle and changes the
-      # verify-blob invocation documented in docs/RELEASING.md.
+      # 3.x signs into one bundle and nothing else: sign-blob has no
+      # --output-signature or --output-certificate, and no --new-bundle-format to
+      # turn the old pair back on. verify-blob dropped --signature / --certificate
+      # to match, so a 3.x binary cannot verify a release signed by 2.x either.
+      # That is why the move is a clean break rather than a transition, and why
+      # the published artifact and the verify command in docs/RELEASING.md both
+      # changed with it.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v2.6.5'
+          cosign-release: 'v3.1.3'
 
       - name: Install syft (SBOM generator)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
