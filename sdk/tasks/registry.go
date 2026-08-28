@@ -231,7 +231,7 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	// exports it writes every issue into whatever store the walk-up happens to
 	// find. Refuse instead of misfiling the work.
 	if dir := strings.TrimSpace(e.Getenv(envTaskmgrDir)); dir != "" {
-		return nil, ResolveInfo{}, fmt.Errorf("%s is set (%s) but is no longer supported — run from inside the project, or register the store centrally with 'taskmgr store move --central --to <name>' and select it with --store",
+		return nil, ResolveInfo{}, fmt.Errorf("%s is set (%s) but is no longer supported — run from inside the project, or register the store centrally with 'taskmgr store move --central --to <name>' and select it with --store-name",
 			envTaskmgrDir, dir)
 	}
 
