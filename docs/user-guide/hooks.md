@@ -9,8 +9,25 @@ Hooks are how a project adds its own rules without those rules being built into 
 
 ## Declare one
 
-Hooks live in the store's `config.yaml`, so they are committed with the project and apply
-to everyone — and every agent — working in it.
+```bash
+taskmgr config hook add --event pre-close --id tests-before-close \
+    --when 'type == "feature"' --run make --run test
+taskmgr config hook list      # what is configured, in the order it runs
+taskmgr config hook rm tests-before-close
+```
+
+`--run` is repeatable, one argv element per occurrence, because a hook is executed
+**directly — there is no shell**, so there is no quoting rule to guess at. For a pipeline
+or a `&&`, ask for a shell: `--run sh --run -c --run 'make lint && make test'`.
+
+`--when` takes the same filter expressions as `taskmgr list -q`
+([Filtering and search](queries.md)), evaluated against the issue *as it would be after the
+change*. It scopes a hook; it does not decide which event fires.
+
+`taskmgr config hook --help` has the rest. Every write is validated before a byte lands, so
+a malformed hook is refused by the command that wrote it rather than by your next `close`.
+
+What lands on disk is readable, and hand-editing it stays supported:
 
 ```yaml
 prefix: proj
@@ -18,22 +35,42 @@ prefix: proj
 hook_timeout: 2s                   # max runtime for any single hook. Default 2s.
 
 hooks:
-  - id: tests-before-close         # optional label; shown in messages
-    event: pre-close               # required
-    when: 'type == "feature"'      # optional filter; default: always
-    run: ["make", "test"]          # required: a command and its arguments
+  - id: tests-before-close
+    event: pre-close
+    when: 'type == "feature"'
+    run: ["make", "test"]
 
   - id: notify
     event: post-close
     run: [".tasks/hooks/notify.sh"]
 ```
 
-`run` is executed **directly — there is no shell**. For a pipeline or a `&&`, ask for one:
-`["sh", "-c", "make lint && make test"]`.
+## Which file: the project's, or yours
 
-`when` takes the same filter expressions as `taskmgr list -q`
-([Filtering and search](queries.md)), evaluated against the issue *as it would be after the
-change*. It scopes a hook; it does not decide which event fires.
+Hooks live in two places, and every `taskmgr config` command picks between them the same
+way — `--global` selects the second:
+
+| File | Applies to | Travels |
+|---|---|---|
+| the store's `config.yaml` | that project | committed with the repository, so it binds everyone and every agent working in it |
+| your `~/.taskmgr/config.yaml` | **every** store on this machine | nowhere — it is yours alone |
+
+Put a rule the data's integrity depends on in the store's file. Keep the per-user file for
+personal ergonomics — a reminder, a notification, a local lint — because a colleague and CI
+will never see it.
+
+Three consequences of the split:
+
+- **Global hooks run first**, then the project's. First deny still wins, so a machine-wide
+  gate is the one that surfaces when both would refuse.
+- **A global hook's id is prefixed `global:`** wherever it appears — in a denial, in
+  `config hook list`, and in `config hook rm`. That prefix is how a refusal tells you which
+  file to edit.
+- **Give a global hook an absolute path.** A hook's working directory is always the project
+  root, which for a global hook is whichever project it happens to be running in.
+
+A store cannot switch inherited hooks off. The escape hatch is editing the per-user file.
+For `hook_timeout` the store's value wins, then the global one, then the 2s default.
 
 ## The eight events
 
@@ -125,10 +162,12 @@ nothing is written; hints from the ones that already ran are still passed along.
   that long; a slow check is usually better as a post-hook, or left to CI.
 - **Pre-hooks fail closed.** A missing script, a bad command, a timeout — all deny. This is
   the point: a gate you can skip is not a gate, and **there is no bypass flag**. To relax
-  one, edit `config.yaml`.
+  one, remove it with `taskmgr config hook rm <id>` — adding `--global` when the id is
+  prefixed `global:`.
 - **A broken `hooks:` block blocks every write** until you fix it, with a clear
   configuration error. Reads are never affected, so you can still `list` and `show` your
-  way out.
+  way out. A broken block in the per-user file blocks writes in *every* project on the
+  machine.
 - **Never run a `taskmgr` mutation from a hook.** A pre-hook would deadlock against the
   lock it is already holding, and a post-hook would trigger further hooks. Read-only
   commands are fine — the example above is one.
