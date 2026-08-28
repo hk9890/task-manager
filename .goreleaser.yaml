@@ -62,15 +62,16 @@ sboms:
   - artifacts: archive
 
 # Keyless (Sigstore/OIDC) signature over checksums.txt — which in turn covers
-# every artifact. Produces checksums.txt.sig + checksums.txt.pem. Requires
+# every artifact. Produces one checksums.txt.bundle: cosign 3.x writes the
+# signature, the Fulcio certificate and the transparency-log entry into a single
+# Sigstore bundle, and has no flag for the 2.x .sig + .pem pair. Requires
 # `id-token: write` in the workflow and cosign on PATH (see release.yml).
 signs:
   - cmd: cosign
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
