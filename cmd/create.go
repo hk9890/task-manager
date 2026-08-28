@@ -86,7 +86,7 @@ var createCmd = &cobra.Command{
 			return mutationError(err)
 		}
 		if flagJSON {
-			return printJSON(createResultDTO{ID: res.Issue.ID, Hints: res.Hints, Warnings: res.Warnings})
+			return printJSON(createResultDTO{ID: res.Issue.ID, Store: s.Name(), Hints: res.Hints, Warnings: res.Warnings})
 		}
 		_, _ = fmt.Fprintf(stdout, "Created %s\n", res.Issue.ID)
 		printNotes(res.Hints, res.Warnings)

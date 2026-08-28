@@ -87,7 +87,9 @@ const FileExt        = ".md"         // the per-issue file extension
   It reads through the same seams as `Resolve` and never writes; a missing registry
   yields an empty slice, a corrupt one an error. It takes **no arguments**: the
   registry is global, so there is nothing a working directory or a store-name
-  override could select.
+  override could select. Each entry carries its `Health`, classified by the same
+  test resolution applies, so enumerating the registry costs one `stat` per entry
+  and never reports a dangling or broken entry as usable.
 - **`DerivePrefix`** turns a project path into the default ID prefix for a store
   tracking it (CONFIG-SPEC §5): base name lowercased, non-alphanumerics stripped,
   leading digits removed, truncated to 8, falling back to `task`. `Init` and
@@ -124,11 +126,26 @@ const (
 )
 
 type StoreEntry struct {
-    Path      string // the project path the entry maps (canonicalized)
-    Store     string // the registry name == subfolder under <central_root>/stores
-    StorePath string // the resolved store directory, <central_root>/stores/<Store>
+    Path      string      // the project path the entry maps (canonicalized)
+    Store     string      // the registry name == subfolder under <central_root>/stores
+    StorePath string      // the resolved store directory, <central_root>/stores/<Store>
+    Health    StoreHealth // whether that directory is a usable store
 }
+
+type StoreHealth int
+const (
+    StoreOK       StoreHealth = iota // a finished store
+    StoreDangling                    // no subfolder at all — resolution skips the entry
+    StoreBroken                      // a subfolder holding no config.yaml — resolution reports it
+)
 ```
+
+`StoreHealth` carries the three cases resolution already acts on (CONFIG-SPEC §3),
+so a listing and a resolution can never disagree about an entry: a client that
+enumerates the registry sees the dangling and broken entries **before** opening
+them, rather than discovering them as an error per row. `String()` returns the
+stable tokens `ok` / `dangling` / `broken`, which are the CLI's JSON contract
+(CLI-SPEC §6).
 
 In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;
 hermetic tests inject in-memory/fake seams through the same internal hooks the store
@@ -156,11 +173,19 @@ write path serializes writers (§7).
 ```go
 func (s *Store) Root() string     // project root (parent of the data dir)
 func (s *Store) Dir() string      // absolute path to the data directory
+func (s *Store) Name() string     // central-registry name, "" for a local store
 func (s *Store) Prefix() string   // configured ID prefix
 
 func (s *Store) Config() Config           // a copy, Hooks included
 func (s *Store) SetConfig(cfg Config) error // validate, then write config.yaml under the lock
 ```
+
+`Name` reports the registry name the store was opened under — set by `Resolve` for
+a central or `--store-name` match, and by `InitCentral` / `MoveToCentral` for the
+store they create. It is empty for a local store, which has no registry entry to
+take a name from. It is what identifies a store across projects; an issue ID does
+not, because a prefix is derived from the project directory name, so two projects
+whose directories share a name share a prefix (CONFIG-SPEC §5).
 
 `Config` returns a copy: the `Hooks` slice is cloned, so editing the result cannot
 reach the configuration the store is running with.

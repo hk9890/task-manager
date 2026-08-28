@@ -97,14 +97,14 @@ func runList(ff *filterFlags) error {
 	if err != nil {
 		return err
 	}
-	return emitIssues(issues)
+	return emitIssues(s.Name(), issues)
 }
 
-func emitIssues(issues []*tasks.Issue) error {
+func emitIssues(store string, issues []*tasks.Issue) error {
 	if flagJSON {
 		out := make([]issueDTO, len(issues))
 		for i, iss := range issues {
-			out[i] = toIssueDTO(iss)
+			out[i] = toIssueDTO(store, iss)
 		}
 		return printJSON(out)
 	}
@@ -171,7 +171,7 @@ var readyCmd = &cobra.Command{
 		if readyFlags.limit > 0 && len(issues) > readyFlags.limit {
 			issues = issues[:readyFlags.limit]
 		}
-		return emitIssues(issues)
+		return emitIssues(s.Name(), issues)
 	},
 }
 
@@ -196,7 +196,7 @@ var blockedCmd = &cobra.Command{
 		if flagJSON {
 			out := make([]blockedDTO, len(blocked))
 			for i, b := range blocked {
-				out[i] = blockedDTO{issueDTO: toIssueDTO(b.Issue), BlockedBy: toRefDTOs(b.BlockedBy)}
+				out[i] = blockedDTO{issueDTO: toIssueDTO(s.Name(), b.Issue), BlockedBy: toRefDTOs(b.BlockedBy)}
 			}
 			return printJSON(out)
 		}

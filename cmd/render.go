@@ -51,6 +51,7 @@ func printJSON(v any) error {
 
 type issueDTO struct {
 	ID          string     `json:"id"`
+	Store       string     `json:"store,omitempty"`
 	Title       string     `json:"title"`
 	Status      string     `json:"status"`
 	Type        string     `json:"type"`
@@ -89,6 +90,7 @@ type mutationDTO struct {
 // hints/warnings.
 type createResultDTO struct {
 	ID       string   `json:"id"`
+	Store    string   `json:"store,omitempty"`
 	Hints    []string `json:"hints,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
 }
@@ -128,9 +130,13 @@ type detailDTO struct {
 	Comments      []commentDTO `json:"comments,omitempty"`
 }
 
-func toIssueDTO(i *tasks.Issue) issueDTO {
+// toIssueDTO renders one issue. store is the registry name of the store it came
+// from, empty for a local store, so a client merging rows from several stores
+// can tell them apart — the ID cannot, since two projects whose directories
+// share a name share a prefix (CONFIG-SPEC §5).
+func toIssueDTO(store string, i *tasks.Issue) issueDTO {
 	d := issueDTO{
-		ID: i.ID, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
+		ID: i.ID, Store: store, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
 		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator, Labels: i.Labels,
 		Parent: i.Parent, BlockedBy: i.BlockedBy, Related: i.Related,
 		Created: i.Created, Updated: i.Updated, CloseReason: i.CloseReason,
@@ -161,9 +167,9 @@ func toRefDTOs(rs []tasks.Ref) []refDTO {
 	return out
 }
 
-func toDetailDTO(d *tasks.Detail) detailDTO {
+func toDetailDTO(store string, d *tasks.Detail) detailDTO {
 	out := detailDTO{
-		issueDTO:      toIssueDTO(&d.Issue),
+		issueDTO:      toIssueDTO(store, &d.Issue),
 		Description:   d.Description,
 		BodyExternal:  d.BodyExternal,
 		BlockedByRefs: toRefDTOs(d.BlockedByRefs),

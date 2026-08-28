@@ -74,6 +74,7 @@ func taskmgrCentralIn(t *testing.T, cwd, dirFlag, home string, extraEnv []string
 
 type whereJSON struct {
 	Kind        string `json:"kind"`
+	Store       string `json:"store"`
 	StorePath   string `json:"store_path"`
 	ProjectPath string `json:"project_path"`
 }
@@ -82,6 +83,7 @@ type storeListJSON struct {
 	Path      string `json:"path"`
 	Store     string `json:"store"`
 	StorePath string `json:"store_path"`
+	Health    string `json:"health"`
 }
 
 func TestL4_Central_InitWhereListCreate(t *testing.T) {
@@ -119,6 +121,9 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	if w.Kind != "central" || w.StorePath != wantStoreDir {
 		t.Errorf("where = %+v, want kind=central store_path=%q", w, wantStoreDir)
 	}
+	if w.Store != name {
+		t.Errorf("where store = %q, want %q", w.Store, name)
+	}
 
 	// store list → one entry
 	out, _, code = taskmgrCentral(t, proj, home, "--json", "store", "list")
@@ -132,6 +137,9 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	if len(entries) != 1 || entries[0].Store != name || entries[0].StorePath != wantStoreDir {
 		t.Errorf("store list = %+v", entries)
 	}
+	if entries[0].Health != "ok" {
+		t.Errorf("store list health = %q, want ok", entries[0].Health)
+	}
 
 	// create resolves to the central store; the file lands under the central root.
 	out, errOut, code = taskmgrCentral(t, proj, home, "--json", "create", "--title", "central task")
@@ -139,13 +147,19 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 		t.Fatalf("create: code=%d stderr=%q", code, errOut)
 	}
 	var created struct {
-		ID string `json:"id"`
+		ID    string `json:"id"`
+		Store string `json:"store"`
 	}
 	if err := json.Unmarshal([]byte(out), &created); err != nil {
 		t.Fatalf("create json: %v (%q)", err, out)
 	}
 	if !strings.HasPrefix(created.ID, initRes.Prefix+"-") {
 		t.Errorf("id = %q, want store prefix %q-", created.ID, initRes.Prefix)
+	}
+	// An ID alone does not say where it landed: the prefix comes from the project
+	// directory name, so two projects can share one (CONFIG-SPEC §5).
+	if created.Store != name {
+		t.Errorf("create store = %q, want %q", created.Store, name)
 	}
 	if _, err := os.Stat(filepath.Join(wantStoreDir, created.ID+".md")); err != nil {
 		t.Errorf("task file not in central store: %v", err)
@@ -155,6 +169,68 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	out, _, code = taskmgrCentral(t, proj, home, "--json", "list")
 	if code != 0 || !strings.Contains(out, created.ID) {
 		t.Errorf("list did not return the created id %q: %q", created.ID, out)
+	}
+	var listed []struct {
+		ID    string `json:"id"`
+		Store string `json:"store"`
+	}
+	if err := json.Unmarshal([]byte(out), &listed); err != nil {
+		t.Fatalf("list json: %v (%q)", err, out)
+	}
+	if len(listed) != 1 || listed[0].Store != name {
+		t.Errorf("list rows = %+v, want store=%q on every row", listed, name)
+	}
+
+	// show carries it too, so an id captured from any read command can be aimed
+	// back at the store it came from.
+	out, _, code = taskmgrCentral(t, proj, home, "--json", "show", created.ID)
+	if code != 0 {
+		t.Fatalf("show: code=%d", code)
+	}
+	var shown struct {
+		Store string `json:"store"`
+	}
+	if err := json.Unmarshal([]byte(out), &shown); err != nil {
+		t.Fatalf("show json: %v (%q)", err, out)
+	}
+	if shown.Store != name {
+		t.Errorf("show store = %q, want %q", shown.Store, name)
+	}
+}
+
+// TestL4_LocalStore_OmitsStoreName checks that a local store reports no name:
+// it has no registry entry, so there is nothing to report, and an invented one
+// would not select anything with --store-name.
+func TestL4_LocalStore_OmitsStoreName(t *testing.T) {
+	home := t.TempDir()
+	proj := t.TempDir()
+	if _, errOut, code := taskmgrCentral(t, proj, home, "init"); code != 0 {
+		t.Fatalf("init: %s", errOut)
+	}
+	out, errOut, code := taskmgrCentral(t, proj, home, "--json", "create", "--title", "local task")
+	if code != 0 {
+		t.Fatalf("create: code=%d stderr=%q", code, errOut)
+	}
+	if strings.Contains(out, `"store"`) {
+		t.Errorf("create output carries a store field for a local store: %q", out)
+	}
+	out, _, code = taskmgrCentral(t, proj, home, "--json", "where")
+	if code != 0 {
+		t.Fatalf("where: code=%d", code)
+	}
+	var w whereJSON
+	if err := json.Unmarshal([]byte(out), &w); err != nil {
+		t.Fatalf("where json: %v (%q)", err, out)
+	}
+	if w.Kind != "local" || w.Store != "" {
+		t.Errorf("where = %+v, want kind=local with no store name", w)
+	}
+	out, _, code = taskmgrCentral(t, proj, home, "--json", "list")
+	if code != 0 {
+		t.Fatalf("list: code=%d", code)
+	}
+	if strings.Contains(out, `"store"`) {
+		t.Errorf("list output carries a store field for a local store: %q", out)
 	}
 }
 

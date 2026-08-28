@@ -131,6 +131,7 @@ for the resolution rule above. It mirrors the engine's `ResolveKind` (SDK-SPEC �
 verbatim, so the override distinction is not lost:
 
 - `kind`: `local` | `central` | `override_name`, or `none` when nothing resolves.
+- `store`: the registry name (omitted for a local store, which has none).
 - `store_path`: the resolved store directory (omitted when `kind` is `none`).
 - `project_path`: the project the store tracks (the store's parent for a local store;
   omitted when `kind` is `none`).
@@ -139,9 +140,14 @@ Never errors on no-store; exits `0` with `kind: none`. **Output (JSON):** `where
 
 ### `taskmgr store list`
 
-Enumerate the registry entries — each entry's project `path`, `store` name, and the
-store directory. A plain listing (no health classification in this slice; a dangling
-entry, CONFIG-SPEC §3, is shown like any other).
+Enumerate the registry entries — each entry's project `path`, `store` name, the store
+directory, and its `health`: `ok`, `dangling` (no subfolder) or `broken` (a subfolder
+without `config.yaml`), the same three cases resolution acts on (CONFIG-SPEC §3).
+Listing them is what makes a store switcher possible: the caller sees the entries that
+will not open before it offers them, instead of one error per selected row.
+
+Classification is a `stat` per entry, not an open, so the listing stays a read and
+never takes a store's lock.
 
 - **Output (JSON):** array of `storeListDTO` (§6).
 
@@ -418,7 +424,8 @@ Create a new issue and allocate its ID.
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
 | `--related <id>` | — | Related issue ID; repeatable. |
 
-- **Output:** the new ID (`{"id"}` in JSON).
+- **Output:** the new ID (`{"id", "store"}` in JSON; `store` is the registry name of
+  the store it landed in, omitted for a local store — §6).
 
 ### `taskmgr import [--file <path>] [--batch] [--run-hooks]`
 
@@ -588,18 +595,25 @@ Idempotent.
 
 Stable `snake_case` DTOs. Optional fields are omitted when empty.
 
-**`issueDTO`** — emitted by `create` (id only), `list`, `search`, `ready`, and
-nested in others:
+**`issueDTO`** — emitted by `create` (`id` and `store` only), `list`, `search`,
+`ready`, and nested in others:
 
 ```json
 {
-  "id": "proj-0042", "title": "…", "status": "open", "type": "bug",
+  "id": "proj-0042", "store": "my-project", "title": "…", "status": "open", "type": "bug",
   "priority": 1, "assignee": "hans", "creator": "hans", "labels": ["area:x"],
   "parent": "proj-0007", "blocked_by": ["proj-0040"], "related": ["proj-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-04T09:00:00Z",
   "closed": "2026-06-05T08:00:00Z", "close_reason": "fixed"
 }
 ```
+
+`store` is the registry name of the store the issue came from, **omitted for a local
+store**, which has no registry entry to take a name from. It is what makes a merged
+result set from several stores unambiguous; the ID does not, because a prefix is
+derived from the project directory name, so two projects whose directories share a
+name share a prefix (CONFIG-SPEC §5). `create` carries it beside the `id` for the same
+reason.
 
 **`refDTO`** — a lightweight reference (no body): `{id, title, type, status, priority}`.
 
@@ -621,16 +635,19 @@ output is unaffected by body size.
 
 **`whereDTO`** — emitted by `where`. `kind` is one of `local` | `central` |
 `override_name` | `none` (mirrors the engine's `ResolveKind`, SDK-SPEC §1).
-`store_path` and `project_path` are omitted when `kind` is `none`:
+`store_path` and `project_path` are omitted when `kind` is `none`, and `store` for a
+local store:
 
 ```json
-{ "kind": "central", "store_path": "/home/you/.taskmgr/stores/my-project",
+{ "kind": "central", "store": "my-project",
+  "store_path": "/home/you/.taskmgr/stores/my-project",
   "project_path": "/home/you/dev/my-project" }
 ```
 
 **`storeListDTO`** — emitted by `store list`, one per registry entry:
-`{path, store, store_path}` (the project path, the registry name, and the resolved
-store directory). No health/status field in this slice.
+`{path, store, store_path, health}` (the project path, the registry name, the resolved
+store directory, and `ok` | `dangling` | `broken` — §2.1). `health` is always present;
+it mirrors the engine's `StoreHealth` (SDK-SPEC §1).
 
 **`storeMoveDTO`** — emitted by `store move`, describing the store after the move:
 `{store, store_path, project_path}` (the registry name, the store directory, and the

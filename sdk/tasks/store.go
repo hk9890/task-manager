@@ -116,6 +116,7 @@ type Config struct {
 type Store struct {
 	root string // project root (the parent of the data dir)
 	dir  string // absolute path to the data directory (.tasks)
+	name string // central-registry name, or "" for a local store (CONFIG-SPEC §3)
 	cfg  Config
 	fs   vfs.FS // disk seam; always vfs.NewOS() in production
 
@@ -311,6 +312,13 @@ func (s *Store) Root() string { return s.root }
 
 // Dir returns the absolute path to the data directory.
 func (s *Store) Dir() string { return s.dir }
+
+// Name returns the central-registry name this store was opened under, or "" for
+// a local store, which has no registry entry to take a name from (CONFIG-SPEC
+// §3). It identifies the store across projects, which an issue ID does not: a
+// prefix is derived from the project directory name, so two projects whose
+// directories share a name share a prefix (CONFIG-SPEC §5).
+func (s *Store) Name() string { return s.name }
 
 // Prefix returns the configured ID prefix.
 func (s *Store) Prefix() string { return s.cfg.Prefix }

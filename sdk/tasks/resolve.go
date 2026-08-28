@@ -77,9 +77,39 @@ type ResolveInfo struct {
 
 // StoreEntry is one central-registry entry (SDK-SPEC §1, returned by Stores).
 type StoreEntry struct {
-	Path      string // the project path the entry maps (canonicalized)
-	Store     string // the registry name == subfolder under <central_root>/stores
-	StorePath string // the resolved store directory, <central_root>/stores/<Store>
+	Path      string      // the project path the entry maps (canonicalized)
+	Store     string      // the registry name == subfolder under <central_root>/stores
+	StorePath string      // the resolved store directory, <central_root>/stores/<Store>
+	Health    StoreHealth // whether that directory is a usable store
+}
+
+// StoreHealth classifies an entry's store subfolder (CONFIG-SPEC §3). It carries
+// the same three cases resolution acts on, so a listing and a resolution never
+// disagree about an entry: dangling is skipped, broken is reported.
+type StoreHealth int
+
+const (
+	// StoreOK: the subfolder is a finished store.
+	StoreOK StoreHealth = iota
+	// StoreDangling: no subfolder at all — resolution skips the entry.
+	StoreDangling
+	// StoreBroken: a subfolder holding no config.yaml — resolution reports it.
+	StoreBroken
+)
+
+// String returns the stable, agent-facing token for the health, matching the CLI
+// `store list` JSON contract (CLI-SPEC §6).
+func (h StoreHealth) String() string {
+	switch h {
+	case StoreOK:
+		return "ok"
+	case StoreDangling:
+		return "dangling"
+	case StoreBroken:
+		return "broken"
+	default:
+		return "unknown"
+	}
 }
 
 // storeNameRe is the store-name grammar (CONFIG-SPEC §3): a single path

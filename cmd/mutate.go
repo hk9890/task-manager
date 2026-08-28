@@ -120,7 +120,7 @@ var updateCmd = &cobra.Command{
 		if err != nil {
 			return mutationError(err)
 		}
-		return reportResult(res, "Updated")
+		return reportResult(s.Name(), res, "Updated")
 	},
 }
 
@@ -141,7 +141,7 @@ var closeCmd = &cobra.Command{
 		if err != nil {
 			return mutationError(err)
 		}
-		return reportResult(res, "Closed")
+		return reportResult(s.Name(), res, "Closed")
 	},
 }
 
@@ -161,7 +161,7 @@ hot directory.`,
 		if err != nil {
 			return mutationError(err)
 		}
-		return reportResult(res, "Reopened")
+		return reportResult(s.Name(), res, "Reopened")
 	},
 }
 
@@ -401,10 +401,10 @@ var commentRmCmd = &cobra.Command{
 // reportResult prints a successful gated mutation, surfacing hook hints and
 // post-hook warnings (HOOK-SPEC §6.2). With --json the issue carries "hints" and
 // "warnings"; in text mode they print as notes on stderr so stdout stays clean.
-func reportResult(res *tasks.MutationResult, verb string) error {
+func reportResult(store string, res *tasks.MutationResult, verb string) error {
 	if flagJSON {
 		return printJSON(mutationDTO{
-			issueDTO: toIssueDTO(res.Issue),
+			issueDTO: toIssueDTO(store, res.Issue),
 			Hints:    res.Hints,
 			Warnings: res.Warnings,
 		})

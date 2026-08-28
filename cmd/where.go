@@ -26,9 +26,11 @@ import (
 )
 
 // whereDTO is the JSON shape of `where` (CLI-SPEC §6). store_path / project_path
-// are omitted when nothing resolves (kind "none").
+// are omitted when nothing resolves (kind "none"); store is omitted for a local
+// store, which has no registry name.
 type whereDTO struct {
 	Kind        string `json:"kind"`
+	Store       string `json:"store,omitempty"`
 	StorePath   string `json:"store_path,omitempty"`
 	ProjectPath string `json:"project_path,omitempty"`
 }
@@ -42,7 +44,7 @@ Unlike other commands, 'where' never fails on "no store" — it reports the
 outcome and exits 0.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, info, err := tasks.Resolve(resolveOptions(), logOption())
+		s, info, err := tasks.Resolve(resolveOptions(), logOption())
 		if err != nil {
 			if errors.Is(err, tasks.ErrNoStore) {
 				return emitWhere(whereDTO{Kind: "none"})
@@ -51,6 +53,7 @@ outcome and exits 0.`,
 		}
 		return emitWhere(whereDTO{
 			Kind:        info.Kind.String(),
+			Store:       s.Name(),
 			StorePath:   info.StorePath,
 			ProjectPath: info.ProjectPath,
 		})
@@ -67,6 +70,9 @@ func emitWhere(d whereDTO) error {
 		return nil
 	}
 	_, _ = fmt.Fprintf(stdout, "kind:    %s\n", d.Kind)
+	if d.Store != "" {
+		_, _ = fmt.Fprintf(stdout, "name:    %s\n", d.Store)
+	}
 	_, _ = fmt.Fprintf(stdout, "store:   %s\n", d.StorePath)
 	_, _ = fmt.Fprintf(stdout, "project: %s\n", d.ProjectPath)
 	return nil

@@ -280,6 +280,103 @@ func TestStores_Enumerate(t *testing.T) {
 	if got[0].Store != "p1" || got[0].StorePath != filepath.Join(testCentral, storesSubdir, "p1") {
 		t.Errorf("entry[0] = %+v", got[0])
 	}
+	for _, e := range got {
+		if e.Health != StoreOK {
+			t.Errorf("entry %q health = %v, want StoreOK", e.Store, e.Health)
+		}
+	}
+}
+
+// TestStores_Health checks that a listing classifies an entry the same way
+// resolution does (CONFIG-SPEC §3). A listing that reports a dangling or broken
+// entry as usable hands a client rows that fail the moment they are opened.
+func TestStores_Health(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/ok", filepath.Join(testCentral, storesSubdir, "ok"), "ok")
+
+	// Broken: the folder exists, but holds no config.yaml.
+	brokenDir := filepath.Join(testCentral, storesSubdir, "broken")
+	if err := m.MkdirAll(brokenDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", brokenDir, err)
+	}
+
+	// Dangling: registered, with no folder at all.
+	writeRegistry(t, m, testCentral,
+		registryEntry{Path: "/ok", Store: "ok"},
+		registryEntry{Path: "/broken", Store: "broken"},
+		registryEntry{Path: "/gone", Store: "gone"},
+	)
+
+	got, err := storesWith(m, fakeEnv(nil))
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+	want := map[string]StoreHealth{"ok": StoreOK, "broken": StoreBroken, "gone": StoreDangling}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(got), len(want))
+	}
+	for _, e := range got {
+		if e.Health != want[e.Store] {
+			t.Errorf("entry %q health = %v, want %v", e.Store, e.Health, want[e.Store])
+		}
+	}
+}
+
+// TestStoreHealth_String pins the agent-facing tokens: they are the CLI's
+// `store list` JSON contract (CLI-SPEC §6), so a rename here is a breaking
+// change for every client parsing it.
+func TestStoreHealth_String(t *testing.T) {
+	for _, tc := range []struct {
+		h    StoreHealth
+		want string
+	}{
+		{StoreOK, "ok"},
+		{StoreDangling, "dangling"},
+		{StoreBroken, "broken"},
+		{StoreHealth(99), "unknown"},
+	} {
+		if got := tc.h.String(); got != tc.want {
+			t.Errorf("StoreHealth(%d).String() = %q, want %q", tc.h, got, tc.want)
+		}
+	}
+}
+
+// TestStore_Name reports the registry name a store was opened under, and empty
+// for a local store — the value the CLI renders as the issue JSON's "store".
+func TestStore_Name(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/proj", filepath.Join(testCentral, storesSubdir, "proj"), "prj")
+	writeRegistry(t, m, testCentral, registryEntry{Path: "/proj", Store: "proj"})
+
+	for _, tc := range []struct {
+		name string
+		opts ResolveOptions
+		want string
+	}{
+		{"by name", ResolveOptions{StoreName: "proj", WorkDir: "/elsewhere"}, "proj"},
+		{"by project path", ResolveOptions{WorkDir: "/proj"}, "proj"},
+	} {
+		s, _, err := resolveWith(tc.opts, m, fakeEnv(nil), nil)
+		if err != nil {
+			t.Fatalf("%s: resolve: %v", tc.name, err)
+		}
+		if s.Name() != tc.want {
+			t.Errorf("%s: Name() = %q, want %q", tc.name, s.Name(), tc.want)
+		}
+	}
+
+	// A local store has no registry entry, so it has no name to report.
+	makeStore(t, m, "/local", filepath.Join("/local", DataDirName), "loc")
+	s, info, err := resolveWith(ResolveOptions{WorkDir: "/local"}, m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("resolve local: %v", err)
+	}
+	if info.Kind != ResolvedLocal {
+		t.Fatalf("kind = %v, want ResolvedLocal", info.Kind)
+	}
+	if s.Name() != "" {
+		t.Errorf("local Name() = %q, want empty", s.Name())
+	}
 }
 
 func TestInitCentral_CreatesAndRegisters(t *testing.T) {
