@@ -184,6 +184,108 @@ required, and they are mutually exclusive.
 
 ---
 
+## 2.2 Configuration commands
+
+`taskmgr config` reads and writes configuration. Two files are addressable and every
+subcommand selects between them the same way:
+
+| | Target | Needs a store |
+|---|---|---|
+| default | the resolved store's `config.yaml` (TASK-STORAGE-SPEC §4.2) | yes |
+| `--global` | the per-user `config.yaml` (CONFIG-SPEC §2) | no |
+
+Because `--global` resolves no store, it works in a directory where nothing resolves.
+
+Every write goes through the engine, which validates before a byte lands: an
+unparseable `hook_timeout` or a malformed hook is refused at the command that wrote it,
+rather than at the next mutation (HOOK-SPEC §3.4). A refused command leaves the file
+byte-for-byte unchanged.
+
+### `taskmgr config keys`
+
+List every supported key with its scope (`store` / `global`), whether it is writable,
+and what it means. It is the static catalog, so it reads nothing and needs no store.
+
+The `hooks` block is a list, not a scalar, and is absent from this table: it is managed
+with `taskmgr config hook`.
+
+- **Output (JSON):** array of `configKeyDTO` (§6).
+
+**The keys:**
+
+| Key | Scope | Writable | Meaning |
+|---|---|---|---|
+| `prefix` | store | no | The store's ID prefix. Read-only: it is part of every issue ID and of every stored reference, so changing it would orphan the store. |
+| `hook_timeout` | store | yes | Per-hook wall-clock limit (`2s`, `5m`; `0` disables). Unset means the 2s default. |
+| `version` | global | no | Schema version of the per-user config. |
+| `central_root` | global | yes | Directory holding the registry and central stores. Unset means the taskmgr home. Setting it does **not** move existing stores. |
+| `hook_timeout` | global | yes | Fallback limit for a store that sets none (HOOK-SPEC §3.5). |
+
+### `taskmgr config list [--global]`
+
+Show the current value of every key of one file, with the scope and the file's path.
+
+- **Output (JSON):** `configListDTO` (§6). In human output an empty value renders
+  `(unset)`.
+
+### `taskmgr config get <key> [--global]`
+
+Print one key's value and nothing else, so a script can consume it without parsing. An
+unset key prints an empty line and exits `0`. An unknown key exits `1` and names the keys
+that would have worked.
+
+- **Output (JSON):** `configValueDTO` (§6).
+
+### `taskmgr config set <key> <value> [--global]`
+
+Set one key. A read-only key exits `1`.
+
+### `taskmgr config unset <key> [--global]`
+
+Clear one key, restoring its documented default. Equivalent to setting the empty value; a
+read-only key exits `1`.
+
+### `taskmgr config hook add [--global] --event <e> --run <arg> [--run <arg>…]`
+
+Append one hook to the file's `hooks` block.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--event <e>` | — | **Required.** One of the eight events (HOOK-SPEC §2). |
+| `--run <arg>` | — | **Required, repeatable.** One argv element per occurrence. |
+| `--id <id>` | — | Hook id used in messages, logs, and `config hook rm`. Must be unique within the file. |
+| `--when <expr>` | — | Filter expression (QUERY-SPEC) scoping the hook to matching issues. |
+
+`--run` is repeatable rather than a single string because hooks are executed directly via
+`execve` with no shell, so there is no quoting rule to invent. For shell features, pass
+the shell:
+
+```bash
+taskmgr config hook add --event pre-close \
+  --run sh --run -c --run 'make lint && make test'
+```
+
+A hook's working directory is always the project root, so a relative path in a
+`--global` hook resolves against whichever project it runs in: give a global hook an
+absolute path.
+
+- **Output:** the hook's effective id and event (`configHookDTO` in JSON, §6).
+
+### `taskmgr config hook list [--global]`
+
+List one file's hooks in the order they run, each with its **effective id** — the id a
+denial reason reports and `config hook rm` takes, including the defaulted
+`<event>#<index>` and the `global:` prefix (HOOK-SPEC §3.5).
+
+- **Output (JSON):** array of `configHookDTO` (§6).
+
+### `taskmgr config hook rm <id> [--global]`
+
+Remove the hook with that effective id. An unknown id exits `1` and lists the ids that
+are configured.
+
+---
+
 ## 3. Read commands
 
 ### `taskmgr show <id>`
@@ -528,6 +630,23 @@ store directory). No health/status field in this slice.
 `{store, store_path, project_path}` (the registry name, the store directory, and the
 project it now tracks).
 
+**`configKeyDTO`** — emitted by `config keys`, one per supported key:
+`{key, scope, writable, description}`. `scope` is `store` | `global`. It is the static
+catalog, so the same array is returned wherever the command runs.
+
+**`configValueDTO`** — emitted by `config get`, `config set` and `config unset`:
+`{key, value, writable}`. `value` is the empty string for an unset key (and after
+`unset`).
+
+**`configListDTO`** — emitted by `config list`: `{scope, path, keys}` where `keys` is a
+`configValueDTO[]` and `path` is the file the values came from.
+
+**`configHookDTO`** — emitted by `config hook add` (the one hook) and `config hook list`
+(an array): `{id, scope, event, when, run}`. `id` is the **effective** id — the defaulted
+`<event>#<index>` and the `global:` prefix already applied (HOOK-SPEC §3.5) — so it is
+the value `config hook rm` takes and the value a `hook_denied` error reports. `when` is
+omitted when empty. `config hook rm` emits `{removed, path}`.
+
 **Hook output ([HOOK-SPEC.md](HOOK-SPEC.md) §6.2).** A mutation that runs hooks surfaces
 their output alongside the normal result. On success the JSON carries optional
 `"hints": [string]` (advisory notes from any hook that ran) and `"warnings": [string]`
@@ -551,6 +670,10 @@ taskmgr store    list                        # enumerate central registry entrie
 taskmgr store    move --central [--to N]     # promote the local store here to central
                  move --rename  --to N       # rename the central store here
                  move --relink  --to N       # entry N now tracks this directory
+taskmgr config   keys                        # supported keys, both scopes
+                 list | get K | set K V | unset K          [--global]
+                 hook add --event E --run A… [--id --when] [--global]
+                 hook list | hook rm ID                    [--global]
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file

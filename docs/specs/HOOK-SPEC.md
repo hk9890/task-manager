@@ -8,7 +8,8 @@ to one after it commits — send a notification. Either kind may also hand back 
 Hooks keep policy out of the core. The engine knows only issues, dependencies, and
 ready-work (ARCHITECTURE-SPEC.md §1); rules like "tests must pass before close" or
 "a feature needs a Definition-of-Done section" are hooks, declared per-repository in
-`config.yaml`. Hooks are the project's **extension system**: the core stays minimal and
+`config.yaml` — or, for a machine rather than a repository, in the per-user config (§3.5).
+Hooks are the project's **extension system**: the core stays minimal and
 earns every feature it keeps, and anything that *can* live in a hook is a hook rather than
 engine code (ARCHITECTURE-SPEC.md §9–§10).
 
@@ -44,7 +45,9 @@ The contract is uniform:
    *allow* (missing, not executable, times out), the transition is **denied**. A post-hook
    runs after the write has committed, so its failure is a logged warning, never a rollback.
 5. **Deterministic.** For a given event and store state, which hooks run, in what order,
-   and the decision are fixed by `config.yaml`.
+   and the decision are fixed by the two configuration files — the store's `config.yaml`
+   and the per-user one (§3.5). Both are plain files a reader can inspect; nothing else
+   contributes a hook.
 6. **Engine-level.** Hooks fire inside the `Store` write path, so every front end (the
    `taskmgr` CLI, any future consumer) is gated identically (ARCHITECTURE-SPEC.md §3).
 
@@ -96,12 +99,16 @@ Out of scope, additive later:
 
 Hooks live in the store's `config.yaml` (TASK-STORAGE-SPEC.md §4.2), so they are
 committed with the repository and shared across everyone — and every agent — who works
-in it.
+in it. A second, machine-local set may be declared in the per-user config
+(CONFIG-SPEC.md §2); the two are merged as §3.5 describes. Everything in §3.1–§3.4
+applies to both files.
+
+Either file is editable by hand or with `taskmgr config hook` (CLI-SPEC.md).
 
 ```yaml
 prefix: proj
 
-hook_timeout: 2s                  # global: max runtime for ANY single hook. Default 2s.
+hook_timeout: 2s                  # store-wide: max runtime for ANY single hook. Default 2s.
 
 hooks:
   - id: tests-before-close        # optional label, shown in messages and logs
@@ -120,8 +127,10 @@ hooks:
 
 ### 3.1 `hook_timeout` (top-level)
 
-A single, **global** wall-clock limit applied to **every** hook process; there is no
-per-hook timeout. Go duration string (`"2s"`, `"5m"`); default **`2s`**; `0` disables it.
+A single, **store-wide** wall-clock limit applied to **every** hook process the store
+runs, inherited ones included; there is no per-hook timeout. Go duration string (`"2s"`,
+`"5m"`); default **`2s`**; `0` disables it. It may also be set in the per-user config as
+a fallback, where the store's own value wins (§3.5 rule 3).
 
 With `0`, nothing bounds a hook — a hang blocks the command indefinitely, and for a
 pre-hook holds the store lock for that whole time (§8). Such a hook stays in taskmgr's
@@ -180,6 +189,46 @@ The `hooks:` block and `hook_timeout` are validated when the store is opened for
 `hook_timeout` — **every mutation fails** with a clear configuration error until fixed
 (fail-closed config; §1 principle 4). **Reads are never affected.** Unknown keys within a hook
 entry are ignored for forward-compatibility (TASK-STORAGE-SPEC.md §4.2).
+
+This applies to the per-user file too, where the same failure is wider: a malformed
+global block fails mutations in **every store on the machine**. `taskmgr config`
+validates before writing either file, so a block that would fail this check is normally
+refused at the command that wrote it rather than at the next unrelated mutation.
+
+### 3.5 Global hooks (per-user config)
+
+The per-user config (CONFIG-SPEC.md §2) may carry a `hooks:` block with the same schema.
+It applies to **every** store this machine resolves.
+
+**Merge (normative).**
+
+1. **Global hooks run first**, then the store's, each group in its own config order. The
+   effective chain for an event is `[global…] ++ [store…]`; §4's "first deny wins" then
+   selects within it, so a machine-wide gate is what surfaces when both would deny.
+2. **Effective ids are prefixed `global:`** — a declared `id` as well as a defaulted
+   `<event>#<index>`. The two files number their entries independently, so without the
+   prefix a denial naming `pre-create#0` would not say which file to edit. `taskmgr
+   config hook list` prints the effective id, and `taskmgr config hook rm` takes it.
+3. **`hook_timeout`**: the store's value when it sets one, else the global one, else the
+   2s default. One limit still bounds every hook in the merged chain.
+4. **No opt-out.** A store cannot suppress inherited hooks; the escape hatch is editing
+   the per-user config. A gate configured for the machine applies to every project on it.
+5. **The working directory is unchanged** — always the project root (§3.2). A relative
+   path in a global hook therefore resolves against whichever project the hook runs in,
+   which is almost never what the author meant: give a global hook an absolute path.
+   This is **not** validated, because `["sh", "-c", …]` is the documented idiom for shell
+   features and `sh` is resolved from `PATH`.
+
+**When to use which file.** A store's config travels with the repository; the per-user
+config does not. A gate declared here holds on your machine and nowhere else — not for a
+colleague, not in CI — so it fits personal ergonomics and not an invariant the data
+depends on. Anything in the second category belongs in the store's `config.yaml`.
+
+**Reads never touch it.** The per-user config is read at the same moment the hook set is
+compiled — the first write (§3.4) — so a store that is only queried does not read the
+home at all, and the local walk-up of store resolution stays free of global config
+(CONFIG-SPEC.md §4). A machine with no locatable home simply inherits nothing; that is
+not an error.
 
 ---
 
@@ -483,7 +532,7 @@ Deliberately excluded, with rationale:
   and the agent, the primary caller, applies the change on its side and retries. Keeping
   hooks side-effect-free preserves the one-writer invariant (ARCHITECTURE-SPEC.md §7) and
   the validation/atomicity guarantee.
-- **No per-hook `timeout`, `workdir`, or error policy.** One global `hook_timeout`; cwd is
+- **No per-hook `timeout`, `workdir`, or error policy.** One `hook_timeout` per store (§3.1); cwd is
   always the repo root; fail-closed (pre) / warn (post) is uniform.
 - **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.
 - **No comment- or dependency-specific events** (§2.2).

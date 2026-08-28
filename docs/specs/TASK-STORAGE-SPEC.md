@@ -143,11 +143,20 @@ hooks:                    # optional; lifecycle-gate hooks run at issue transiti
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `prefix` | string | yes | `^[a-z][a-z0-9]*$`, max length 32. The ID prefix for every issue in the store. |
-| `hook_timeout` | duration | no | Global per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
+| `hook_timeout` | duration | no | Store-wide per-hook wall-clock limit (Go duration; default `2s`, `0` disables). See [HOOK-SPEC.md](HOOK-SPEC.md) §3.1. |
 | `hooks` | list | no | Lifecycle-gate hooks run at issue transitions; full schema in [HOOK-SPEC.md](HOOK-SPEC.md) §3. |
 
 Unknown keys must be ignored by readers, never rejected. The `hooks` block and
 `hook_timeout` are validated when the store is opened for a write ([HOOK-SPEC.md](HOOK-SPEC.md) §3.4).
+
+`prefix` is **immutable**: it is part of every issue ID, every filename, and every
+stored reference (§3), so it is fixed at `init`. The other keys are editable by hand or
+with `taskmgr config` ([CLI-SPEC.md](CLI-SPEC.md) §2.2).
+
+This file is committed with the repository, so its hooks apply to everyone who works in
+it. A machine may add further hooks in the per-user config
+([CONFIG-SPEC.md](CONFIG-SPEC.md) §2); those run first and travel with the machine, not
+with the store ([HOOK-SPEC.md](HOOK-SPEC.md) §3.5).
 
 ### 4.3 Task file — `<id>.md`
 
