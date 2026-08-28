@@ -473,9 +473,11 @@ The envelope is a JSON object (timestamps RFC3339):
   and every comment — is validated before anything is written, so control
   characters, bad enums, or dangling edges reject the record wholesale. The adapter
   is responsible for sanitizing source data to fit the model.
-- **Output:** `{"source_id", "id"}` for a single import; with `--batch`, a JSON
-  array of `{"source_id", "id", "error"}` (one per record) and a **non-zero exit
-  if any record failed** (the others still land).
+- **Output:** `{"source_id", "id", "store"}` for a single import; with `--batch`, a
+  JSON array of `{"source_id", "id", "store", "error"}` (one per record) and a
+  **non-zero exit if any record failed** (the others still land). `store` is the
+  registry name the records landed in, omitted for a local store (§6), so the
+  source-ID → taskmgr-ID map an adapter builds says which store it maps into.
 
 ### `taskmgr update <id> [options]`
 

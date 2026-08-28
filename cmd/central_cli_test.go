@@ -196,6 +196,28 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	if shown.Store != name {
 		t.Errorf("show store = %q, want %q", shown.Store, name)
 	}
+
+	// import returns a source-ID → taskmgr-ID map an adapter keeps; without the
+	// store name that map does not say which store it maps into.
+	envelope := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(envelope, []byte(`{"source_id":"S-1","title":"imported","type":"task"}`), 0o644); err != nil {
+		t.Fatalf("write envelope: %v", err)
+	}
+	out, errOut, code = taskmgrCentral(t, proj, home, "--json", "import", "--file", envelope)
+	if code != 0 {
+		t.Fatalf("import: code=%d stderr=%q", code, errOut)
+	}
+	var imported struct {
+		SourceID string `json:"source_id"`
+		ID       string `json:"id"`
+		Store    string `json:"store"`
+	}
+	if err := json.Unmarshal([]byte(out), &imported); err != nil {
+		t.Fatalf("import json: %v (%q)", err, out)
+	}
+	if imported.SourceID != "S-1" || imported.Store != name {
+		t.Errorf("import = %+v, want source_id=S-1 store=%q", imported, name)
+	}
 }
 
 // TestL4_LocalStore_OmitsStoreName checks that a local store reports no name:

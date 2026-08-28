@@ -68,6 +68,7 @@ type commentEnvelope struct {
 type importResult struct {
 	SourceID string `json:"source_id,omitempty"`
 	ID       string `json:"id,omitempty"`
+	Store    string `json:"store,omitempty"`
 	Error    string `json:"error,omitempty"`
 }
 
@@ -170,7 +171,7 @@ emitted per record.`,
 			return mutationError(err)
 		}
 		if flagJSON {
-			return printJSON(importResult{SourceID: e.SourceID, ID: res.Issue.ID})
+			return printJSON(importResult{SourceID: e.SourceID, ID: res.Issue.ID, Store: s.Name()})
 		}
 		_, _ = fmt.Fprintf(stdout, "Imported %s\n", res.Issue.ID)
 		printNotes(res.Hints, res.Warnings)
@@ -197,7 +198,7 @@ func runImportBatch(s *tasks.Store, data []byte) error {
 			var res *tasks.MutationResult
 			res, err = s.Import(in)
 			if err == nil {
-				results = append(results, importResult{SourceID: e.SourceID, ID: res.Issue.ID})
+				results = append(results, importResult{SourceID: e.SourceID, ID: res.Issue.ID, Store: s.Name()})
 				continue
 			}
 		}
