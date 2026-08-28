@@ -18,7 +18,7 @@ catalog for a script to read.
 | Install it and file my first task | [Getting started](getting-started.md) |
 | Understand issues, dependencies, ready-work and documents | [Concepts](concepts.md) |
 | Select exactly the issues I mean | [Filtering and search](queries.md) |
-| Keep the tracker out of the repository, or move it | [Where your tasks live](stores.md) |
+| Keep the tracker out of the repository, move it, or change a setting | [Where your tasks live](stores.md) |
 | Enforce a rule at close, or react to one | [Hooks](hooks.md) |
 | Point a coding agent at my tracker | [Agents](agents.md) |
 | Work out why a command refused | [Troubleshooting](troubleshooting.md) |

@@ -52,13 +52,18 @@ either run from inside the project or register the store centrally and select it
 taskmgr: pre-close denied for proj-3k9f2x by hook "tests-before-close": 3 unit tests failing
 ```
 
-The project has a gate ([Hooks](hooks.md)). The message after the colon is the hook's own
-reason — fix that, then retry. There is no bypass flag by design.
+There is a gate ([Hooks](hooks.md)). The message after the colon is the hook's own reason —
+fix that, then retry. There is no bypass flag by design.
 
-If **every** write is failing with a configuration error instead, the `hooks:` block in
-`.tasks/config.yaml` is malformed — an unknown `event`, an empty `run`, an unparseable
-`when` or `hook_timeout`. Reads keep working, so you can still `list` and `show` while you
-fix it.
+**Read the hook's id to find the file.** A plain id is the project's, in
+`.tasks/config.yaml`; an id prefixed `global:` is one of yours, applying to every project
+on this machine. `taskmgr config hook list` and `taskmgr config hook list --global` print
+each file's hooks in the order they run — global first.
+
+If **every** write is failing with a configuration error instead, a `hooks:` block is
+malformed — an unknown `event`, an empty `run`, an unparseable `when` or `hook_timeout`.
+Reads keep working, so you can still `list` and `show` while you fix it. If the failure
+follows you into *other* projects too, it is the per-user block, not the project's.
 
 If a write simply hangs, a pre-hook is running and holding the store lock. It is bounded by
 `hook_timeout` (default `2s`, plus a 2-second grace).
