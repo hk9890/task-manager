@@ -41,15 +41,39 @@ One YAML document at `<home>/config.yaml`:
 ```yaml
 version: 1
 central_root: ~/.taskmgr   # registry + central stores live here; ~ expands
+
+hook_timeout: 2s           # fallback limit for a store that sets none
+hooks:                     # lifecycle gates for every store on this machine
+  - id: doc-needs-path
+    event: pre-create
+    when: 'type == "doc" && !(label ~ "path:")'
+    run: ["/home/me/.taskmgr/hooks/doc-path.sh"]
 ```
 
 | Field | Required | Notes |
 |---|---|---|
 | `version` | no | Schema version; defaults to `1`. |
 | `central_root` | no | Directory holding the registry and central stores. `~` expands; a relative value resolves against the home. Defaults to the home. |
+| `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
+| `hooks` | no | Lifecycle gates applied to **every** store on this machine, running before the store's own. Same schema as a store's hooks block; semantics in [HOOK-SPEC](HOOK-SPEC.md) §3.5. |
 
 `config.yaml` always lives in the home, even when `central_root` points elsewhere.
 Unknown keys are ignored; a corrupt (unparseable) file is a hard error.
+
+`hook_timeout` and `hooks` are validated **lazily, on the first write to any
+store** — never on a read — exactly as a store's own hooks block is
+([HOOK-SPEC](HOOK-SPEC.md) §3.4). The blast radius is wider than a store's:
+a malformed block here fails mutations in *every* store on the machine while
+leaving every query working. `taskmgr config` validates before it writes, so the
+error normally surfaces at the command that caused it.
+
+**Machine-local, by construction.** A store travels in git; this file does not.
+A gate configured here therefore applies to you and not to a colleague or to CI,
+which makes it the right home for personal ergonomics — a reminder, a
+notification, a local lint — and the wrong home for any rule the data's integrity
+depends on. Those belong in the store's own `config.yaml`
+([TASK-STORAGE-SPEC](TASK-STORAGE-SPEC.md) §4.2), which is committed with the
+repository.
 
 ---
 

@@ -51,11 +51,26 @@ const (
 	envTaskmgrDir = "TASKMGR_DIR"
 )
 
-// globalConfig is the per-user configuration (CONFIG-SPEC §2). Every field is
+// GlobalConfig is the per-user configuration (CONFIG-SPEC §2). Every field is
 // optional; the zero value plus defaults is valid. Unknown keys are ignored.
-type globalConfig struct {
+//
+// HookTimeout and Hooks configure lifecycle gates for every store on this
+// machine (HOOK-SPEC §3.5). Like a store's own hooks they are validated lazily
+// on the first write, so a malformed block never breaks a read — but it then
+// fails mutations in every store on the machine, not just one.
+type GlobalConfig struct {
 	Version     int    `yaml:"version"`
-	CentralRoot string `yaml:"central_root"`
+	CentralRoot string `yaml:"central_root,omitempty"`
+
+	// HookTimeout is the fallback per-hook wall-clock limit for a store that
+	// does not set its own (HOOK-SPEC §3.1); the store's value wins when both
+	// are set.
+	HookTimeout string `yaml:"hook_timeout,omitempty"`
+
+	// Hooks run before the store's own hooks, in config order (HOOK-SPEC §3.5).
+	// They are machine-local — they do not travel with a repository — so an
+	// invariant the data depends on belongs in the store's config, not here.
+	Hooks []Hook `yaml:"hooks,omitempty"`
 }
 
 // taskmgrHome returns the per-user home (CONFIG-SPEC §1): $TASKMGR_HOME if set,
@@ -73,25 +88,91 @@ func taskmgrHome(e env.Environment) (string, error) {
 
 // loadGlobalConfig reads <home>/config.yaml, returning built-in defaults when it
 // is absent (CONFIG-SPEC §1/§2). A corrupt file is an error.
-func loadGlobalConfig(fs vfs.FS, home string) (globalConfig, error) {
-	cfg := globalConfig{Version: 1}
+func loadGlobalConfig(fs vfs.FS, home string) (GlobalConfig, error) {
+	cfg := GlobalConfig{Version: 1}
 	data, err := fs.ReadFile(filepath.Join(home, globalConfigName))
 	if err != nil {
 		if vfs.IsNotExist(err) {
 			return cfg, nil // defaults
 		}
-		return globalConfig{}, fmt.Errorf("read global config: %w", err)
+		return GlobalConfig{}, fmt.Errorf("read global config: %w", err)
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return globalConfig{}, fmt.Errorf("parse global config: %w", err)
+		return GlobalConfig{}, fmt.Errorf("parse global config: %w", err)
 	}
 	return cfg, nil
+}
+
+// saveGlobalConfig writes cfg to <home>/config.yaml atomically, creating the
+// home if it is absent. Unlike the read path (CONFIG-SPEC §1) this is a write
+// command, so creating the home is expected rather than a side effect.
+//
+// It takes no lock. The central-root lock guards mapping.yaml, which may live
+// under a different directory than the home (CONFIG-SPEC §2/§3), and the file is
+// hand-edited anyway; the atomic replace is what keeps a reader from ever seeing
+// a partial document.
+func saveGlobalConfig(fs vfs.FS, home string, cfg GlobalConfig) error {
+	path := filepath.Join(home, globalConfigName)
+	old, err := fs.ReadFile(path)
+	if err != nil && !vfs.IsNotExist(err) {
+		return fmt.Errorf("read global config: %w", err)
+	}
+	// Edit the document rather than regenerate it, so unknown keys and comments
+	// survive a write (configdoc.go).
+	data, err := applyGlobalConfigToDoc(old, cfg)
+	if err != nil {
+		return err
+	}
+	if err := fs.MkdirAll(home, 0o755); err != nil {
+		return err
+	}
+	return fs.WriteAtomic(path, data, 0o644)
+}
+
+// LoadGlobalConfig reads the per-user configuration (CONFIG-SPEC §2), returning
+// built-in defaults when the home or the file is absent. A corrupt file is an
+// error.
+func LoadGlobalConfig() (GlobalConfig, error) {
+	home, err := taskmgrHome(env.NewOS())
+	if err != nil {
+		return GlobalConfig{}, err
+	}
+	return loadGlobalConfig(vfs.NewOS(), home)
+}
+
+// SaveGlobalConfig writes cfg as the per-user configuration (CONFIG-SPEC §2),
+// creating the taskmgr home if needed.
+//
+// The hooks block is validated before anything is written: a global hook that
+// would fail to compile blocks mutations in *every* store on the machine
+// (HOOK-SPEC §3.4/§3.5), so this refuses to persist one rather than leaving the
+// error for the next write in some unrelated project to discover.
+func SaveGlobalConfig(cfg GlobalConfig) error {
+	if _, err := buildHookSet(cfg, Config{}); err != nil {
+		return err
+	}
+	home, err := taskmgrHome(env.NewOS())
+	if err != nil {
+		return err
+	}
+	return saveGlobalConfig(vfs.NewOS(), home, cfg)
+}
+
+// GlobalConfigPath returns the absolute path of the per-user config file
+// (CONFIG-SPEC §1/§2), whether or not it exists. Callers report it in errors and
+// in `taskmgr config list --global`.
+func GlobalConfigPath() (string, error) {
+	home, err := taskmgrHome(env.NewOS())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, globalConfigName), nil
 }
 
 // centralRoot resolves the central store root (CONFIG-SPEC §2/§3): cfg.CentralRoot
 // with a leading ~ expanded and a relative value resolved against home,
 // defaulting to home when unset.
-func centralRoot(cfg globalConfig, home string) string {
+func centralRoot(cfg GlobalConfig, home string) string {
 	if cfg.CentralRoot == "" {
 		return home
 	}

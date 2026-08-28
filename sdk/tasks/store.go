@@ -29,6 +29,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
@@ -118,6 +119,11 @@ type Store struct {
 	cfg  Config
 	fs   vfs.FS // disk seam; always vfs.NewOS() in production
 
+	// env is the user-environment seam (CONFIG-SPEC), used to locate the taskmgr
+	// home when the global hooks block is read. It is env.NewOS() in production;
+	// tests inject env.Fake. Never nil after construction.
+	env env.Environment
+
 	// runner is the process seam used to execute hooks (HOOK-SPEC). It is
 	// exec.NewOS() in production; tests inject an exec.Fake to exercise hook
 	// logic without spawning real processes. Never nil after construction.
@@ -152,9 +158,20 @@ type Store struct {
 // or hook_timeout) is returned here and, because this is called only from the
 // write path, fails the mutation closed while leaving reads unaffected
 // (HOOK-SPEC §3.4).
+//
+// The per-user config is read here rather than at open, which is what keeps the
+// global hooks block off the read path entirely: a store that is only queried
+// never touches the home, and the local walk-up in Resolve stays free of global
+// config (CONFIG-SPEC §4). A home that cannot be located is not an error — there
+// is then simply nothing to inherit.
 func (s *Store) hooks() (*hookSet, error) {
 	s.hookOnce.Do(func() {
-		s.hookSet, s.hookErr = buildHookSet(s.cfg)
+		global, err := s.globalConfig()
+		if err != nil {
+			s.hookErr = err
+			return
+		}
+		s.hookSet, s.hookErr = buildHookSet(global, s.cfg)
 	})
 	return s.hookSet, s.hookErr
 }
@@ -170,6 +187,7 @@ func openWithFS(root string, fs vfs.FS) *Store {
 		root:   absRoot,
 		dir:    filepath.Join(absRoot, DataDirName),
 		fs:     fs,
+		env:    env.NewOS(),
 		runner: exec.NewOS(),
 		logger: discardLogger,
 		now:    defaultNow,
@@ -218,7 +236,7 @@ func initData(root, dir, prefix string, fs vfs.FS, opts []Option) (*Store, error
 		return nil, err
 	}
 	cfg := Config{Prefix: prefix}
-	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s := &Store{root: root, dir: dir, cfg: cfg, fs: fs, env: env.NewOS(), runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	s.applyOptions(opts)
 	if err := s.writeConfig(cfg); err != nil {
 		return nil, err
@@ -278,7 +296,7 @@ func findLocalStore(fs vfs.FS, start string) (root, dir string, found bool, err 
 // path, not the parent of dir. It is the shared open path for Open (local) and
 // Resolve (central / override).
 func openData(root, dir string, fs vfs.FS, opts []Option) (*Store, error) {
-	s := &Store{root: root, dir: dir, fs: fs, runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
+	s := &Store{root: root, dir: dir, fs: fs, env: env.NewOS(), runner: exec.NewOS(), logger: discardLogger, now: defaultNow}
 	s.applyOptions(opts)
 	cfg, err := s.readConfig()
 	if err != nil {
@@ -297,17 +315,81 @@ func (s *Store) Dir() string { return s.dir }
 // Prefix returns the configured ID prefix.
 func (s *Store) Prefix() string { return s.cfg.Prefix }
 
+// Config returns a copy of the store's configuration (TASK-STORAGE-SPEC §4.2).
+// The Hooks slice is copied too, so a caller editing the result cannot reach the
+// hook configuration this store is already running with.
+func (s *Store) Config() Config {
+	cfg := s.cfg
+	cfg.Hooks = append([]Hook(nil), s.cfg.Hooks...)
+	return cfg
+}
+
+// SetConfig replaces the store's configuration, writing config.yaml under the
+// store lock.
+//
+// Prefix is immutable: it is baked into every filename and into every stored
+// reference to an issue, so changing it would orphan the whole store. An empty
+// or differing Prefix is a validation error rather than a silent no-op.
+//
+// The hooks block is compiled before anything is written. A malformed one fails
+// every subsequent mutation (HOOK-SPEC §3.4), so refusing here keeps the failure
+// at the command that caused it instead of at the next unrelated write.
+func (s *Store) SetConfig(cfg Config) error {
+	if strings.TrimSpace(cfg.Prefix) == "" {
+		return invalid("prefix", "config prefix must not be empty")
+	}
+	if cfg.Prefix != s.cfg.Prefix {
+		return invalid("prefix", "prefix is immutable: %q is baked into every issue ID in this store, so it cannot be changed to %q", s.cfg.Prefix, cfg.Prefix)
+	}
+	global, err := s.globalConfig()
+	if err != nil {
+		return err
+	}
+	if _, err := buildHookSet(global, cfg); err != nil {
+		return err
+	}
+	return s.withLock(func() error {
+		if err := s.writeConfig(cfg); err != nil {
+			return err
+		}
+		s.cfg = cfg
+		// The compiled set is built once per Store (hookOnce). Drop it so a
+		// long-lived handle runs the hooks it just wrote, not the ones it opened
+		// with.
+		s.hookOnce = sync.Once{}
+		s.hookSet, s.hookErr = nil, nil
+		return nil
+	})
+}
+
+// globalConfig loads the per-user configuration through the store's seams,
+// returning defaults when the home cannot be located (CONFIG-SPEC §1).
+func (s *Store) globalConfig() (GlobalConfig, error) {
+	home, err := taskmgrHome(s.env)
+	if err != nil {
+		return GlobalConfig{Version: 1}, nil
+	}
+	return loadGlobalConfig(s.fs, home)
+}
+
 // SetNow overrides the store's clock with fn. Intended for test helpers that
 // need deterministic timestamps across the store-creation boundary (e.g.
 // internal/storetest). Production code uses defaultNow.
 func (s *Store) SetNow(fn func() time.Time) { s.now = fn }
 
+// writeConfig persists cfg, editing the existing document rather than
+// regenerating it, so unknown keys and comments survive (configdoc.go).
 func (s *Store) writeConfig(cfg Config) error {
-	data, err := yaml.Marshal(cfg)
+	path := filepath.Join(s.dir, ConfigFileName)
+	old, err := s.fs.ReadFile(path)
+	if err != nil && !vfs.IsNotExist(err) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	data, err := applyConfigToDoc(old, cfg)
 	if err != nil {
 		return err
 	}
-	return s.fs.WriteAtomic(filepath.Join(s.dir, ConfigFileName), data, 0o644)
+	return s.fs.WriteAtomic(path, data, 0o644)
 }
 
 func (s *Store) readConfig() (Config, error) {
