@@ -9,18 +9,29 @@ to tell one, and the conventions it can rely on.
 
 > Track work with `taskmgr`. Run `taskmgr guide` first.
 
-`taskmgr guide` prints the issue model, the everyday command loop and the filter language
-as plain text. `taskmgr commands` prints a catalog of every command with its flags and an
-example — derived from the live command tree, so it cannot fall out of date. Both ship
-inside the binary, so an agent with the binary needs no files and no network.
+`taskmgr guide` prints an overview: what the tool is, the parts of the guide, and the one
+command that fetches each. The agent reads the part it needs — `taskmgr guide loop` before
+filing, `taskmgr guide query` before searching. `taskmgr commands` prints a catalog of
+every command with its flags and an example, derived from the live command tree, so it
+cannot fall out of date. Both ship inside the binary, so an agent with the binary needs no
+files and no network.
 
-## Paste the guide into the agent's instructions
+## Paste the overview into the agent's instructions
 
 The guide is written to be **injected**, not read. Most agent frameworks can run a command
-and paste its output into a prompt before the model sees it, and that is the intended use:
-the agent starts holding the rules instead of being told where to find them.
+and paste its output into a prompt before the model sees it, and that is the intended use.
 
-Two properties make that safe:
+Inject the bare `taskmgr guide`. It is the overview — small, and the same size whatever
+the agent goes on to do — and it names every part of the guide with the command that
+prints it, so the agent fetches the rest when it needs it and never pays for a part it
+does not. That is why the bare command prints an overview and not the whole guide: a
+caller that only files issues should not carry the filter language.
+
+Three properties make this work:
+
+- **The roster is generated.** Every part that exists is named in the overview, including
+  the ones this project's own packages add. An agent can only ask for what it was told
+  about, so nothing is fetchable-but-hidden.
 
 - **It never fails on the state of the machine.** No store, a package that is not
   installed, an unreadable section — each is reported inside the output and the command
@@ -31,9 +42,10 @@ Two properties make that safe:
   only files issues asks for `loop`, and pays nothing for the filter language.
 
 ```bash
-taskmgr guide --list             # what the parts are
+taskmgr guide                    # the overview — inject this
 taskmgr guide model loop         # just the two an issue-filing agent needs
 taskmgr guide packages           # only this project's own conventions
+taskmgr guide --list             # the same roster as data (--json for JSON)
 ```
 
 The one thing that *is* an error is naming a built-in topic that does not exist — no

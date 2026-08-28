@@ -7,16 +7,20 @@ templates that shape it, and the gates that hold it.
 
 | Part | Effective id | What it does |
 |---|---|---|
-| Guide section | `pkg:task-writing:bodies` | `taskmgr guide` prints the standard, so an agent reads it before its first `create` |
+| Overview fragment | `pkg:task-writing:overview` | Lands in `taskmgr guide` itself, so every caller learns the four sections and where the standard is |
+| Guide section | `pkg:task-writing:bodies` | The standard in full — type contracts, what each section owns, the templates — fetched by name |
 | Gate | `pkg:task-writing:body-sections` | Refuses a `bug`/`feature`/`chore`/`task` whose body skips a section |
 | Gate | `pkg:task-writing:epic-sections` | Refuses an `epic` without Context, Outcome, Success criteria |
 | Templates | — | `templates/<type>.md`, one per type, each with that type's contract at the top |
 
 Docs are never gated: a `doc` holds a document, not a path through work.
 
-The two halves are the point. A gate alone teaches by refusing, which costs a
-round trip per rule. The guide section states the rule first, from the same
-directory and the same version as the gate, so the two cannot drift apart.
+The three parts are the point. A gate alone teaches by refusing, which costs a
+round trip per rule. The overview fragment states the rule to everyone who runs
+`taskmgr guide` — it is capped at 1 KiB, so it names the rule and the command that
+explains it, and stops. The guide section is that explanation, fetched by whoever
+is about to write a body. All of it ships in one directory at one version, so
+prose and gate cannot drift apart.
 
 ## Install it
 

@@ -635,20 +635,33 @@ Idempotent.
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
 | `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, and a usage example — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
-| `taskmgr guide [topic...]` | A compact, workflow-shaped how-to: the issue model, the everyday command loop, the filter language in brief, and where to find more. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with conformance tests keeping its model lists and the flags it names in step with the live tree. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. Topics: §5.1 below. |
+| `taskmgr guide [topic...]` | A workflow-shaped how-to in named parts: the issue model, the everyday command loop, the filter language, and what this store adds. Bare, it prints the **overview** — the roster and where to go next, not the whole guide. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with conformance tests keeping its model lists and the flags it names in step with the live tree. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. Topics: §5.1 below. |
 
 ### 5.1 Guide topics
 
-The guide is in named parts, so a caller takes the part it needs rather than all of
-it. With no argument it prints every core section followed by every guide fragment
-the packages of this store contribute (HOOK-SPEC.md §3.7). With arguments it prints
-exactly the topics named, **in the order they were named** — the caller composes the
-slice it wants rather than accepting this command's order.
+The guide is in named parts, and a caller takes the part it needs.
+
+**With no argument it prints the overview** — what the tool is, the roster of parts
+with the command that fetches each, and whatever the store's packages put in the
+overview themselves (HOOK-SPEC.md §3.7). Never the whole guide. The reader injects
+this output into its own instructions before it acts, so the no-argument form is
+the small constant every caller can afford, and it names what to fetch next; a
+caller that needs the filter language and one that needs the filing loop do not
+each pay for the other's sections.
+
+The roster is **generated** from the sections the binary carries and the fragments
+the store's packages contribute. A part that exists is therefore always named, which
+is what makes fetch-on-demand safe: a caller can only ask for what the overview told
+it exists.
+
+**With arguments it prints exactly the topics named**, in the order they were named
+— the caller composes the slice it wants rather than accepting this command's order.
 
 | Topic | Selects |
 |---|---|
-| a core id | One built-in section. `--list` is the roster. |
-| `pkg:<package>:<id>` | One package's fragment. |
+| *(none)* | The overview: the roster, and the packages' overview fragments. |
+| a core id | One built-in section. `--list` is the roster as data. |
+| `pkg:<package>:<id>` | One package's fragment, its `overview` one included. |
 | `packages` | Every package fragment at once, and nothing built in. |
 
 | Option | Default | Meaning |

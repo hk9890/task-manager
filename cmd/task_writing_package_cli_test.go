@@ -87,6 +87,31 @@ func TestL4_TaskWritingPackage_LoadsAndContributesBothHalves(t *testing.T) {
 	}
 }
 
+// The overview is what a caller injects, so this package's whole purpose rests on
+// its `overview:` fragment reaching it: the four section names, and the command
+// that explains them.
+func TestL4_TaskWritingPackage_StatesItselfInTheOverview(t *testing.T) {
+	root := installShippedPackage(t)
+
+	overview, _, code := taskmgr(t, root, "guide")
+	if code != 0 {
+		t.Fatalf("guide: exit %d", code)
+	}
+	for _, want := range []string{
+		"## Acceptance criteria",
+		"taskmgr guide pkg:task-writing:bodies",
+	} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("the overview must carry %q so a caller learns the rule before it files:\n%s", want, overview)
+		}
+	}
+	// The full standard stays behind its own command; inlining it here is what
+	// the overview exists to avoid.
+	if strings.Contains(overview, "The six rules") {
+		t.Error("the overview must point at the standard, not restate it")
+	}
+}
+
 func TestL4_TaskWritingPackage_RefusesABodylessIssue(t *testing.T) {
 	root := installShippedPackage(t)
 

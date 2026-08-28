@@ -112,3 +112,7 @@ One per type, with the contract for that type at the top:
   <package>/templates/{bug,feature,chore,task,epic,doc}.md
 
 `taskmgr package list` prints the package directory this store resolved.
+
+The short form of all of this is in the overview `taskmgr guide` prints, so a
+reader who never asked for this section still knows the four names and that a
+write without them is refused.

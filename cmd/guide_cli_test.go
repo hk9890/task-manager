@@ -37,7 +37,10 @@ import (
 )
 
 // initStoreWithGuidePackage creates a store whose package contributes one guide
-// fragment, and returns the project root.
+// section and one overview fragment, and returns the project root.
+//
+// An empty fragment leaves the file the manifest names absent, which is how the
+// unreadable-fragment cases are built.
 func initStoreWithGuidePackage(t *testing.T, prefix, fragment string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -48,13 +51,16 @@ func initStoreWithGuidePackage(t *testing.T, prefix, fragment string) string {
 	if err := os.MkdirAll(filepath.Join(pkg, "guide"), 0o755); err != nil {
 		t.Fatalf("mkdir package: %v", err)
 	}
-	manifest := "version: 1\nguide:\n    - id: bodies\n      file: ./guide/bodies.md\n"
+	manifest := "version: 1\noverview: ./guide/overview.md\nguide:\n    - id: bodies\n      file: ./guide/bodies.md\n"
 	if err := os.WriteFile(filepath.Join(pkg, tasks.PackageManifestName), []byte(manifest), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 	if fragment != "" {
 		if err := os.WriteFile(filepath.Join(pkg, "guide", "bodies.md"), []byte(fragment), 0o644); err != nil {
 			t.Fatalf("write fragment: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(pkg, "guide", "overview.md"), []byte("bodies need four sections.\n"), 0o644); err != nil {
+			t.Fatalf("write overview: %v", err)
 		}
 	}
 	cfg := filepath.Join(root, ".tasks", "config.yaml")
@@ -65,20 +71,61 @@ func initStoreWithGuidePackage(t *testing.T, prefix, fragment string) string {
 	return root
 }
 
-func TestL4_Guide_PrintsPackageSectionsWithTheirProvenance(t *testing.T) {
+// The overview is what a caller injects, so a package's `overview:` fragment has
+// to reach it — that is the only way a store states an expectation to someone who
+// has not asked a question yet.
+func TestL4_Guide_OverviewCarriesThePackageOverviewFragment(t *testing.T) {
 	root := initStoreWithGuidePackage(t, "gd", "every bug names its repro.\n")
 
 	stdout, stderr, code := taskmgr(t, root, "guide")
 	if code != 0 {
 		t.Fatalf("guide: exit %d, want 0\nstderr: %s", code, stderr)
 	}
-	if !strings.Contains(stdout, "every bug names its repro") {
-		t.Error("the package's fragment must be part of the default guide")
+	if !strings.Contains(stdout, "bodies need four sections") {
+		t.Errorf("the package's overview fragment must be in the overview:\n%s", stdout)
 	}
-	// A reader has to be able to tell a store convention from a rule of the
-	// tool, and the heading is the only thing that says which it is holding.
-	if !strings.Contains(stdout, "pkg:policy:bodies") || !strings.Contains(stdout, "From package policy") {
-		t.Errorf("the fragment must be printed under a heading naming its package:\n%s", stdout)
+	// A reader has to be able to tell a store convention from a rule of the tool.
+	if !strings.Contains(stdout, "What policy expects of this store") {
+		t.Errorf("the fragment must sit under a heading naming its package:\n%s", stdout)
+	}
+	// The section itself stays behind its command. Putting it in the overview is
+	// what the overview exists to avoid.
+	if strings.Contains(stdout, "every bug names its repro") {
+		t.Error("a package's full section must not be inlined into the overview")
+	}
+	if !strings.Contains(stdout, "taskmgr guide packages") {
+		t.Error("the overview must name the command that fetches the package sections")
+	}
+}
+
+// The roster is generated from the section table, so a section cannot be added
+// without the overview naming it — the failure that would make lazy loading a
+// trap, since a caller can only fetch what the overview told it exists.
+func TestL4_Guide_OverviewNamesEveryCoreSection(t *testing.T) {
+	root := initStoreWithGuidePackage(t, "gd", "body rules\n")
+
+	overview, _, code := taskmgr(t, root, "guide")
+	if code != 0 {
+		t.Fatalf("guide: exit %d", code)
+	}
+	listOut, _, code := taskmgr(t, root, "--json", "guide", "--list")
+	if code != 0 {
+		t.Fatalf("guide --list: exit %d", code)
+	}
+	var rows []struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(listOut), &rows); err != nil {
+		t.Fatalf("guide --list --json: %v", err)
+	}
+	for _, r := range rows {
+		if r.Kind != "core" {
+			continue
+		}
+		if !strings.Contains(overview, "taskmgr guide "+r.ID) {
+			t.Errorf("the overview does not name core topic %q, so a caller cannot fetch it:\n%s", r.ID, overview)
+		}
 	}
 }
 
@@ -106,6 +153,9 @@ func TestL4_Guide_PackagesTopicSelectsOnlyThePackageSections(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "every bug names its repro") {
 		t.Error("the package fragment must be printed")
+	}
+	if !strings.Contains(stdout, "pkg:policy:bodies") || !strings.Contains(stdout, "From package policy") {
+		t.Errorf("each fragment must be printed under a heading naming its package:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "## The model") {
 		t.Error("the packages topic must not print core sections")
@@ -164,12 +214,14 @@ func TestL4_Guide_Human(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("guide exit=%d stderr=%q", code, stderr)
 	}
-	// It must teach the model, the loop, and — above all — how to get more info.
+	// The overview names its parts and, above all, where the rest of the surface
+	// is. It no longer carries the sections themselves — those are one command
+	// each, which is the whole point of the roster it prints.
 	for _, want := range []string{
-		"The core loop",
-		"taskmgr create --title",
-		"Finding work with filters",
-		"Get more information",
+		"taskmgr guide model",
+		"taskmgr guide loop",
+		"taskmgr guide query",
+		"Read before you act",
 		"taskmgr commands",
 		"taskmgr <command> --help",
 	} {
@@ -192,8 +244,8 @@ func TestL4_Guide_JSON(t *testing.T) {
 	if strings.TrimSpace(obj["guide"]) == "" {
 		t.Errorf("guide --json: 'guide' field is empty; got keys %v", keysOf(obj))
 	}
-	if !strings.Contains(obj["guide"], "The core loop") {
-		t.Errorf("guide --json: 'guide' text missing core content")
+	if !strings.Contains(obj["guide"], "taskmgr guide model") {
+		t.Errorf("guide --json: 'guide' text is not the overview")
 	}
 }
 

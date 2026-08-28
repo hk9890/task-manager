@@ -351,6 +351,10 @@ type GuideTopic struct {
 	// ID is the effective topic id, "pkg:<package>:<id>" — what a caller names
 	// to select this fragment alone.
 	ID string
+	// Overview marks the fragment the package's `overview:` key declared: it
+	// belongs in the guide's overview rather than waiting to be asked for, and is
+	// held to the tighter MaxGuideOverviewBytes.
+	Overview bool
 	// Package is the package that contributes the fragment.
 	Package string
 	// Scope is "global" or "store": which config file's `use:` list brought the
@@ -373,15 +377,15 @@ type GuideTopic struct {
 // The cut falls at the last line break under the cap so the text stays whole
 // lines: a fragment is Markdown, and a document severed mid-sentence reads as
 // though the author meant it.
-func readGuideFragment(fs vfs.FS, path string) (text string, truncated bool, err error) {
+func readGuideFragment(fs vfs.FS, path string, limit int) (text string, truncated bool, err error) {
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		return "", false, err
 	}
-	if len(data) <= MaxGuideFragmentBytes {
+	if len(data) <= limit {
 		return string(data), false, nil
 	}
-	cut := string(data[:MaxGuideFragmentBytes])
+	cut := string(data[:limit])
 	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
 		cut = cut[:i+1]
 	}
@@ -400,8 +404,12 @@ func guideTopics(fs vfs.FS, guide []packageGuide, infos []PackageInfo) []GuideTo
 	out := make([]GuideTopic, 0, len(guide))
 	for _, pg := range guide {
 		pkg := packageOfID(pg.id)
-		t := GuideTopic{ID: pg.id, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
-		text, truncated, err := readGuideFragment(fs, pg.path)
+		t := GuideTopic{ID: pg.id, Overview: pg.overview, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
+		limit := MaxGuideFragmentBytes
+		if pg.overview {
+			limit = MaxGuideOverviewBytes
+		}
+		text, truncated, err := readGuideFragment(fs, pg.path, limit)
 		if err != nil {
 			t.Detail = err.Error()
 		} else {

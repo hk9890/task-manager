@@ -307,7 +307,8 @@ hooks:
 |---|---|---|
 | `version` | no | Manifest schema version; defaults to `1`. |
 | `hooks` | no | The hooks this package contributes, in run order. Entry schema in §3.2. |
-| `guide` | no | The guide fragments this package contributes, in print order (§3.7). |
+| `guide` | no | The guide sections this package contributes, in print order (§3.7). |
+| `overview` | no | One fragment printed in the guide's **overview**, rather than waiting to be asked for (§3.7). |
 
 Both lists are optional, and a package that sets neither is legal but contributes
 nothing. A package with `guide` alone is the ordinary shape for a convention that
@@ -348,11 +349,13 @@ and putting the manifest and scripts in it.
 ### 3.7 Guide fragments
 
 A package may contribute **guide fragments**: Markdown files whose text
-`taskmgr guide` prints after its own sections (CLI-SPEC.md §5).
+`taskmgr guide` prints as part of its own (CLI-SPEC.md §5.1). There are two kinds,
+and the difference is *when the reader gets them*.
 
 ```yaml
 version: 1
-guide:
+overview: ./guide/overview.md      # printed in the overview, every time
+guide:                             # printed when the topic is named
   - id: bodies
     file: ./guide/bodies.md
 hooks:
@@ -363,8 +366,21 @@ hooks:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. |
+| `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. `overview` is reserved (below). |
 | `file` | **yes** | The fragment, as a path **inside** the package directory. |
+
+**The `overview` fragment.** `overview: <file>` declares the fragment printed in
+the guide's overview — the part every caller receives, since it is what an
+unqualified `taskmgr guide` prints. It takes the reserved id `overview`, so its
+effective topic is `pkg:<package>:overview` and a `guide:` entry may not claim
+that id: one id space, one meaning.
+
+It is capped at **1 KiB**, eight times tighter than a section, and the cap is the
+design rather than a limit to work around. This text lands in the context of every
+caller of the guide, including callers with no interest in the subject, so it has
+room to state what the store expects and name the topic that explains it — and no
+room to explain it here. A package that needs more than that is describing a
+section, and `guide:` is where a section goes.
 
 **Why a package teaches as well as gates.** A gate teaches by refusing: the agent
 files, is denied, reads the reason, and retries. That loop works and costs a round
@@ -398,10 +414,11 @@ pastes the output into its own instructions before it acts, so a failure here wo
 deny it every rule in the guide in order to report one missing document — and one
 broken package on a machine would do that to every project on it.
 
-**Size.** A fragment is capped at **8 KiB**. Over the cap it is cut at the last line
-break under it and marked as cut, never dropped: the text goes verbatim into a
-caller's context, so an uncapped fragment lets one package spend it all, while a
-silently absent section teaches nothing at all.
+**Size.** A `guide:` section is capped at **8 KiB**, an `overview` fragment at
+**1 KiB**. Over its cap a fragment is cut at the last line break under it and
+marked as cut, never dropped: the text goes verbatim into a caller's context, so
+an uncapped fragment lets one package spend it all, while a silently absent
+section teaches nothing at all.
 
 **Trust.** A fragment's text reaches an agent's instructions unaltered, so a package
 author writes directly into the reasoning of whoever installs it. That is not a new

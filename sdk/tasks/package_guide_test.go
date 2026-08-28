@@ -68,6 +68,39 @@ func TestGuideFromManifest_RejectsUnusableIDs(t *testing.T) {
 	}
 }
 
+// The `overview:` key declares the fragment that reaches the guide's overview,
+// so it comes first and is marked — the two things that separate it from a
+// section a caller has to ask for.
+func TestGuideFromManifest_OverviewComesFirstAndIsMarked(t *testing.T) {
+	m := packageManifest{
+		Overview: "./guide/overview.md",
+		Guide:    []GuideEntry{{ID: "bodies", File: "./guide/bodies.md"}},
+	}
+	got, err := guideFromManifest(m, "policy", "/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want the overview and the section, got %+v", got)
+	}
+	if !got[0].overview || got[0].id != "pkg:policy:overview" {
+		t.Errorf("the overview fragment must come first and be marked: %+v", got[0])
+	}
+	if got[1].overview || got[1].id != "pkg:policy:bodies" {
+		t.Errorf("a guide entry is not an overview fragment: %+v", got[1])
+	}
+}
+
+// One id space, one meaning: "pkg:<package>:overview" always names the fragment
+// that reaches the overview, so a section may not claim it.
+func TestGuideFromManifest_RejectsAGuideEntryClaimingTheOverviewID(t *testing.T) {
+	m := packageManifest{Guide: []GuideEntry{{ID: GuideOverviewID, File: "g.md"}}}
+	_, err := guideFromManifest(m, "policy", "/p")
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("err = %v, want the reserved-id error", err)
+	}
+}
+
 func TestGuideFromManifest_RejectsADuplicateID(t *testing.T) {
 	m := packageManifest{Guide: []GuideEntry{
 		{ID: "bodies", File: "a.md"},
@@ -123,15 +156,22 @@ func TestLoadPackage_ABadGuideEntryBreaksThePackage(t *testing.T) {
 
 // ── L2: the reading half, on Mem ─────────────────────────────────────────────
 
-// writeGuidePackage writes a package that contributes one guide fragment, and
-// returns the package directory.
-func writeGuidePackage(t *testing.T, fs vfs.FS, dir, name, fragment string) string {
+// writeGuidePackage writes a package that contributes one guide section, and
+// returns the package directory. A non-empty overview also declares and writes
+// the `overview:` fragment.
+func writeGuidePackage(t *testing.T, fs vfs.FS, dir, name, fragment string, overview ...string) string {
 	t.Helper()
 	pkgDir := filepath.Join(dir, packagesSubdir, name)
 	if err := fs.MkdirAll(filepath.Join(pkgDir, "guide"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	m := packageManifest{Version: 1, Guide: []GuideEntry{{ID: "bodies", File: "./guide/bodies.md"}}}
+	if len(overview) > 0 {
+		m.Overview = "./guide/overview.md"
+		if err := fs.WriteAtomic(filepath.Join(pkgDir, "guide", "overview.md"), []byte(overview[0]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	data, err := yaml.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
@@ -244,6 +284,39 @@ func TestGuideTopics_CapsAnOversizedFragmentAtALineBoundary(t *testing.T) {
 	}
 	if !strings.HasSuffix(got.Text, "\n") {
 		t.Error("the cut must fall on a line boundary")
+	}
+}
+
+// An overview fragment lands in every caller's context rather than only in the
+// ones that asked for the subject, so it is held to a cap an order of magnitude
+// tighter than a section's.
+func TestGuideTopics_AnOverviewFragmentTakesTheTighterCap(t *testing.T) {
+	s, fs := chainStore(t)
+	line := strings.Repeat("y", 79) + "\n"
+	big := strings.Repeat(line, (MaxGuideFragmentBytes/len(line))+20) // over both caps
+	writeGuidePackage(t, fs, s.dir, "policy", "section\n", big)
+	if err := s.SetConfig(Config{Prefix: "tst", Use: []PackageRef{{Path: "packages/policy"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, err := s.GuideTopics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overview *GuideTopic
+	for i := range topics {
+		if topics[i].Overview {
+			overview = &topics[i]
+		}
+	}
+	if overview == nil {
+		t.Fatalf("the overview fragment must be reported: %+v", topics)
+	}
+	if !overview.Truncated {
+		t.Error("an oversized overview fragment must be marked truncated")
+	}
+	if len(overview.Text) > MaxGuideOverviewBytes {
+		t.Errorf("overview text is %d bytes, over the %d cap", len(overview.Text), MaxGuideOverviewBytes)
 	}
 }
 

@@ -39,16 +39,19 @@ import (
 //     caller on the machine. Nothing here returns an error but a usage mistake.
 //   - Every line is paid for on every invocation. That is what topics are for: a
 //     caller that needs the filter language asks for it, and one that needs the
-//     everyday loop does not pay for the rest.
+//     everyday loop does not pay for the rest. The bare command therefore prints
+//     the *overview* — the roster and where to go next — and never the whole
+//     guide, so what every caller pays is a constant a new section does not move.
 //
 // The core sections below are hand-maintained. guide_test.go guards them against
 // the SDK — the model lists, and the flags the prose promises — so they cannot
 // silently fall out of step; keep the rest honest by hand when the CLI changes.
 //
-// Packages add sections of their own (HOOK-SPEC §3.7), appended after the core
-// ones under a heading that names the package. That is how a project states a
-// convention its hooks enforce, in the same directory and the same version as the
-// gate that enforces it.
+// Packages contribute two things (HOOK-SPEC §3.7). A `guide:` section is fetched
+// by name, like a core one. An `overview:` fragment goes into the overview itself,
+// so a project states a convention to a caller that has not asked a question yet —
+// which is the only moment a rule can be learned before it is broken. Its cap is
+// an order of magnitude tighter for exactly that reason.
 //
 // Plain text on purpose; no backticks, so every section can live in a raw string
 // literal.
@@ -64,20 +67,6 @@ type guideSection struct {
 // guideSections is the guide, in print order. The ids are the caller's stable
 // handle on a part of it, so they are named after what the part holds.
 var guideSections = []guideSection{
-	{
-		id:      "intro",
-		summary: "what taskmgr is, and which store a command acts on",
-		text: `taskmgr — how to use it
-
-taskmgr is an issue tracker you drive entirely through this CLI — create issues,
-link them, find what is ready to work on, and record progress. It operates on the
-project you run it from; -C <path> targets a project elsewhere, and
---store-name <name> one of the stores taskmgr store list reports.
-
-This guide has parts. taskmgr guide --list names them; taskmgr guide <topic>
-prints one. A project can add parts of its own — see "What this store expects".
-`,
-	},
 	{
 		id:      "model",
 		summary: "types, statuses, priorities, the three edges, ready and blocked",
@@ -226,36 +215,6 @@ scrape the human table. Exit 0 on success, non-zero on error; the message goes t
 stderr prefixed "taskmgr:" and names the offending field and the allowed values.
 `,
 	},
-	{
-		id:      "conventions",
-		summary: "how a project adds its own rules, and where to read them",
-		text: `## What this store expects
-
-A project can add rules of its own. They come from packages — directories that
-hold gates and the prose explaining them — which a configuration file lists.
-
-  taskmgr guide --list      every topic, including the ones packages add
-  taskmgr guide packages    only what this store's packages say
-  taskmgr package list      which packages apply here, and whether each loads
-  taskmgr hook list         the gates that will refuse a write, in run order
-
-A package's prose is printed after these sections, under a heading naming the
-package. Read it before you file or close anything: its gates enforce the same
-rules, and a refused write costs a round trip that reading does not. A refusal
-names the gate that refused (pkg:<package>:<hook>) and says why.
-`,
-	},
-	{
-		id:      "more",
-		summary: "where the rest of the surface is documented",
-		text: `## Get more information
-
-  taskmgr commands          machine catalog of every command (YAML; --json for JSON)
-  taskmgr <command> --help  one command's flags, usage, and an example
-  taskmgr show <id>         everything known about a single issue
-  taskmgr guide --list      the topics of this guide, packages included
-`,
-	},
 }
 
 // guidePackagesTopic selects every package-contributed section at once, for a
@@ -263,9 +222,10 @@ names the gate that refused (pkg:<package>:<hook>) and says why.
 // has.
 const guidePackagesTopic = "packages"
 
-// guideText is the whole core guide, in section order. It is what an unqualified
-// `taskmgr guide` prints before any package sections, and what guide_test.go
-// holds against the SDK.
+// guideText is every word the guide can print, in section order. Nothing prints
+// it — an unqualified `taskmgr guide` prints the overview — and it exists so the
+// drift guards in guide_test.go can hold the whole corpus against the SDK and the
+// live command tree at once.
 var guideText = renderGuideSections(guideSections)
 
 // renderGuideSections joins sections with one blank line between them. Each
@@ -276,6 +236,120 @@ func renderGuideSections(sections []guideSection) string {
 		parts = append(parts, s.text)
 	}
 	return strings.Join(parts, "\n")
+}
+
+// guideOverviewHead is the fixed opening of the overview: what the tool is, and
+// the instruction to fetch before acting. The roster below it is generated, so a
+// section cannot be added without appearing here.
+const guideOverviewHead = `taskmgr — how to use it
+
+taskmgr is an issue tracker you drive entirely through this CLI: create issues,
+link them, find what is ready to work on, record progress. It acts on the project
+you run it from — taskmgr where reports which store that is, and -C <path> targets
+a project elsewhere.
+
+This is the overview. The guide itself is in parts, and each part is one command:
+`
+
+// guideOverviewTail closes the overview: the fetch-before-you-act table, the
+// reason it is worth the round trip, and where the rest of the surface lives.
+//
+// The table is imperative on purpose. An overview that only lists its parts is a
+// menu, and a caller under load skims a menu and proceeds on what it already
+// believes it knows — which for this tool is wrong in three specific ways it
+// cannot discover by guessing. Naming the command to run for each intent is what
+// makes an index behave like an instruction.
+const guideOverviewTail = `
+Name several at once: taskmgr guide model loop.
+
+Read before you act:
+
+  filing or editing an issue    taskmgr guide model loop body packages
+  finding work to pick up       taskmgr guide model query
+  parsing output in a script    taskmgr guide output
+
+Guessing instead of reading is what this guide exists to prevent, and three of
+these cost a wasted attempt every time: IDs are opaque and cannot be derived,
+--description stores a literal backslash-n, and this store can refuse a write for
+reasons only its own sections state.
+
+More:
+
+  taskmgr commands          machine catalog of every command (YAML; --json for JSON)
+  taskmgr <command> --help  one command's flags, usage, and an example
+  taskmgr guide --list      this roster as data (--json for JSON)
+`
+
+// renderGuideOverview builds what an unqualified `taskmgr guide` prints: the
+// fixed head, the generated roster of core sections, the roster line for this
+// store's package sections, whatever those packages put in the overview itself,
+// and the fixed tail.
+//
+// The package half is why this is generated rather than written out. A caller
+// injecting the overview has to learn that this store expects something *and*
+// which command states it, and only the store can say that.
+func renderGuideOverview(topics []tasks.GuideTopic) string {
+	var b strings.Builder
+	b.WriteString(guideOverviewHead)
+
+	w := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
+	for _, s := range guideSections {
+		_, _ = fmt.Fprintf(w, "  taskmgr guide %s\t%s\n", s.id, s.summary)
+	}
+	_, _ = fmt.Fprintf(w, "  taskmgr guide %s\t%s\n", guidePackagesTopic, packagesSummary(topics))
+	_ = w.Flush()
+
+	// A package's overview fragment is printed whole, under the package's name.
+	// It is capped an order of magnitude tighter than a section (SDK
+	// MaxGuideOverviewBytes) precisely so it can appear here in every caller's
+	// context without crowding out the mechanics above.
+	for _, t := range topics {
+		if !t.Overview {
+			continue
+		}
+		fmt.Fprintf(&b, "\nWhat %s expects of this store", t.Package)
+		if t.Scope != "" {
+			fmt.Fprintf(&b, " (%s)", t.Scope)
+		}
+		b.WriteString(":\n\n")
+		switch {
+		case t.Detail != "":
+			fmt.Fprintf(&b, "  (this package's overview could not be read: %s)\n", t.Detail)
+		default:
+			b.WriteString(indentLines(strings.TrimRight(t.Text, "\n"), "  "))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString(guideOverviewTail)
+	return b.String()
+}
+
+// packagesSummary describes the `packages` roster line for this store, so a
+// caller can tell whether the topic is worth a command before spending one.
+func packagesSummary(topics []tasks.GuideTopic) string {
+	switch n := len(topics); n {
+	case 0:
+		return "what this store expects on top of the above (nothing here)"
+	case 1:
+		return "what this store expects on top of the above (1 section here)"
+	default:
+		return fmt.Sprintf("what this store expects on top of the above (%d sections here)", n)
+	}
+}
+
+// indentLines prefixes every line of s, so a package's overview text sits under
+// its heading as one visibly quoted block rather than merging into the guide's
+// own prose.
+func indentLines(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		lines[i] = prefix + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderGuideTopic renders one package fragment with a heading that names where
@@ -359,18 +433,18 @@ to get the topics as an array.`,
 
 // guideOutput assembles the requested guide text.
 //
-// With no arguments it is the core sections followed by every package section.
+// With no arguments it is the **overview** — what the tool is, the roster of
+// parts, and the command that fetches each. Never the whole guide: the reader
+// injects this output into its own instructions, and a caller that needs the
+// filter language and a caller that needs the filing loop should not each pay for
+// the other's sections. The overview is the constant, small thing every caller
+// can afford, and it names what to fetch next.
+//
 // With arguments it is exactly the topics named, in the order they were named,
 // so a caller composes the slice it wants rather than taking the order here.
 func guideOutput(args []string, topics []tasks.GuideTopic) (string, error) {
 	if len(args) == 0 {
-		var b strings.Builder
-		b.WriteString(guideText)
-		for _, t := range topics {
-			b.WriteString("\n")
-			b.WriteString(renderGuideTopic(t))
-		}
-		return b.String(), nil
+		return renderGuideOverview(topics), nil
 	}
 
 	byID := make(map[string]tasks.GuideTopic, len(topics))
@@ -438,6 +512,12 @@ func runGuideList(topics []tasks.GuideTopic) error {
 	for _, t := range topics {
 		row := guideTopicDTO{ID: t.ID, Kind: "package", Package: t.Package, Scope: t.Scope, Detail: t.Detail}
 		row.Summary = fmt.Sprintf("contributed by package %s", t.Package)
+		if t.Overview {
+			// Say that this one arrives on its own: a caller that already has the
+			// overview has already read it, and does not need to spend a command.
+			row.Kind = "overview"
+			row.Summary = fmt.Sprintf("package %s, already printed in the overview", t.Package)
+		}
 		if t.Detail != "" {
 			row.Summary = "unreadable"
 		}

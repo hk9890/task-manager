@@ -7,6 +7,11 @@ version: 1
 # holds: a body that skips a section is refused with the reason. Neither can
 # drift from the other — they ship in one directory, at one version.
 
+# The overview fragment reaches every caller that runs `taskmgr guide`, so it
+# states the rule and names the section that explains it — and stops there. The
+# 1 KiB cap is what keeps it that way.
+overview: ./guide/overview.md
+
 guide:
   - id: bodies
     file: ./guide/bodies.md

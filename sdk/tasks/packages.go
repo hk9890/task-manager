@@ -55,6 +55,18 @@ const (
 	// truncated at the last line break under it and marked, never dropped: a
 	// truncated section still teaches, and a silently absent one does not.
 	MaxGuideFragmentBytes = 8 << 10
+
+	// MaxGuideOverviewBytes caps a package's overview fragment — eight times
+	// tighter than a topic, because this text lands in *every* caller's context
+	// rather than in the ones that asked for the subject. The cap is the design:
+	// an overview fragment has room to say what this store expects and which
+	// topic states it, and no room to state it here.
+	MaxGuideOverviewBytes = 1 << 10
+
+	// GuideOverviewID is the reserved fragment id the `overview:` manifest key
+	// declares. A `guide:` entry may not claim it, so "pkg:<package>:overview"
+	// always names the fragment that reaches the overview.
+	GuideOverviewID = "overview"
 )
 
 // PackageRef is one entry of a config file's `use:` list: the package a
@@ -124,9 +136,10 @@ func (r PackageRef) MarshalYAML() (any, error) {
 // extend how long the store lock is held, for every project on the machine
 // (HOOK-SPEC §8).
 type packageManifest struct {
-	Version int          `yaml:"version"`
-	Hooks   []Hook       `yaml:"hooks"`
-	Guide   []GuideEntry `yaml:"guide"`
+	Version  int          `yaml:"version"`
+	Hooks    []Hook       `yaml:"hooks"`
+	Guide    []GuideEntry `yaml:"guide"`
+	Overview string       `yaml:"overview"`
 }
 
 // GuideEntry is one guide fragment a package contributes (HOOK-SPEC §3.7): a
@@ -153,6 +166,10 @@ type GuideEntry struct {
 type packageGuide struct {
 	id   string
 	path string
+	// overview marks the fragment the `overview:` key declared. It reaches the
+	// guide's overview rather than waiting to be asked for, and is capped at
+	// MaxGuideOverviewBytes instead of MaxGuideFragmentBytes.
+	overview bool
 }
 
 // guideFromManifest turns a parsed manifest into the guide fragments it
@@ -164,12 +181,27 @@ type packageGuide struct {
 // there would be I/O no write needs, and would make an unreadable document able
 // to stop a write.
 func guideFromManifest(m packageManifest, name, dir string) ([]packageGuide, error) {
-	out := make([]packageGuide, 0, len(m.Guide))
-	seen := make(map[string]bool, len(m.Guide))
+	out := make([]packageGuide, 0, len(m.Guide)+1)
+	seen := make(map[string]bool, len(m.Guide)+1)
+
+	// The overview fragment comes first, so a reader of the whole set meets what
+	// the store expects before the sections that expand on it.
+	if ov := strings.TrimSpace(m.Overview); ov != "" {
+		path, err := resolveGuideFile(ov, dir)
+		if err != nil {
+			return nil, fmt.Errorf("package %s: overview: %w", name, err)
+		}
+		seen[GuideOverviewID] = true
+		out = append(out, packageGuide{id: packageGuideID(name, GuideOverviewID), path: path, overview: true})
+	}
+
 	for i, g := range m.Guide {
 		declared := strings.TrimSpace(g.ID)
 		if declared == "" {
 			return nil, fmt.Errorf("package %s: guide #%d: id is required (a guide entry has no positional default id)", name, i)
+		}
+		if declared == GuideOverviewID {
+			return nil, fmt.Errorf("package %s: guide id %q is reserved for the overview: key, which declares the fragment printed in the guide's overview", name, GuideOverviewID)
 		}
 		if strings.Contains(declared, packageIDSep) {
 			return nil, fmt.Errorf("package %s: guide %q: id must not contain %q (it separates the parts of the effective topic %q)",
