@@ -29,32 +29,14 @@ inside the binary, so an agent with the binary needs no files and no network.
   and an example rather than a bare error, and an unknown command suggests the closest
   match.
 
-## Capture IDs, never construct them
+## Two things a script gets wrong
 
-IDs are random tokens (`proj-3k9f2x`), not counters. There is no "next" ID and no way to
-guess one:
-
-```bash
-id=$(taskmgr create --title "Add CSV export" --type feature --json | jq -r .id)
-taskmgr create --title "Wire the button" --blocked-by "$id"
-```
-
-## Write bodies through a file, not a flag
-
-`--description "a\nb"` stores the backslash-n literally. For anything multi-line, read
-standard input:
-
-```bash
-taskmgr update "$id" --description-file - <<'EOF'
-## Acceptance criteria
-- [ ] handles an empty result set
-EOF
-
-echo "scaffold pushed" | taskmgr comment add "$id" --file -
-```
-
-`update --description` replaces the body rather than appending. To amend, read it back with
-`taskmgr show <id> --json` and resubmit the whole thing.
+- **Capture IDs; there is no way to derive one.** They are random tokens, so
+  `--json | jq -r .id` is the only source ([Getting started](getting-started.md#file-a-task)
+  has the pattern).
+- **Write bodies through `--description-file -`, not `--description`,** which stores a
+  literal backslash-n ([Concepts](concepts.md#the-description-body)). `comment add --file -`
+  reads standard input the same way.
 
 A mutation's `--json` echoes the issue's scalar fields, not its description or comments —
 run `show` to confirm what landed.

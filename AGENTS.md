@@ -15,29 +15,27 @@ skippable because the change looks small.
 ### Coding and file changes
 
 **MUST read [docs/CODING.md](docs/CODING.md) before creating or editing ANY file under
-`cmd/`, `sdk/`, or `scripts/`.** It owns the single-writer rule, the three seams that may
-call `os`, where each kind of change goes, and the spec that change must update with it.
+`cmd/`, `sdk/`, or `scripts/`.** Where a change goes is not guessable from the tree: the
+storage engine is the only writer, and most changes owe an update to a spec.
 
 ### Research, planning, architecture — and finding anything at all
 
 **MUST read [docs/OVERVIEW.md](docs/OVERVIEW.md) before your first `rg`, `grep`, `Glob`
 or `ls` of the source tree, and before writing any plan or design for a change.** It is
-the map — the package layout, the invariants a design has to respect, and the search
-expressions that land on the right file first time.
+the map, and it carries the search expressions that land on the right file first time.
 
 ### Writing project docs
 
 **MUST read [docs/DOCUMENTING.md](docs/DOCUMENTING.md) AND invoke the
 `instruction-writing:writing-project-docs` skill before creating or editing ANY Markdown
-file under `docs/`, or `AGENTS.md`, `CLAUDE.md`, `README.md`, or `CONTRIBUTING.md`.** It
-owns the doc gate, the citation rules, and what this repository has decided not to
-document.
+file under `docs/`, or `AGENTS.md`, `CLAUDE.md`, `README.md`, or `CONTRIBUTING.md`.**
+A doc change is gated here, and some gaps in the set are deliberate.
 
 ### Testing and verification
 
 **MUST read [docs/TESTING.md](docs/TESTING.md) before writing a test, before your first
-`mise run test*` or `go test`, and before reporting a change as green.** It owns the four
-test layers, the fixtures, and which gate a change has to pass.
+`mise run test*` or `go test`, and before reporting a change as green.** Which layer a
+test belongs in, and which gate makes a change green, are both fixed there.
 
 ### Running `taskmgr` by hand, or reproducing a reported bug
 
@@ -67,4 +65,4 @@ in `go.mod`.
 
 **MUST read [docs/MONITORING.md](docs/MONITORING.md) before reading a captured
 `TASKMGR_LOG` run, and before your first edit made in response to a failed `taskmgr`
-command.** It owns what is logged at which level, and how to aggregate a run.
+command.** Most of what looks like a bug is visible in one run's records first.

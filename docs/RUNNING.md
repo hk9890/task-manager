@@ -70,5 +70,5 @@ EOF
 ./bin/taskmgr -C "$scratch" close <id> --json   # the structured hook_denied error
 ```
 
-A pre-hook holds the store lock while it runs, so a hook that hangs makes every other
-`taskmgr` in that store hang with it; `hook_timeout` (default `2s`) is what ends it.
+A write that hangs is a pre-hook running: it holds the store lock until
+`hook_timeout` ends it.

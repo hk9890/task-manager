@@ -8,11 +8,11 @@ and the expressions that find the rest.
 ```
 github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 ├── cmd/                          one file per command group, plus rendering
-│   ├── root.go                   the command tree, the three persistent flags, cmd.Run
-│   ├── render.go                 human tables and detail blocks; the JSON DTOs (CLI-SPEC §6)
-│   ├── guide.go                  `taskmgr guide` — the how-to that ships inside the binary
-│   ├── commands.go               `taskmgr commands` — the catalog, derived from the live tree
-│   └── taskmgr/                  package main — `go install …/cmd/taskmgr` names the binary
+│   ├── root.go                   the command tree and the three persistent flags
+│   ├── render.go                 human tables, detail blocks, and the JSON DTOs
+│   ├── guide.go                  the how-to that ships inside the binary
+│   ├── commands.go               the machine catalog, derived from the live tree
+│   └── taskmgr/                  package main
 ├── sdk/tasks/                    separate module — the storage engine and the public API
 │   ├── internal/vfs/             the disk seam: FS interface, osFS, and Mem for tests
 │   ├── internal/exec/            the process seam: hook processes
@@ -25,40 +25,27 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
     └── implementation/           orientation maps that own nothing; the specs are normative
 ```
 
-The two modules exist so a consumer can import `sdk/tasks` without the CLI's
-dependencies. The committed `go.work` points local builds at the in-tree SDK; the root
-`go.mod` pins the published `sdk vX.Y.Z` and carries **no `replace`**, which is what
-`go install …@latest` resolves. No module here uses a `replace` directive.
-
 ## Key concepts
 
-- **One writer.** Only `sdk/tasks` touches files under a store, and only through
-  `internal/vfs`. Every mutation serializes — an in-process mutex, then an exclusive
-  `flock` on `.tasks/.lock` — validates, and writes temp + `fsync` + `rename`. This is the
-  precondition for every other guarantee; a front end that read a file directly would
-  void it.
-- **Pure core, imperative shell.** A file in `sdk/tasks` is pure core unless it is on the
-  `imperativeShell` list in `sdk/tasks/importboundary_test.go`. A pure-core file may not
-  import `os` or `internal/vfs` **and may not declare a `*Store` method** — a method
-  reaches disk through `s.fs`, which no import list reveals. That second half is why the
-  guard exists at all.
-- **Three seams, and only three.** `internal/vfs` (disk), `internal/exec` (hook
-  processes), `internal/env` (user environment) are the only packages that call
-  `os`/`syscall`. Store resolution therefore reads `HOME` through a seam, which is what
-  makes it testable without a real home directory.
-- **Derived edges are never stored.** Only `parent`, `blocked_by` and `related` are
-  written, on the dependent issue. Children, "blocks", and the inverse of `related` are
-  computed by scanning, so the on-disk graph cannot contradict itself.
-- **`ready` and `blocked` come from the graph, not the `status` field.** An issue can be
-  `status: blocked` with no open blocker, or be blocked while its status is `open`. The
-  `blocked` status value is a manual label the engine never sets or clears.
-- **Hot/cold partition.** Active issues sit at the store's top level, closed ones in
-  `closed/`, so "list the active work" is O(open) rather than O(all-issues-ever). The hot
-  scan reads whole files, which is why a body over `MaxInlineBody` moves to a content
-  sidecar: no hot file exceeds ~64 KiB whatever a caller pastes in.
-- **Policy lives in hooks, not the core.** "Tests must pass before close" is a script the
-  engine runs at a transition, declared per-repository. A behaviour that can be a hook is
-  a hook.
+The invariants a design has to respect.
+[ARCHITECTURE-SPEC](specs/ARCHITECTURE-SPEC.md) states each in full; these are the shapes
+to hold in mind while reading the code.
+
+- **One writer.** Only `sdk/tasks` touches a store, under a `flock`, validating and writing
+  atomically. Every other guarantee rests on it.
+- **Pure core, imperative shell.** A file in `sdk/tasks` is pure core unless
+  `sdk/tasks/importboundary_test.go` lists it — and pure core may declare no `*Store`
+  method, not merely avoid an import.
+- **Three seams.** `internal/vfs`, `internal/exec` and `internal/env` are the only packages
+  that call `os`/`syscall`.
+- **Derived edges are never stored.** `parent`, `blocked_by` and `related` are written;
+  children, "blocks" and the inverse of `related` are computed, so the graph cannot
+  contradict itself.
+- **`ready` and `blocked` come from the graph, not the `status` field.** The `blocked`
+  status is a manual label the engine never sets or clears.
+- **Hot/cold partition.** Active issues at the store root, closed ones under `closed/`, so
+  a list costs O(open); a body over `MaxInlineBody` moves to a sidecar to keep it that way.
+- **Policy lives in hooks, not the core.** A behaviour that can be a hook is a hook.
 
 ## Specifications
 

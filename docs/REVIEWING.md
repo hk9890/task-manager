@@ -17,10 +17,9 @@ file wins.
   its job over plain values;
   [ARCHITECTURE-SPEC §5](specs/ARCHITECTURE-SPEC.md#5-the-engine) is the standard.
   Adding one to make a build pass is a blocking finding.
-- **A disk, process, or environment call outside its seam.** `internal/vfs`,
-  `internal/exec` and `internal/env` are the only three; an inline `os.Getenv` or
-  `os/exec` elsewhere in `sdk/tasks` is blocking even where the guard test does not reach
-  it ([CODING.md § Single-writer rule](CODING.md#single-writer-rule)).
+- **A disk, process, or environment call outside its seam** — an inline `os.Getenv` or
+  `os/exec` in `sdk/tasks`, blocking even where the guard test does not reach it
+  ([CODING.md § Single-writer rule](CODING.md#single-writer-rule) names the three seams).
 - **A mutation that lengthens the in-lock path.** Pre-hooks and the write already run
   under the store `flock` ([HOOK-SPEC §8](specs/HOOK-SPEC.md)); work added there serializes
   every other writer, in every process.

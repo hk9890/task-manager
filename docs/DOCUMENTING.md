@@ -11,8 +11,7 @@ lint job. It rejects four things:
 
 - a `cmd/…` or `sdk/…` path that does not exist on disk;
 - a citation pinned to a line number — `path:42` and `path#L42` both fail. **Cite the
-  symbol.** It survives the edits above it, and it is greppable, which a line number is
-  not;
+  symbol**: it is greppable, which a line number is not;
 - a relative Markdown link whose target file, or whose `#anchor` inside that file, does
   not resolve;
 - a `docs/user-guide/` page that cites the source tree or links to a spec.
@@ -22,9 +21,8 @@ reader exactly as far as one in prose. What it cannot see is everything below.
 
 ## `docs/specs/`
 
-The specs are **normative**: code that disagrees with one is a bug, and a behaviour change
-updates its spec in the same commit
-([CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync) carries which spec).
+When a spec is updated, and which one, is
+[CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync)'s. What goes in it:
 
 - Specify data, contract and algorithm: file formats and their keys, the command surface,
   the resolution rule, the grammar, the hook payload.
