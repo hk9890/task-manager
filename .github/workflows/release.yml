@@ -72,20 +72,23 @@ jobs:
 
       # cosign-release pins the cosign BINARY, not just the action. Without it the
       # installer fetches the latest cosign, so a new major lands in the release
-      # job unannounced — which is how v0.7.0 failed: cosign 3.x makes
-      # --new-bundle-format the default, which silently ignores the
-      # --output-signature / --output-certificate flags .goreleaser.yaml passes and
-      # then aborts on an empty --bundle path ("create bundle file: open : no such
-      # file or directory"). Every other supply-chain input here is pinned; this
-      # one was the exception.
+      # job unannounced — which is how v0.7.0 failed: the 2.x config here passed
+      # --output-signature / --output-certificate, which 3.x does not accept, and
+      # the run aborted on an empty --bundle path ("create bundle file: open : no
+      # such file or directory"). Every other supply-chain input here is pinned;
+      # this one was the exception.
       #
-      # Moving to the 3.x bundle format is a separate change: it replaces the
-      # published checksums.txt.sig + .pem with a single .bundle and changes the
-      # verify-blob invocation documented in docs/RELEASING.md.
+      # 3.x signs into one bundle and nothing else: sign-blob has no
+      # --output-signature or --output-certificate, and no --new-bundle-format to
+      # turn the old pair back on. verify-blob dropped --signature / --certificate
+      # to match, so a 3.x binary cannot verify a release signed by 2.x either.
+      # That is why the move is a clean break rather than a transition, and why
+      # the published artifact and the verify command in docs/RELEASING.md both
+      # changed with it.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: 'v2.6.5'
+          cosign-release: 'v3.1.3'
 
       - name: Install syft (SBOM generator)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
