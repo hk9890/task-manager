@@ -157,7 +157,20 @@ write path serializes writers (§7).
 func (s *Store) Root() string     // project root (parent of the data dir)
 func (s *Store) Dir() string      // absolute path to the data directory
 func (s *Store) Prefix() string   // configured ID prefix
+
+func (s *Store) Config() Config           // a copy, Hooks included
+func (s *Store) SetConfig(cfg Config) error // validate, then write config.yaml under the lock
 ```
+
+`Config` returns a copy: the `Hooks` slice is cloned, so editing the result cannot
+reach the configuration the store is running with.
+
+`SetConfig` is the only public way to write `config.yaml`. It rejects a `Prefix` that
+is empty or differs from the store's — the prefix is part of every filename and every
+stored reference, so it is immutable — and compiles the hooks block before writing, so a
+block that would fail every later mutation ([HOOK-SPEC](HOOK-SPEC.md) §3.4) is refused
+here instead. On success the store's compiled hook set is invalidated, so a long-lived
+handle runs the hooks it just wrote rather than the ones it opened with.
 
 ---
 
@@ -291,6 +304,34 @@ type Hook struct {
 
 `HookTimeout` and `Hooks` are validated lazily on the first write, not on read, so
 a malformed value never breaks queries. Semantics: [HOOK-SPEC](HOOK-SPEC.md) §3.
+
+### `GlobalConfig`
+
+The per-user configuration ([CONFIG-SPEC](CONFIG-SPEC.md) §2) — one file for the
+whole machine, not part of any store.
+
+```go
+type GlobalConfig struct {
+    Version     int    `yaml:"version"`
+    CentralRoot string `yaml:"central_root,omitempty"` // registry + central stores; "" = the taskmgr home
+    HookTimeout string `yaml:"hook_timeout,omitempty"` // fallback limit for a store that sets none
+    Hooks       []Hook `yaml:"hooks,omitempty"`        // gates applied to every store on this machine
+}
+
+func LoadGlobalConfig() (GlobalConfig, error)  // built-in defaults when the file is absent
+func SaveGlobalConfig(cfg GlobalConfig) error  // validates Hooks, then writes; creates the home
+func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
+
+func HookID(h Hook, index int, global bool) string // the effective id: "gate", "pre-close#2", "global:gate"
+```
+
+`Hooks` here run **before** a store's own on every mutation, and their effective ids
+carry a `global:` prefix ([HOOK-SPEC](HOOK-SPEC.md) §3.5). `HookID` is the one place
+that rule is implemented, so a caller listing or removing hooks derives an id rather
+than re-deriving the rule.
+
+`SaveGlobalConfig` validates the hooks block before writing: a malformed one would fail
+mutations in every store on the machine, so it is refused at the call that caused it.
 
 ---
 

@@ -108,7 +108,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
 | `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback) + `Mem` (in-memory, for tests). |
 | `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
-| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment for store resolution (CONFIG-SPEC) — `UserHomeDir`, `Getenv`. `Environment` interface + OS impl + `Fake` (for hermetic resolution tests, no real `HOME`). |
+| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the global hooks block a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec. |
 
 ### Imperative-shell files (may import `internal/vfs` / `internal/env`, and declare `*Store` methods)
@@ -124,7 +124,7 @@ over plain values.
 | `store.go` | Discovery, CRUD, ID allocation; routes every file op through `internal/vfs`. Calls `newIDFromNames` with the directory listing it reads via the seam. |
 | `comments.go` | Comment sidecar: append, `replaces`/tombstone resolution to the effective log. |
 | `content.go` | Body-overflow sidecar I/O: the two-file write ordering, sidecar read/removal, `ResolveBody` (TASK-STORAGE-SPEC §4.6). The rule it applies is pure and lives in `overflow.go`. |
-| `config.go` / `registry.go` | Load/persist the global config and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
+| `config.go` / `registry.go` | Load/persist the global config (`LoadGlobalConfig`/`SaveGlobalConfig`) and the central registry (CONFIG-SPEC §2–§3); gather the resolution inputs (home/env via `internal/env`, walk-up + symlink canonicalization via `internal/vfs`) and feed them to `resolve.go`; central store creation. |
 | `list.go` | `Ready`/`Blocked`/`Detail`/`Query`/`List`/`ListPage`: read the hot index, the `closed/` partition and comment sidecars through the seam, then apply the pure rules in `ready.go`. |
 | `mutation.go` | `MutationResult` and the gated-write sequence every mutation shares — validate+index (§6 step 3), pre-hooks around the write (step 4), hints/warnings after post-hooks (step 7). |
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |

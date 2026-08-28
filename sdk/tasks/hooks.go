@@ -98,25 +98,61 @@ func (hs *hookSet) forEvent(event string) []compiledHook {
 	return out
 }
 
-// buildHookSet validates and compiles the raw Config hook fields into a hookSet
-// (HOOK-SPEC §3.4). It is pure: a configuration error is returned, never
-// applied, and it touches no filesystem.
-func buildHookSet(cfg Config) (*hookSet, error) {
+// globalHookIDPrefix marks every hook that came from the per-user config
+// (HOOK-SPEC §3.5). It is applied to a declared id as well as to a defaulted
+// "<event>#<index>": the two files number their hooks independently, so without
+// it a denial reason could name "pre-create#0" without saying which file to fix.
+const globalHookIDPrefix = "global:"
+
+// HookID returns the effective id of the index-th hook of a config file: its
+// declared id, or "<event>#<index>" when it declares none, prefixed "global:"
+// when it comes from the per-user config (HOOK-SPEC §3.5).
+//
+// This is the id a denial reason and the logs report, so a caller that lists or
+// removes hooks derives it here rather than re-deriving the rule.
+func HookID(h Hook, index int, global bool) string {
+	prefix := ""
+	if global {
+		prefix = globalHookIDPrefix
+	}
+	return hookLabel(h, index, prefix)
+}
+
+// buildHookSet validates and compiles the global and store hook configuration
+// into one hookSet (HOOK-SPEC §3.4/§3.5). Global hooks come first, so a
+// machine-wide gate is evaluated before project policy and its denial is the one
+// that surfaces. It is pure: a configuration error is returned, never applied,
+// and it touches no filesystem.
+//
+// The timeout is the store's when it sets one, else the global one, else the
+// 2s default — one limit for every hook in the merged chain (HOOK-SPEC §3.1).
+func buildHookSet(global GlobalConfig, cfg Config) (*hookSet, error) {
+	raw := strings.TrimSpace(cfg.HookTimeout)
+	if raw == "" {
+		raw = strings.TrimSpace(global.HookTimeout)
+	}
 	timeout := defaultHookTimeout
-	if raw := strings.TrimSpace(cfg.HookTimeout); raw != "" {
+	if raw != "" {
 		d, err := time.ParseDuration(raw)
 		if err != nil {
-			return nil, fmt.Errorf("invalid hook_timeout %q: %w", cfg.HookTimeout, err)
+			return nil, fmt.Errorf("invalid hook_timeout %q: %w", raw, err)
 		}
 		if d < 0 {
-			return nil, fmt.Errorf("invalid hook_timeout %q: must not be negative", cfg.HookTimeout)
+			return nil, fmt.Errorf("invalid hook_timeout %q: must not be negative", raw)
 		}
 		timeout = d // 0 disables the limit
 	}
 
 	hs := &hookSet{timeout: timeout}
+	for i, h := range global.Hooks {
+		ch, err := compileHook(h, i, globalHookIDPrefix)
+		if err != nil {
+			return nil, err
+		}
+		hs.hooks = append(hs.hooks, ch)
+	}
 	for i, h := range cfg.Hooks {
-		ch, err := compileHook(h, i)
+		ch, err := compileHook(h, i, "")
 		if err != nil {
 			return nil, err
 		}
@@ -126,22 +162,21 @@ func buildHookSet(cfg Config) (*hookSet, error) {
 }
 
 // compileHook validates a single hook entry and compiles its `when` predicate.
-func compileHook(h Hook, index int) (compiledHook, error) {
+// idPrefix scopes the resolved id to the file the entry came from; it is empty
+// for a store's own hooks.
+func compileHook(h Hook, index int, idPrefix string) (compiledHook, error) {
 	event := strings.TrimSpace(h.Event)
 	if event == "" {
-		return compiledHook{}, fmt.Errorf("hook %s: missing required field event", hookLabel(h, index))
+		return compiledHook{}, fmt.Errorf("hook %s: missing required field event", hookLabel(h, index, idPrefix))
 	}
 	if !validHookEvents[event] {
-		return compiledHook{}, fmt.Errorf("hook %s: unknown event %q", hookLabel(h, index), h.Event)
+		return compiledHook{}, fmt.Errorf("hook %s: unknown event %q", hookLabel(h, index, idPrefix), h.Event)
 	}
 	if len(h.Run) == 0 || strings.TrimSpace(h.Run[0]) == "" {
-		return compiledHook{}, fmt.Errorf("hook %s: run must be a non-empty argv array", hookLabel(h, index))
+		return compiledHook{}, fmt.Errorf("hook %s: run must be a non-empty argv array", hookLabel(h, index, idPrefix))
 	}
 
-	id := strings.TrimSpace(h.ID)
-	if id == "" {
-		id = fmt.Sprintf("%s#%d", event, index)
-	}
+	id := hookLabel(h, index, idPrefix)
 
 	var pred query.Predicate
 	if w := strings.TrimSpace(h.When); w != "" {
@@ -155,14 +190,17 @@ func compileHook(h Hook, index int) (compiledHook, error) {
 	return compiledHook{id: id, event: event, when: pred, run: h.Run}, nil
 }
 
-// hookLabel names a hook for error messages: its id when set, else
-// "<event>#<index>", else "#<index>" when even the event is missing.
-func hookLabel(h Hook, index int) string {
+// hookLabel names a hook for error messages and as its resolved id: its id when
+// set, else "<event>#<index>", else "#<index>" when even the event is missing.
+// idPrefix scopes the name to the config file the entry came from (HOOK-SPEC
+// §3.5) and applies to a declared id too, so an error always says which file to
+// edit.
+func hookLabel(h Hook, index int, idPrefix string) string {
 	if id := strings.TrimSpace(h.ID); id != "" {
-		return id
+		return idPrefix + id
 	}
 	if e := strings.TrimSpace(h.Event); e != "" {
-		return fmt.Sprintf("%s#%d", e, index)
+		return fmt.Sprintf("%s%s#%d", idPrefix, e, index)
 	}
-	return fmt.Sprintf("#%d", index)
+	return fmt.Sprintf("%s#%d", idPrefix, index)
 }

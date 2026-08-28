@@ -28,7 +28,7 @@ import (
 // directly against the raw Config. HOOK-SPEC §3.1/§3.2/§3.4.
 
 func TestBuildHookSet_Defaults(t *testing.T) {
-	hs, err := buildHookSet(Config{Prefix: "x"})
+	hs, err := buildHookSet(GlobalConfig{}, Config{Prefix: "x"})
 	if err != nil {
 		t.Fatalf("empty config: unexpected error %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuildHookSet_Timeout(t *testing.T) {
 		{"10", 0, true},  // missing unit
 	}
 	for _, c := range cases {
-		hs, err := buildHookSet(Config{Prefix: "x", HookTimeout: c.raw})
+		hs, err := buildHookSet(GlobalConfig{}, Config{Prefix: "x", HookTimeout: c.raw})
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("hook_timeout %q: want error, got none", c.raw)
@@ -74,7 +74,7 @@ func TestBuildHookSet_Timeout(t *testing.T) {
 }
 
 func TestBuildHookSet_ValidHooks(t *testing.T) {
-	hs, err := buildHookSet(Config{
+	hs, err := buildHookSet(GlobalConfig{}, Config{
 		Prefix: "x",
 		Hooks: []Hook{
 			{ID: "tests", Event: "pre-close", When: `type == "feature"`, Run: []string{"make", "test"}},
@@ -112,7 +112,7 @@ func TestBuildHookSet_InvalidHooks(t *testing.T) {
 		{"bad when", Hook{Event: "pre-close", When: "type ==", Run: []string{"x"}}, "invalid when"},
 	}
 	for _, c := range cases {
-		_, err := buildHookSet(Config{Prefix: "x", Hooks: []Hook{c.hook}})
+		_, err := buildHookSet(GlobalConfig{}, Config{Prefix: "x", Hooks: []Hook{c.hook}})
 		if err == nil {
 			t.Errorf("%s: want error, got none", c.name)
 			continue
@@ -125,19 +125,19 @@ func TestBuildHookSet_InvalidHooks(t *testing.T) {
 
 func TestHookLabel_InErrorsUsesIDThenEventIndex(t *testing.T) {
 	// id present → id
-	_, err := buildHookSet(Config{Prefix: "x", Hooks: []Hook{{ID: "my-gate", Event: "bogus", Run: []string{"x"}}}})
+	_, err := buildHookSet(GlobalConfig{}, Config{Prefix: "x", Hooks: []Hook{{ID: "my-gate", Event: "bogus", Run: []string{"x"}}}})
 	if err == nil || !strings.Contains(err.Error(), "my-gate") {
 		t.Fatalf("error should name the hook by id: %v", err)
 	}
 	// id absent, event present → "<event>#<index>"
-	_, err = buildHookSet(Config{Prefix: "x", Hooks: []Hook{{Event: "bogus", Run: []string{"x"}}}})
+	_, err = buildHookSet(GlobalConfig{}, Config{Prefix: "x", Hooks: []Hook{{Event: "bogus", Run: []string{"x"}}}})
 	if err == nil || !strings.Contains(err.Error(), "bogus#0") {
 		t.Fatalf("error should name the hook by event#index: %v", err)
 	}
 }
 
 func TestHookSet_ForEventPreservesConfigOrder(t *testing.T) {
-	hs, err := buildHookSet(Config{
+	hs, err := buildHookSet(GlobalConfig{}, Config{
 		Prefix: "x",
 		Hooks: []Hook{
 			{ID: "a", Event: "pre-close", Run: []string{"a"}},
