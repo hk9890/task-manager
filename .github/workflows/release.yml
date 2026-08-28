@@ -53,22 +53,28 @@ jobs:
       # in-tree SDK, so none of them sees a go.mod that still pins an older sdk —
       # while `go install .../cmd/taskmgr@<tag>` compiles against exactly that pin
       # and fails for every user. On a tag push this is the last point at which a
-      # stale pin can be caught, and the tag is already public by then; on a
-      # dispatched dry run it is a real gate, which is the point of running one.
+      # stale pin can be caught, and the tag is already public by then.
       #
-      # Skipped on the weekly schedule: this is a release-readiness gate, not a
-      # drift check. Between releases the CLI legitimately uses SDK symbols that
-      # are not published yet, so it is *expected* to fail on an arbitrary main —
-      # which is why `.mise.toml` keeps `verify:pin` out of `quality` too. Running
-      # it every Monday would just teach everyone to ignore a red release run.
+      # Fatal only on a tag push. Between releases the CLI legitimately uses SDK
+      # symbols that are not published yet, so the build is *expected* to fail on
+      # an arbitrary main — which is why `.mise.toml` keeps `verify:pin` out of
+      # `quality` too. Failing the job on that would make the dry run unrunnable
+      # in exactly the window it is most useful: outside a release sequence,
+      # where signing can be rehearsed without a version at stake. So a dispatch
+      # and the weekly schedule report the stale pin and carry on to the build
+      # and signing steps this run exists to exercise. `mise run verify:pin` is
+      # the check to run by hand before tagging (RELEASING.md step 4).
       - name: Verify the SDK pin resolves (go install path)
-        if: github.event_name != 'schedule'
         run: |
-          if ! GOWORK=off go build ./...; then
+          if GOWORK=off go build ./...; then
+            exit 0
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then
             echo "::error::go.mod pins an SDK version this commit does not build against."
             echo "::error::Push the matching sdk/vX.Y.Z tag and re-pin the CLI before tagging — docs/RELEASING.md step 4."
             exit 1
           fi
+          echo "::warning::go.mod pins an SDK version this commit does not build against — expected between releases; RELEASING.md step 4 clears it before a tag."
 
       # cosign-release pins the cosign BINARY, not just the action. Without it the
       # installer fetches the latest cosign, so a new major lands in the release

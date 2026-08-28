@@ -75,15 +75,19 @@ on a clean, up-to-date tree.
    mise run verify:pin      # GOWORK=off go build ./...
    ```
 
-   This is the one check that sees a stale pin. `mise run quality:full` and every
-   CI job build inside the committed `go.work`, which wires the CLI to the
-   in-tree SDK — so a `go.mod` still pinning the *previous* `sdk` version passes
-   all of them, while `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for
-   every user. The release workflow runs the same check before GoReleaser — on a
-   tag push, though, the tag is already public by then, which is the other reason
-   to dry-run first (step 5). The weekly dry run skips this check: between
-   releases the CLI legitimately uses SDK symbols that are not published yet, so
-   on an arbitrary `main` it is expected to fail.
+   **This is the check to run by hand — nothing else stops a stale pin before the
+   tag.** `mise run quality:full` and every CI job build inside the committed
+   `go.work`, which wires the CLI to the in-tree SDK, so a `go.mod` still pinning
+   the *previous* `sdk` version passes all of them while
+   `go install …/cmd/taskmgr@vX.Y.Z` fails to compile for every user.
+
+   The release workflow runs the same build, but it is **fatal only on a tag
+   push** — where the tag is already public by the time it fires. A dry run and
+   the weekly schedule log a warning and continue: between releases the CLI
+   legitimately uses SDK symbols that are not published yet, so the build is
+   expected to fail on an arbitrary `main`, and failing the job on that would
+   make the dry run unrunnable outside a release sequence — which is the window
+   where a signing change can be rehearsed with no version at stake.
 
 5. **Dry-run the release workflow on the commit you are about to tag.** This is
    the same job that runs on a tag push — same build, same signing, same SBOMs —
