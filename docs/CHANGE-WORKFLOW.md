@@ -23,7 +23,7 @@ than running `git worktree` by hand:
    to open an issue, `taskmgr close` when it lands).
 2. Make the change on the feature branch — never on `main`.
 3. Verify to the depth of the change:
-   - **Docs-only** → check touched paths, links, and routes.
+   - **Docs-only** → `mise run check:docs` ([DOCUMENTING.md](DOCUMENTING.md)).
    - **Code** → run the green gate `mise run quality:full`
      (see [TESTING.md](TESTING.md)).
    - **Behaviour change** → update the matching spec in `docs/specs/` in the same

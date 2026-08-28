@@ -15,8 +15,8 @@ mise run vet
 mise run lint
 mise run test              # L1 pure + L2 store-on-Mem (fast, both modules)
 mise run test:integration  # L3 real temp dir + L4 CLI
-mise run quality           # fmt + vet + lint + test  (pre-commit gate)
-mise run quality:full      # + L3/L4                  (pre-handoff gate)
+mise run quality           # fmt + vet + lint + docs + test  (pre-commit gate)
+mise run quality:full      # + L3/L4                         (pre-handoff gate)
 ```
 
 One task per `mise run`: trailing words become arguments to the first task, so
@@ -44,6 +44,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 | Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
 | Hook config / orchestration | `sdk/tasks` (`hooks.go` config+validation, `hookrun.go` run, `hookpayload.go`) |
 | Pure logic (`ids`, `ready`, `resolve`) | its own file in `sdk/tasks`, no FS import **and no `*Store` method** → unit-tests at L1 |
+| Repo tooling that ships with neither binary | `scripts/<name>/` — its own `main` package, stdlib only, run from a `mise` task |
 
 ## How to test
 
@@ -67,6 +68,10 @@ A change to a CLI command/flag or a public `sdk/tasks` function/type/semantics
 [HOOK](specs/HOOK-SPEC.md). A change to config, the central registry, or store
 resolution updates [CONFIG](specs/CONFIG-SPEC.md). A structural change (packages, a
 seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
+
+A change a **user** would notice — a command, a flag, a JSON field, an error message —
+also updates the page covering it in [user-guide/](user-guide/) in the same change. No
+gate catches a missing one; [REVIEWING.md](REVIEWING.md) is where it is checked.
 
 ## Modules
 

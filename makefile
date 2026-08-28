@@ -49,11 +49,11 @@ vet:
 	@cd sdk && go vet ./...
 
 fmt:
-	@$(GOIMPORTS) -w cmd sdk/tasks
+	@$(GOIMPORTS) -w cmd sdk/tasks scripts
 
 # 2>&1 folds goimports' own diagnostics into $out so a broken invocation cannot pass.
 fmt-check:
-	@out="$$($(GOIMPORTS) -l cmd sdk/tasks 2>&1)" || { echo "goimports failed:"; echo "$$out"; exit 1; }; \
+	@out="$$($(GOIMPORTS) -l cmd sdk/tasks scripts 2>&1)" || { echo "goimports failed:"; echo "$$out"; exit 1; }; \
 	if [ -n "$$out" ]; then echo "unformatted files:"; echo "$$out"; exit 1; fi
 
 tidy:
