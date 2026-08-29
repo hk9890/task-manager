@@ -52,22 +52,25 @@ use:                       # hook packages applied to every store on this machin
 | `version` | no | Schema version; defaults to `1`. |
 | `central_root` | no | Directory holding the registry and central stores. `~` expands; a relative value resolves against the home. Defaults to the home. |
 | `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
-| `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home. |
+| `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home and stays inside it. |
 
 Machine-wide packages live at `<home>/packages/<name>`, which is what a `name` entry in
 either config file resolves to. The directory is created by whoever installs a package;
 taskmgr never writes one ([HOOK-SPEC](HOOK-SPEC.md) §3.6).
 
 `config.yaml` always lives in the home, even when `central_root` points elsewhere.
-Unknown keys are ignored; a corrupt (unparseable) file is a hard error.
+Unknown keys are ignored; a corrupt (unparseable) file is a hard error. The withdrawn
+`hooks:` key is the exception among unknown keys: it fails every mutation on the machine
+until the block is removed, rather than being ignored, because ignoring it runs every
+store with the gates it declares silently absent ([HOOK-SPEC](HOOK-SPEC.md) §3.4).
 
 `hook_timeout` and `use` are read **lazily, on the first write to any store** — never on
 a read — exactly as a store's own `use` list is ([HOOK-SPEC](HOOK-SPEC.md) §3.4). The
 blast radius is wider than a store's: a package named here that will not load fails
 mutations in *every* store on the machine while leaving every query working. `taskmgr
 package` checks an entry before it writes, so the error normally surfaces at the command
-that caused it — and checks only the entries the write **introduces**, so the command
-that removes a bad entry is not itself refused by it.
+that caused it — and checks only the entries the write **introduces**, so `taskmgr
+package rm` is not itself refused by the entry it removes.
 
 **Config lock.** Writes to this file are serialized by an advisory `flock` on
 `<home>/.config.lock`, and the read that a change is computed from happens inside

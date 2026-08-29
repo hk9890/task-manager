@@ -287,7 +287,7 @@ Append one entry to the target file's `use:` list.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--path` | off | Treat the argument as a directory rather than a package name. The path resolves against the directory holding the config file: `.tasks/` for a store, the taskmgr home for `--global`. |
+| `--path` | off | Treat the argument as a directory rather than a package name. The path resolves against the directory holding the config file — `.tasks/` for a store, the taskmgr home for `--global` — and must stay inside it; an absolute path exits `1` (HOOK-SPEC §3.5). |
 | `--global` | off | Act on the per-user config instead of the store's. |
 
 Without `--path` the argument is a package name, resolved to
@@ -295,12 +295,35 @@ Without `--path` the argument is a package name, resolved to
 which it is rather than leaving a loader to guess (HOOK-SPEC §3.5).
 
 The package is **loaded and checked before the entry is written**, so one that could
-never run is refused here rather than at the next unrelated mutation. A package that is
-merely **not installed yet** is written and reported as a warning: a store's config
-travels in git, so it legitimately names a package the machine writing it does not have.
-An entry that duplicates one already in the file exits `1`.
+never run is refused here rather than at the next unrelated mutation. The check resolves
+the candidate against the entries that already apply, so a package name or a directory
+one of them has already claimed is reported here — as the `shadowed` warning below — and
+not left to surface at the next mutation. A package that is merely **not installed yet**
+is written and reported as a warning: a store's config travels in git, so it legitimately
+names a package the machine writing it does not have. An entry that duplicates one
+already in the file exits `1`.
 
-- **Output:** the entry and what it resolves to (`packageDTO` in JSON, §6).
+- **Output:** the entry and what it resolves to (`packageDTO` in JSON, §6). A package
+  that is not installed, or whose name an earlier entry already provides, adds a warning
+  line to the human output.
+
+### `taskmgr package rm <name> [--path] [--global]`
+
+Remove one entry from the target file's `use:` list. `--path` and `--global` select the
+entry and the file exactly as they do for `add`, and an entry is matched by what it
+resolves to rather than by its spelling, so `packages/p` and `./packages/p` name the same
+one. A name that is not in the file exits `1` and lists what the file does use.
+
+The package is **not** loaded. `add` checks a package because it is about to make the
+configuration depend on it; `rm` is the way back out of exactly the state where that check
+would fail — an entry that will not load stops every mutation in the store, and from a
+store config in every colleague's clone too — so requiring it to load here would leave a
+hand edit of a lock-protected file as the only repair.
+
+The package directory itself is untouched: taskmgr never writes a package and never
+deletes one (HOOK-SPEC §3.6).
+
+- **Output:** the entry that was removed (`packageRemovedDTO` in JSON, §6).
 
 ### `taskmgr package list [--global]`
 
@@ -314,8 +337,13 @@ machine and its status:
 | `broken` | A directory that is not a finished package: no manifest, or one that does not load. |
 
 The vocabulary is `store list`'s (§2.1), so a listing and a mutation never disagree about
-an entry. An entry whose package name was already taken by an earlier one is reported
-`shadowed` (HOOK-SPEC §3.5 rule 3) rather than omitted.
+an entry. An entry whose package name or directory an earlier one already claimed is
+reported `shadowed` (HOOK-SPEC §3.5 rule 3) rather than omitted.
+
+A defect in a file's package *keys* rather than in one entry — a `use:` value that is not
+a list, or the withdrawn `hooks:` block — is listed here too, `broken`, named for the key
+and pathed at the file (HOOK-SPEC §3.4). Those defects stop every mutation, so this
+listing is where the reader finds out why.
 
 Without `--global` the listing covers **both** files in the order their hooks run, because
 that is what gates the store; with `--global` it covers the per-user file alone and needs
@@ -336,6 +364,10 @@ reading this rather than by tracing two files by hand.
 Each row carries the **effective id**, `pkg:<package>:<hook>`: the id a denial reason
 reports and the logs record. The scope column names the file whose `use:` list brought
 the package in, and therefore the file to edit.
+
+A package that will not load does not fail this command: the hooks that did load are
+listed, and `package list` reports what is wrong. Failing instead emptied the listing in
+the state it exists to explain, hiding every gate still in force behind one broken entry.
 
 - **Output (JSON):** array of `hookDTO` (§6).
 
@@ -375,7 +407,7 @@ unless the expression selects them or `--all` is given. Default order: priority
 
 - **Output (JSON):** array of `issueDTO`.
 - The CLI does not page: `--limit` is a simple cap and there is no `--offset`.
-  Windowed paging with a total match count is an SDK concern (`ListPage` / `FindPage`,
+  Windowed paging with a total match count is an SDK concern (`ListPage`,
   SDK-SPEC.md §4).
 
 ### 3.1 Filter expressions
@@ -765,8 +797,15 @@ package name — the `name:` given, or the base name of `path:`; `path` is the d
 resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `missing`
 | `broken` (§2.3). `detail` explains a status that is not `ok` and is omitted otherwise,
 `hooks` and `guide` count the hooks and the guide fragments the package contributes
-(HOOK-SPEC §3.7), and `shadowed` marks an entry whose name an earlier one already
-took (HOOK-SPEC §3.5).
+(HOOK-SPEC §3.7), and `shadowed` marks an entry whose name or directory an earlier one
+already claimed (HOOK-SPEC §3.5). A row reporting a defect of the file's package keys
+rather than an entry carries the key as `name` and the config file as `path`.
+
+**`packageRemovedDTO`** — emitted by `package rm`: `{name, path, scope, config}`. `name`
+is the package name the removed entry contributed, `path` its `path:` as written and
+omitted for a `name:` entry, `scope` is `store` | `global`, and `config` is the file the
+entry left. It is deliberately not a `packageDTO`: `status`, `hooks` and `guide` describe
+a package a configuration uses, and this one no longer does.
 
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, detail}`. `kind` is `core` for a section the

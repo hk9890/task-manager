@@ -79,6 +79,26 @@ type GlobalConfig struct {
 	// repository — so an invariant the data depends on belongs in the store's
 	// config, not here.
 	Use []PackageRef `yaml:"use,omitempty"`
+
+	// defects records what is wrong with this file's own package keys, on the
+	// same terms as a store config's (store.go). Here the reach is wider: a
+	// defect in this file fails mutations in every store on the machine.
+	defects []configDefect
+}
+
+// UnmarshalYAML decodes the per-user config, modelling the `use:` list by hand
+// and recording the file's package defects instead of failing on them
+// (packages.go states why).
+func (g *GlobalConfig) UnmarshalYAML(node *yaml.Node) error {
+	rest, use, defects := decodeConfigPackages(node)
+	type plain GlobalConfig
+	v := plain(*g)
+	if err := rest.Decode(&v); err != nil {
+		return err
+	}
+	*g = GlobalConfig(v)
+	g.Use, g.defects = use, defects
+	return nil
 }
 
 // taskmgrHome returns the per-user home (CONFIG-SPEC §1): $TASKMGR_HOME if set,
@@ -211,11 +231,16 @@ func SaveGlobalConfig(cfg GlobalConfig) error {
 // InspectGlobalPackage reports what one `use:` entry would resolve to in the
 // per-user config, without writing it (CONFIG-SPEC §2). It needs no store.
 func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) {
+	fs := vfs.NewOS()
 	home, err := taskmgrHome(env.NewOS())
 	if err != nil {
 		return PackageInfo{}, err
 	}
-	return inspectRef(vfs.NewOS(), ref, home, home, scopeGlobal), nil
+	cur, err := loadGlobalConfig(fs, home)
+	if err != nil {
+		return PackageInfo{}, err
+	}
+	return inspectRef(fs, ref, home, home, scopeGlobal, priorSeen(fs, home, "", cur, Config{})), nil
 }
 
 // GlobalConfigPath returns the absolute path of the per-user config file

@@ -37,6 +37,7 @@ Then tell a store to use it:
 taskmgr package add doc-policy   # ~/.taskmgr/packages/doc-policy
 taskmgr package list             # every package that gates this store, and whether it loads
 taskmgr hook list                # every hook that gates this store, in the order it runs
+taskmgr package rm doc-policy    # stop using it; the directory itself is left alone
 ```
 
 `taskmgr` never downloads, unpacks or writes a package. Installing one is putting the
@@ -139,8 +140,13 @@ A package can live inside the store, where it travels with the repository:
 taskmgr package add --path packages/repo-policy
 ```
 
-The path is relative to `.tasks/`, so the package is committed alongside the tasks and
-every clone of the repository has it without installing anything.
+The path is relative to `.tasks/`, and has to stay inside it — an absolute path is
+refused, because it names a place only your machine has and would resolve to nothing in
+every clone. For a package that lives elsewhere, put it in `~/.taskmgr/packages/` and name
+it with `taskmgr package add <name>`.
+
+Kept inside, the package is committed alongside the tasks and every clone of the
+repository has it without installing anything.
 
 ## Which file names the package: the project's, or yours
 
@@ -162,7 +168,8 @@ Three consequences of the split:
   machine-wide gate is the one that surfaces when both would refuse.
 - **Naming the same package in both files runs it once**, from your file. `taskmgr package
   list` marks the project's entry `shadowed` so the duplicate is visible rather than
-  puzzling.
+  puzzling. Two *different* directories under one package name shadow the same way: a hook
+  is named `pkg:<package>:<id>`, so one name is one package.
 - **`taskmgr hook list` is the answer to "what gates this store"**, because neither file
   can tell you on its own — the hooks are in the packages the two files name.
 
@@ -269,13 +276,14 @@ nothing is written; hints from the ones that already ran are still passed along.
   that long; a slow check is usually better as a post-hook, or left to CI.
 - **Pre-hooks fail closed.** A missing script, a bad command, a timeout — all deny. This is
   the point: a gate you can skip is not a gate, and **there is no bypass flag**. To relax
-  one, edit the package, or take it out of the `use:` list.
+  one, edit the package, or `taskmgr package rm` it.
 - **A package that will not load blocks every write** until you fix it, with a clear
   configuration error naming it. That includes a package you have not installed: a
   `use:` entry says the project depends on it, so `taskmgr` stops rather than running
   with the gate quietly absent. Reads are never affected, so you can still `list`,
-  `show` and `taskmgr package list` your way out. A bad entry in your own file blocks
-  writes in *every* project on the machine.
+  `show` and `taskmgr package list` your way out, and `taskmgr package rm <name>` takes
+  the entry back out without needing the package to load. A bad entry in your own file
+  blocks writes in *every* project on the machine.
 - **Never run a `taskmgr` mutation from a hook.** A pre-hook would deadlock against the
   lock it is already holding, and a post-hook would trigger further hooks. Read-only
   commands are fine — the example above is one.

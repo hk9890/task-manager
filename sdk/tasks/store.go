@@ -114,6 +114,27 @@ type Config struct {
 	// a `path:` one resolves against this store's own directory, so a package
 	// committed inside the store travels with it.
 	Use []PackageRef `yaml:"use,omitempty"`
+
+	// defects records what is wrong with this file's own package keys — the
+	// withdrawn `hooks:` block, or a `use:` value that is not a list. They are
+	// carried rather than raised as decode errors so reads keep working, and are
+	// reported at every mutation and by `taskmgr package list` (packages.go).
+	defects []configDefect
+}
+
+// UnmarshalYAML decodes a store config, modelling the `use:` list by hand and
+// recording the file's package defects instead of failing on them (packages.go
+// states why). Unknown keys are still ignored for forward-compatibility.
+func (c *Config) UnmarshalYAML(node *yaml.Node) error {
+	rest, use, defects := decodeConfigPackages(node)
+	type plain Config
+	v := plain(*c)
+	if err := rest.Decode(&v); err != nil {
+		return err
+	}
+	*c = Config(v)
+	c.Use, c.defects = use, defects
+	return nil
 }
 
 // Store is the single gateway to a project's issue files. Every read and write
@@ -441,15 +462,19 @@ func (s *Store) Packages() ([]PackageInfo, error) {
 // hooks run (HOOK-SPEC §3.5). It is the reading of the two config files plus the
 // manifests they name, which is what makes the order inspectable rather than
 // merely specified.
+//
+// Like Packages and GuideTopics it never fails on an entry that will not load:
+// it returns the hooks that did. Returning the load error instead emptied the
+// listing in precisely the state it exists to explain — one broken package and
+// `taskmgr hook list` printed nothing, hiding every gate that was still running.
+// What is wrong with an entry is Packages' to report, and it reports all of them
+// rather than the first.
 func (s *Store) HookChain() ([]HookInfo, error) {
 	global, err := s.globalConfig()
 	if err != nil {
 		return nil, err
 	}
-	chain, infos, err := packageChain(s.fs, s.env, s.dir, global, s.Config())
-	if err != nil {
-		return nil, err
-	}
+	chain, infos, _ := packageChain(s.fs, s.env, s.dir, global, s.Config())
 	return hookInfos(chain.hooks, infos), nil
 }
 
@@ -476,7 +501,9 @@ func (s *Store) GuideTopics() ([]GuideTopic, error) {
 // rather than at the next unrelated mutation (HOOK-SPEC §3.4).
 func (s *Store) InspectPackage(ref PackageRef) PackageInfo {
 	home, _ := taskmgrHome(s.env)
-	return inspectRef(s.fs, ref, home, s.dir, scopeStore)
+	global, _ := s.globalConfig()
+	cfg := s.Config()
+	return inspectRef(s.fs, ref, home, s.dir, scopeStore, priorSeen(s.fs, home, s.dir, global, cfg))
 }
 
 // globalConfig loads the per-user configuration through the store's seams,
@@ -1280,6 +1307,13 @@ func relatedOf(iss *Issue) *[]string   { return &iss.Related }
 // dropEdge removes every occurrence of target from *l in place, reporting
 // whether it removed anything. The report is what keeps a no-op removal from
 // bumping Updated and rewriting the file (SDK-SPEC §6).
+//
+// The filter reuses the slice's own backing array, so it overwrites whatever
+// else points into it. Every caller today passes a list freshly loaded by
+// getMutable or Get, and cloneIssue deep-copies the three edge slices, so no
+// pre-image shares the array — a hook's `old` is unaffected. A future caller
+// that filters a list it does not own would corrupt the other view of it
+// silently: give it slices.DeleteFunc on a clone rather than this.
 func dropEdge(l *[]string, target string) bool {
 	kept := (*l)[:0]
 	changed := false

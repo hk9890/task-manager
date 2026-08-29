@@ -29,11 +29,47 @@ type MutationResult struct {
 	Warnings []string
 }
 
+// validateWrite is field validation as the write path applies it: a violation
+// this write *introduces* is refused, and one it *found* on disk is passed
+// through.
+//
+// An issue can be invalid on disk — hand-edited, restored from a backup, or
+// written by a build with looser rules. Refusing every write for it froze the
+// issue instead of repairing it: `close`, `dep add` and even `update --title`
+// failed on a field the mutation never touched, and for a field no command can
+// rewrite (there is no `--creator`) the issue could then never be closed or
+// re-linked again. The rule here is the one HOOK-SPEC §3.4 already states for a
+// config file's `use:` list — a write checks what it introduces, not what it
+// finds — and it keeps the invariant that matters: the engine never *writes* a
+// violation it did not already have to live with.
+//
+// The stored issue is read only once a violation has been found, i.e. only on
+// the path that is about to refuse the write, so the successful write is
+// unchanged and the in-lock path does not lengthen (docs/REVIEWING.md).
+func (s *Store) validateWrite(iss *Issue) error {
+	violations := fieldViolations(iss)
+	if len(violations) == 0 {
+		return nil
+	}
+	prev, err := s.Get(iss.ID)
+	if err != nil {
+		// Nothing on disk to inherit from — a create, or a store that cannot be
+		// read. Either way every violation is this write's own.
+		return violations[0]
+	}
+	for _, v := range violations {
+		if !fieldUnchanged(v.Field, prev, iss) {
+			return v
+		}
+	}
+	return nil
+}
+
 // validateAndIndex validates iss, builds the hot index once, and runs reference
 // checks against it, returning the index so a gated mutation can reuse it for
 // the hook `when` row instead of scanning the store a second time under the lock.
 func (s *Store) validateAndIndex(iss *Issue) (map[string]*Issue, error) {
-	if err := validateFields(iss); err != nil {
+	if err := s.validateWrite(iss); err != nil {
 		return nil, err
 	}
 	idx, _, err := s.index()

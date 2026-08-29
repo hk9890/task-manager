@@ -115,14 +115,18 @@ func (s *Store) previousLayout(id string) (bool, error) {
 // The caller holds the store lock.
 //
 // Every issue write funnels through here — the hot path (writeIssue), the close
-// move, and the reopen move — so this is where validateFields runs. Putting it
-// at the funnel rather than in each caller is what makes "the engine never
-// writes an issue it would refuse to re-validate" true by construction:
-// Close/Reopen and the four edge mutations reach the FS through this function
-// without passing validateAndIndex. The gated paths validate twice; the check is
-// in-memory and the write is already the expensive half.
+// move, and the reopen move — so this is where validation runs. Putting it at
+// the funnel rather than in each caller is what makes "the engine never writes
+// an issue it would refuse to re-validate" true by construction: Close/Reopen
+// and the four edge mutations reach the FS through this function without passing
+// validateAndIndex. The gated paths validate twice; the check is in-memory and
+// the write is already the expensive half.
+//
+// The check is validateWrite, not validateFields: a violation already on disk
+// must not freeze the issue it is on, or an issue with a hand-edited `creator`
+// could never be closed again (mutation.go states the rule).
 func (s *Store) writeFiles(iss *Issue, writeMD func(md []byte) error) error {
-	if err := validateFields(iss); err != nil {
+	if err := s.validateWrite(iss); err != nil {
 		return err
 	}
 	prevExternal, err := s.previousLayout(iss.ID)

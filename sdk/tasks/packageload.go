@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -139,12 +140,51 @@ func loadPackage(fs vfs.FS, dir, name string) (loadedPackage, error) {
 		if _, err := compileHook(ph.hook, ph.id); err != nil {
 			return loadedPackage{}, err
 		}
+		if err := checkHookProgram(fs, dir, ph); err != nil {
+			return loadedPackage{}, err
+		}
 	}
 	guide, err := guideFromManifest(m, name, dir)
 	if err != nil {
 		return loadedPackage{}, err
 	}
 	return loadedPackage{hooks: hooks, guide: guide}, nil
+}
+
+// checkHookProgram reports a hook whose program the package was supposed to ship
+// but did not, so "loaded" reaches as far as "the file is there to run".
+//
+// Only a program *inside* the package directory is checked. resolveHookArgv has
+// already turned a relative argv[0] carrying a separator into a concrete path in
+// there, which is a file this loader can stat; a bare `sh` is a PATH lookup and
+// an absolute path names something the machine owns, and neither is the
+// package's to promise — stat-ing them would let a machine's PATH decide whether
+// a package loads.
+//
+// It stops at existence. The executable bit is deliberately not checked: the
+// disk seam does not carry permission bits it can state on every platform (the
+// in-memory FS has none, a Windows checkout has none to keep), so a package that
+// is present but not executable still fails at the transition, with the exec
+// seam's own message.
+func checkHookProgram(fs vfs.FS, dir string, ph packageHook) error {
+	if len(ph.hook.Run) == 0 {
+		return nil // compileHook has already refused an empty run
+	}
+	prog := ph.hook.Run[0]
+	if !strings.HasPrefix(prog, dir+string(filepath.Separator)) {
+		return nil
+	}
+	fi, err := fs.Stat(prog)
+	if err != nil {
+		if vfs.IsNotExist(err) {
+			return fmt.Errorf("hook %s: %s is not there; a relative run path names a program the package ships", ph.id, prog)
+		}
+		return fmt.Errorf("hook %s: %s: %w", ph.id, prog, err)
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("hook %s: %s is a directory, not a program", ph.id, prog)
+	}
+	return nil
 }
 
 // collectUse resolves one config file's `use:` list into the hooks it
@@ -185,15 +225,31 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 		}
 		info := PackageInfo{Name: name, Path: dir, Scope: scope}
 
-		// Identity is the resolved directory, not the name. Keying on the name
-		// let a per-user package silently disable a *different* store package
-		// that merely shared a directory name — the exact inversion of §3.5
-		// rule 5, which says a store cannot suppress an inherited package.
+		// Identity is both the resolved directory and the package name, and an
+		// entry that repeats either is shadowed — reported, contributing nothing
+		// (§3.5 rule 3). The name has to count: effective ids are
+		// `pkg:<name>:<hook>`, so two directories under one name would mint the
+		// same ids and a denial could not say which package refused.
+		//
+		// Erroring on the repeated name instead is what rule 3 rules out in so
+		// many words — "one person's machine-wide install [would] break the
+		// repository for every colleague who has it" — and the shipped
+		// task-writing package reaches that state by following its own README,
+		// which offers a machine-wide install and a vendored copy of the same
+		// package. Shadowing is also not the suppression rule 5 forbids: the
+		// entry that wins is the one the *earlier* list named, so a store still
+		// cannot displace a package it inherits.
 		if at, dup := seen[dir]; dup {
 			info.Status = PackageOK
 			info.Shadowed = true
-			info.Detail = "the same directory is already used by an earlier entry"
-			_ = at
+			info.Detail = fmt.Sprintf("an earlier entry already uses this directory (%s)", at)
+			infos = append(infos, info)
+			continue
+		}
+		if at, dup := seen[name]; dup {
+			info.Status = PackageOK
+			info.Shadowed = true
+			info.Detail = fmt.Sprintf("an earlier entry already provides the package name %q, from %s", name, at)
 			infos = append(infos, info)
 			continue
 		}
@@ -215,19 +271,6 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 			continue
 		}
 
-		// Two different directories contributing the same package name would
-		// mint the same effective ids, so a denial could not say which one
-		// refused. That is a configuration error, not a silent winner.
-		if other, clash := seen[name]; clash {
-			err := fmt.Errorf("package name %q is claimed by two different directories, %s and %s: effective hook ids would collide", name, other, dir)
-			info.Status = PackageBroken
-			info.Detail = err.Error()
-			infos = append(infos, info)
-			if first == nil {
-				first = err
-			}
-			continue
-		}
 		seen[dir], seen[name] = dir, dir
 
 		info.Status = PackageOK
@@ -259,9 +302,18 @@ func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalCo
 		infos  []PackageInfo
 	)
 
+	// A file's own package defects come first, ahead of its entries: they are
+	// faults of the file rather than of any one package, and they fail every
+	// mutation on the same terms (§3.4).
+	gdi, gderr := defectInfos(global.defects, filepath.Join(home, globalConfigName), scopeGlobal)
+	infos = append(infos, gdi...)
+
 	gl, gi, gerr := collectUse(fs, global.Use, home, home, scopeGlobal, seen)
 	loaded.hooks, loaded.guide = append(loaded.hooks, gl.hooks...), append(loaded.guide, gl.guide...)
 	infos = append(infos, gi...)
+
+	sdi, sderr := defectInfos(cfg.defects, filepath.Join(storeDir, ConfigFileName), scopeStore)
+	infos = append(infos, sdi...)
 
 	// Both lists are always walked. Returning at the first failing per-user entry
 	// dropped every store row from the listing — in exactly the state where a
@@ -270,10 +322,41 @@ func packageChain(fs vfs.FS, e env.Environment, storeDir string, global GlobalCo
 	loaded.hooks, loaded.guide = append(loaded.hooks, sl.hooks...), append(loaded.guide, sl.guide...)
 	infos = append(infos, si...)
 
-	if gerr != nil {
-		return loaded, infos, gerr
+	for _, err := range []error{gderr, gerr, sderr, serr} {
+		if err != nil {
+			return loaded, infos, err
+		}
 	}
-	return loaded, infos, serr
+	return loaded, infos, nil
+}
+
+// defectInfos turns one config file's package defects into listing rows and the
+// error that fails every mutation until they are fixed.
+//
+// A row names the *key* rather than a package, because that is what is wrong and
+// what the reader has to edit. Without one, a file carrying the withdrawn
+// `hooks:` block, or a `use:` value that is not a list, would stop every write
+// while `taskmgr package list` showed nothing amiss — the listing being the
+// documented way out of exactly that state.
+func defectInfos(defects []configDefect, path, scope string) ([]PackageInfo, error) {
+	if len(defects) == 0 {
+		return nil, nil
+	}
+	out := make([]PackageInfo, 0, len(defects))
+	var first error
+	for _, d := range defects {
+		out = append(out, PackageInfo{
+			Name:   d.key + ":",
+			Path:   path,
+			Scope:  scope,
+			Status: PackageBroken,
+			Detail: d.detail,
+		})
+		if first == nil {
+			first = fmt.Errorf("%s: %s", path, d.detail)
+		}
+	}
+	return out, first
 }
 
 // hookInfos turns a resolved chain into the reportable form, tagging each hook
@@ -329,15 +412,39 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 	return infos, nil
 }
 
-// inspectRef resolves one `use:` entry and reports what it is, without writing
-// anything. It is what lets a command check a package *before* it adds the entry
-// that depends on it.
-func inspectRef(fs vfs.FS, ref PackageRef, home, configDir, scope string) PackageInfo {
-	_, infos, _ := collectUse(fs, []PackageRef{ref}, home, configDir, scope, make(map[string]string))
+// inspectRef resolves one `use:` entry against the entries that already apply,
+// and reports what it is, without writing anything. It is what lets a command
+// check a package *before* it adds the entry that depends on it.
+//
+// seen carries those entries — the same map collectUse threads through a chain,
+// pre-walked by the caller. Passing a fresh one instead put every cross-entry
+// rule out of reach, since all of them live in that map: a new entry could not
+// be seen to repeat a directory or a package name, so `taskmgr package add`
+// accepted a clash that surfaced at the next unrelated mutation, and the
+// Shadowed field it reports could never be set.
+func inspectRef(fs vfs.FS, ref PackageRef, home, configDir, scope string, seen map[string]string) PackageInfo {
+	_, infos, _ := collectUse(fs, []PackageRef{ref}, home, configDir, scope, seen)
 	if len(infos) == 1 {
 		return infos[0]
 	}
 	return PackageInfo{Name: ref.Name, Path: ref.Path, Scope: scope, Status: PackageBroken}
+}
+
+// priorSeen replays the `use:` lists that already apply, so inspectRef can judge
+// a new entry against them. It resolves the same lists packageChain does, in the
+// same order, and keeps only the map: the chain is built to run hooks, and this
+// caller writes nothing and runs nothing.
+//
+// storeDir empty means the per-user scope, where only that file's own list runs
+// earlier — a new entry there cannot be shadowed by a store, because the
+// per-user list runs first (§3.5 rule 1).
+func priorSeen(fs vfs.FS, home, storeDir string, global GlobalConfig, cfg Config) map[string]string {
+	seen := make(map[string]string)
+	_, _, _ = collectUse(fs, global.Use, home, home, scopeGlobal, seen)
+	if storeDir != "" {
+		_, _, _ = collectUse(fs, cfg.Use, home, storeDir, scopeStore, seen)
+	}
+	return seen
 }
 
 // GuideTopic is one guide fragment a package contributes, with its text already
@@ -377,6 +484,13 @@ type GuideTopic struct {
 // The cut falls at the last line break under the cap so the text stays whole
 // lines: a fragment is Markdown, and a document severed mid-sentence reads as
 // though the author meant it.
+//
+// A window holding no line break at all has no such seam to cut on, and that is
+// the ordinary shape under the 1 KiB overview cap — one paragraph of prose. The
+// cut then falls back to the last whole rune, because the byte offset lands
+// mid-sequence for any multi-byte character (an em dash is three bytes), and the
+// text goes verbatim into a caller's context or into a JSON field, where a
+// broken rune is not a cosmetic problem.
 func readGuideFragment(fs vfs.FS, path string, limit int) (text string, truncated bool, err error) {
 	data, err := fs.ReadFile(path)
 	if err != nil {
@@ -386,10 +500,25 @@ func readGuideFragment(fs vfs.FS, path string, limit int) (text string, truncate
 		return string(data), false, nil
 	}
 	cut := string(data[:limit])
-	if i := strings.LastIndexByte(cut, '\n'); i > 0 {
-		cut = cut[:i+1]
+	if i := strings.LastIndexByte(cut, '\n'); i >= 0 {
+		return cut[:i+1], true, nil
 	}
-	return cut, true, nil
+	return trimPartialRune(cut), true, nil
+}
+
+// trimPartialRune drops a truncated UTF-8 sequence from the end of s. It removes
+// at most three bytes: a rune is at most four, so anything longer is invalid
+// input rather than a cut. A real U+FFFD in the text is left alone —
+// DecodeLastRuneInString reports size 1 only for a byte that decodes to nothing.
+func trimPartialRune(s string) string {
+	for s != "" {
+		r, size := utf8.DecodeLastRuneInString(s)
+		if r != utf8.RuneError || size != 1 {
+			return s
+		}
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // guideTopics reads every fragment of a resolved chain, tagging each with the

@@ -85,12 +85,24 @@ type PackageRef struct {
 
 	// malformed holds an entry that is not a mapping at all — `- doc-policy`
 	// rather than `- name: doc-policy`, which is the obvious thing to write and
-	// which the old `hooks:` block never invited. Rejecting it in the decoder
-	// would fail *every* command, reads included, and take both documented
-	// recovery paths (`list`, `package list`) with it. It is carried instead and
-	// reported where every other bad entry is: at the write (HOOK-SPEC §3.4).
+	// which the old `hooks:` block never invited — or an empty `-` with nothing
+	// under it. Rejecting either in the decoder would fail *every* command, reads
+	// included, and take both documented recovery paths (`list`, `package list`)
+	// with it. It is carried instead and reported where every other bad entry is:
+	// at the write (HOOK-SPEC §3.4).
 	malformed string
+
+	// raw is the entry's original node, kept for a malformed entry only. An entry
+	// this build cannot model is written back from it verbatim, so a write that
+	// touches an unrelated entry rewrites nothing here — not the text, not the
+	// comment beside it.
+	raw *yaml.Node
 }
+
+// emptyUseEntry labels a `- ` with nothing under it. yaml.v3 drops a null
+// sequence element before any Unmarshaler runs, so such an entry never reaches
+// UnmarshalYAML: decodeUse recognises it from the node instead.
+const emptyUseEntry = "(empty entry)"
 
 // UnmarshalYAML accepts a mapping, and records anything else rather than failing
 // the decode, so a hand-edited config file stays readable (§3.4).
@@ -100,6 +112,7 @@ func (r *PackageRef) UnmarshalYAML(node *yaml.Node) error {
 		if r.malformed == "" {
 			r.malformed = "(not a mapping)"
 		}
+		r.raw = node
 		return nil
 	}
 	type plain struct {
@@ -117,6 +130,9 @@ func (r *PackageRef) UnmarshalYAML(node *yaml.Node) error {
 // MarshalYAML writes a carried-through malformed entry back exactly as it was
 // read, so a write that touches an unrelated entry does not silently rewrite it.
 func (r PackageRef) MarshalYAML() (any, error) {
+	if r.raw != nil {
+		return r.raw, nil
+	}
 	if r.malformed != "" {
 		return r.malformed, nil
 	}
@@ -125,6 +141,122 @@ func (r PackageRef) MarshalYAML() (any, error) {
 		Path string `yaml:"path,omitempty"`
 	}
 	return plain{Name: r.Name, Path: r.Path}, nil
+}
+
+// The two package keys of a config file. `use:` is the list this build reads;
+// `hooks:` is the withdrawn inline block it replaced (§3, "Why a package and not
+// an inline block").
+const (
+	useKey    = "use"
+	hooksKey  = "hooks"
+	hooksHelp = "the `hooks:` key was withdrawn: a configuration no longer declares hooks, it lists the packages it takes them from. " +
+		"Move each entry into a package directory (HOOK-SPEC §3.6), add it with `taskmgr package add`, then delete the `hooks:` block from this file"
+)
+
+// configDefect is something wrong with a config file's own package configuration
+// — a key, as opposed to one `use:` entry.
+//
+// It is carried rather than returned as a decode error for the reason §3.4 gives
+// for every other package fault: a config file is read on every command, so
+// failing the decode stops reads too, and with them `list`, `where` and
+// `package list` — the commands a reader reaches for precisely when writes have
+// stopped. A defect instead fails every *mutation* closed and prints as a row of
+// `taskmgr package list`.
+type configDefect struct {
+	// key is the config key at fault, spelled as it appears in the file.
+	key string
+	// detail says what is wrong and what to do about it.
+	detail string
+}
+
+// decodeConfigPackages pulls the package configuration out of a config-file
+// mapping and returns the mapping with `use:` removed, so the caller can decode
+// the remaining keys through their struct tags.
+//
+// `use:` is modelled by hand rather than by a struct tag because yaml.v3 handles
+// two hand-edit shapes in ways a config file cannot afford:
+//
+//   - a value that is not a sequence (`use: doc-policy`) fails the decode of the
+//     whole document, which takes every command in the store down with it;
+//   - a null element (a bare `-`) is dropped before any Unmarshaler runs, so it
+//     is absent from the model and the next unrelated write deletes it from the
+//     file.
+//
+// Both are carried instead: the first as a defect, the second as a malformed
+// entry that is reported at the write and written back verbatim.
+func decodeConfigPackages(node *yaml.Node) (rest *yaml.Node, use []PackageRef, defects []configDefect) {
+	if node.Kind != yaml.MappingNode {
+		return node, nil, nil
+	}
+	out := *node
+	out.Content = nil
+	var useNode *yaml.Node
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		if key.Value == useKey {
+			useNode = value
+			continue
+		}
+		if key.Value == hooksKey {
+			defects = append(defects, configDefect{key: hooksKey, detail: hooksHelp})
+		}
+		out.Content = append(out.Content, key, value)
+	}
+	use, defect := decodeUse(useNode)
+	if defect != nil {
+		defects = append(defects, *defect)
+	}
+	return &out, use, defects
+}
+
+// decodeUse models one `use:` value node. A value that is not a sequence is not
+// a list of entries and cannot be modelled at all, so it is reported as a defect
+// rather than as a list of one bad entry: the fault is the key's, and the fix is
+// to write the value as a list.
+func decodeUse(node *yaml.Node) ([]PackageRef, *configDefect) {
+	if node == nil || node.Tag == nullTag {
+		return nil, nil // absent, or `use:` with nothing under it — an empty list
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, &configDefect{
+			key: useKey,
+			detail: fmt.Sprintf("the `use:` key must hold a list of package entries, not a single value; write it as `use:` followed by `  - name: %s`",
+				firstNonEmpty(node.Value, "doc-policy")),
+		}
+	}
+	refs := make([]PackageRef, 0, len(node.Content))
+	for _, el := range node.Content {
+		var r PackageRef
+		if el.Tag == nullTag {
+			r.malformed, r.raw = emptyUseEntry, el
+		} else if err := el.Decode(&r); err != nil {
+			r.malformed, r.raw = strings.TrimSpace(err.Error()), el
+		}
+		refs = append(refs, r)
+	}
+	return refs, nil
+}
+
+// nullTag is yaml.v3's resolved tag for an empty value.
+const nullTag = "!!null"
+
+// hasDefect reports whether one config key is among a file's package defects.
+func hasDefect(defects []configDefect, key string) bool {
+	for _, d := range defects {
+		if d.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // packageManifest is taskmgr-package.yaml. Unknown keys are ignored for
@@ -289,14 +421,13 @@ func packageDir(ref PackageRef, home, configDir string) (dir, name string, err e
 		return filepath.Join(home, packagesSubdir, n), n, nil
 	}
 
+	// refShape has already refused an absolute path, so every path that reaches
+	// here resolves against the directory holding the file that declared it.
 	p := strings.TrimSpace(ref.Path)
-	if !filepath.IsAbs(p) {
-		if strings.TrimSpace(configDir) == "" {
-			return "", "", fmt.Errorf("use entry: relative path %q has no directory to resolve against", ref.Path)
-		}
-		p = filepath.Join(configDir, p)
+	if strings.TrimSpace(configDir) == "" {
+		return "", "", fmt.Errorf("use entry: path %q has no directory to resolve against", ref.Path)
 	}
-	p = filepath.Clean(p)
+	p = filepath.Clean(filepath.Join(configDir, p))
 	return p, filepath.Base(p), nil
 }
 
@@ -308,6 +439,9 @@ func packageDir(ref PackageRef, home, configDir string) (dir, name string, err e
 // not depend on where the file happens to be — a store config travels in git and
 // is legitimately written on a machine where the package is not installed.
 func refShape(ref PackageRef) error {
+	if ref.malformed == emptyUseEntry {
+		return fmt.Errorf("use entry: an entry is empty; each entry is a mapping with either name or path, e.g. `- name: doc-policy`")
+	}
 	if ref.malformed != "" {
 		return fmt.Errorf("use entry %q: each entry is a mapping with either name or path, e.g. `- name: %s`", ref.malformed, ref.malformed)
 	}
@@ -325,15 +459,27 @@ func refShape(ref PackageRef) error {
 		return nil
 	}
 
-	// A relative path must stay inside the directory holding the config file.
-	// The promise a path entry makes is that the package travels with the file
-	// (HOOK-SPEC §3.5) — an entry reaching outside breaks for every colleague the
-	// moment the file is committed, and for the author on `store move --central`.
-	if !filepath.IsAbs(path) {
-		clean := filepath.Clean(path)
-		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || strings.HasPrefix(clean, "../") {
-			return fmt.Errorf("use entry: path %q leaves the directory holding this config file; a relative package path must stay inside it (use an absolute path for one that lives elsewhere)", ref.Path)
-		}
+	// A path entry must stay inside the directory holding the config file. The
+	// promise it makes is that the package travels with the file (HOOK-SPEC
+	// §3.5) — an entry reaching outside breaks for every colleague the moment the
+	// file is committed, and for the author on `store move --central`.
+	//
+	// An absolute path is refused for the same reason a guide fragment's is
+	// (resolveGuideFile): it is machine-specific, which is the one thing the
+	// package format exists to avoid. It also read as the sanctioned way out —
+	// the message here used to recommend it — and a store config carrying
+	// `/home/me/pkg` resolves to nothing on every clone, which is `missing`,
+	// which fails every mutation in that repository. A package that lives
+	// elsewhere is named by `name:` and installed under the taskmgr home.
+	//
+	// isAbsAnyPlatform, not filepath.IsAbs: a config file is written once and
+	// read on every platform, so "/opt/pkg" has to be refused on Windows too.
+	if isAbsAnyPlatform(path) {
+		return fmt.Errorf("use entry: path %q is an absolute path; a package path is relative to the directory holding this config file, so that the package travels with it (use `name:` for a package installed under the taskmgr home)", ref.Path)
+	}
+	clean := filepath.Clean(path)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("use entry: path %q leaves the directory holding this config file; a package path must stay inside it (use `name:` for a package installed under the taskmgr home)", ref.Path)
 	}
 	if base := filepath.Base(filepath.Clean(path)); !validPackageName(base) {
 		return fmt.Errorf("use entry: path %q ends in %q, which is not a usable package name: the directory name is the package name", ref.Path, base)
@@ -442,7 +588,9 @@ func clonePackageRefs(refs []PackageRef) []PackageRef {
 // next unrelated mutation (HOOK-SPEC §3.4).
 //
 // Only the delta is checked, and deliberately: validating the whole list would
-// make a bad entry already on disk refuse the write that removes it. It checks
+// make a bad entry already on disk refuse the write that removes it — which is
+// `taskmgr package rm`, the one way back out of a configuration that has stopped
+// every mutation. It checks
 // the shape of a reference, not that the package is there — a store's config
 // travels in git, so an entry is legitimately unresolvable on the machine that
 // writes it and only has to resolve on the machine that runs a mutation.
@@ -458,9 +606,15 @@ func checkUseChange(cur, next []PackageRef) error {
 	return nil
 }
 
+// containsRef reports whether ref is already one of refs. The malformed text is
+// part of the comparison as well as name and path: two entries a hand edit left
+// unmodellable both have an empty name and an empty path, so comparing only
+// those would call any one of them "already present" and let a write introduce a
+// second one unchecked. Nothing can introduce one today — malformed is set by
+// the decoder alone — which is exactly why the guard is cheap to keep honest.
 func containsRef(refs []PackageRef, ref PackageRef) bool {
 	for _, c := range refs {
-		if c.Name == ref.Name && c.Path == ref.Path {
+		if c.Name == ref.Name && c.Path == ref.Path && c.malformed == ref.malformed {
 			return true
 		}
 	}

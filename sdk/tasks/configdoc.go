@@ -48,7 +48,7 @@ func applyConfigToDoc(old []byte, cfg Config) ([]byte, error) {
 	}
 	setScalar(root, "prefix", cfg.Prefix)
 	setScalar(root, "hook_timeout", cfg.HookTimeout)
-	if err := setUse(root, cfg.Use); err != nil {
+	if err := setUse(root, cfg.Use, hasDefect(cfg.defects, useKey)); err != nil {
 		return nil, err
 	}
 	return encodeDoc(root)
@@ -70,7 +70,7 @@ func applyGlobalConfigToDoc(old []byte, cfg GlobalConfig) ([]byte, error) {
 	})
 	setScalar(root, "central_root", cfg.CentralRoot)
 	setScalar(root, "hook_timeout", cfg.HookTimeout)
-	if err := setUse(root, cfg.Use); err != nil {
+	if err := setUse(root, cfg.Use, hasDefect(cfg.defects, useKey)); err != nil {
 		return nil, err
 	}
 	return encodeDoc(root)
@@ -153,14 +153,22 @@ func setScalar(mapping *yaml.Node, key, value string) {
 // adding one package must not strip a key a newer taskmgr wrote on another. An
 // entry that did change is re-encoded and loses them, which is the honest
 // outcome — the writer has no way to merge a field it cannot see.
-func setUse(mapping *yaml.Node, refs []PackageRef) error {
+//
+// defective says the file's `use:` value is not a list at all, so nothing here
+// models it. The key is then left exactly as it stands: rendering an empty model
+// over it would delete a line the author wrote, from a write aimed at some
+// unrelated key, which is the one thing this file exists to prevent.
+func setUse(mapping *yaml.Node, refs []PackageRef, defective bool) error {
+	if defective {
+		return nil
+	}
 	if len(refs) == 0 {
-		removeKey(mapping, "use")
+		removeKey(mapping, useKey)
 		return nil
 	}
 
 	var oldNodes []*yaml.Node
-	if i := findKey(mapping, "use"); i >= 0 && mapping.Content[i].Kind == yaml.SequenceNode {
+	if i := findKey(mapping, useKey); i >= 0 && mapping.Content[i].Kind == yaml.SequenceNode {
 		oldNodes = mapping.Content[i].Content
 	}
 	used := make([]bool, len(oldNodes))
@@ -171,13 +179,21 @@ func setUse(mapping *yaml.Node, refs []PackageRef) error {
 			seq.Content = append(seq.Content, node)
 			continue
 		}
+		// An entry this build cannot model is written back from the node it was
+		// read from, comment and all. Re-encoding it would round-trip through
+		// text and lose both — and an entry yaml.v3 drops on its own (an empty
+		// `-`) would come back as something else entirely, or vanish.
+		if ref.raw != nil {
+			seq.Content = append(seq.Content, ref.raw)
+			continue
+		}
 		fresh := &yaml.Node{}
 		if err := fresh.Encode(ref); err != nil {
 			return err
 		}
 		seq.Content = append(seq.Content, fresh)
 	}
-	setNode(mapping, "use", seq)
+	setNode(mapping, useKey, seq)
 	return nil
 }
 
