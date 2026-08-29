@@ -55,6 +55,12 @@ A *failed* write is logged in every case, transition or not: `io_error` carries
 `op=comment_add|comment_edit|comment_delete|dep_add|dep_remove|rel_add|rel_remove`
 otherwise. Nothing fails silently.
 
+A **validation refusal is not an `io_error`.** The write is rejected before a file is
+touched, so counting it here would fire an alert built on "the store failed to write" on
+what is a rejected input. The caller still gets the `*ValidationError`
+([SDK-SPEC](specs/SDK-SPEC.md) §6); a refused mutation is visible as the absent `write`
+record, not as an error one.
+
 `op` names the **operation**, never the file. A write that overflows a large body
 touches two files — the task `.md` and the content sidecar
 ([TASK-STORAGE-SPEC](specs/TASK-STORAGE-SPEC.md) §4.6) — and a failure of either

@@ -25,6 +25,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -161,7 +162,17 @@ func (s *Store) logWrite(trans transition, issueID string) {
 // logIOError records a failed write through the store (MONITORING.md
 // "Store / IO error", error). op is a transition name for a gated mutation and
 // one of the op* constants above for the writes that are not transitions.
+//
+// A *ValidationError is dropped rather than recorded. MONITORING.md defines
+// io_error as a failed store *write*, and validation refuses the issue before
+// any file is touched — recording it here made an alert built on that metric
+// fire on rejected input, which is a user error and not a store fault. The
+// caller still receives the error either way.
 func (s *Store) logIOError(op, issueID string, err error) {
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		return
+	}
 	s.logger.LogAttrs(context.Background(), slog.LevelError, "io_error",
 		slog.String("op", op),
 		slog.String("issue", issueID),

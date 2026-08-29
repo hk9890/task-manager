@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -345,5 +346,58 @@ func TestGuideTopics_GlobalPackagesComeFirst(t *testing.T) {
 	}
 	if topics[1].ID != "pkg:project:bodies" || topics[1].Scope != scopeStore {
 		t.Errorf("second topic = %+v, want the store's", topics[1])
+	}
+}
+
+// A window with no line break in it — one paragraph, the ordinary shape under
+// the 1 KiB overview cap — has no seam to cut on. The byte offset then lands
+// mid-sequence for any multi-byte character, and the fragment reached the caller
+// as invalid UTF-8: this text is pasted into an agent's context and wrapped as
+// JSON, where a broken character is not cosmetic.
+func TestReadGuideFragment_CutsOnAWholeRuneWhenThereIsNoLineBreak(t *testing.T) {
+	fs := vfs.NewMem()
+	if err := fs.MkdirAll("/frag", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	limit := 1024
+	// An em dash straddling the cap: three bytes, the last two past the limit.
+	body := strings.Repeat("a", limit-1) + "—" + strings.Repeat("b", 40)
+	if err := fs.WriteAtomic("/frag/overview.md", []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text, truncated, err := readGuideFragment(fs, "/frag/overview.md", limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("an oversized fragment must be marked truncated")
+	}
+	if !utf8.ValidString(text) {
+		t.Errorf("fragment is not valid UTF-8: %q", text[len(text)-8:])
+	}
+	if len(text) != limit-1 {
+		t.Errorf("text is %d bytes, want the partial character dropped and nothing else", len(text))
+	}
+}
+
+// The guard skipped a line break sitting at index 0, so a fragment opening with
+// a blank line fell through to the rune path and lost every line it had.
+func TestReadGuideFragment_CutsAtALineBreakAtTheStart(t *testing.T) {
+	fs := vfs.NewMem()
+	if err := fs.MkdirAll("/frag", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "\n" + strings.Repeat("a", 200)
+	if err := fs.WriteAtomic("/frag/overview.md", []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text, truncated, err := readGuideFragment(fs, "/frag/overview.md", 100)
+	if err != nil || !truncated {
+		t.Fatalf("readGuideFragment = (%q, %v, %v)", text, truncated, err)
+	}
+	if text != "\n" {
+		t.Errorf("text = %q, want the cut to fall on the one line break there is", text)
 	}
 }

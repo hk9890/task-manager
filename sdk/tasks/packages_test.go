@@ -78,6 +78,8 @@ func TestPackageRef_Shape(t *testing.T) {
 		{"relative path escaping the config dir", PackageRef{Path: "../outside"}, "leaves the directory"},
 		{"relative path escaping further", PackageRef{Path: "../../outside"}, "leaves the directory"},
 		{"a bare parent", PackageRef{Path: ".."}, "leaves the directory"},
+		{"an absolute path", PackageRef{Path: "/abs/p"}, "is an absolute path"},
+		{"a posix-absolute path, refused on every platform", PackageRef{Path: "/opt/pkg"}, "is an absolute path"},
 	}
 	for _, c := range cases {
 		err := refShape(c.ref)
@@ -89,7 +91,7 @@ func TestPackageRef_Shape(t *testing.T) {
 			t.Errorf("%s: error %q does not contain %q", c.name, err, c.errWant)
 		}
 	}
-	for _, ok := range []PackageRef{{Name: "doc-policy"}, {Path: "packages/p"}, {Path: "/abs/p"}} {
+	for _, ok := range []PackageRef{{Name: "doc-policy"}, {Path: "packages/p"}} {
 		if err := refShape(ok); err != nil {
 			t.Errorf("%+v: unexpected error %v", ok, err)
 		}
@@ -211,10 +213,14 @@ func chainStore(t *testing.T) (*Store, vfs.FS) {
 	return s, fs
 }
 
-// Identity is the resolved directory. Keying on the base name let a per-user
-// package silently disable a *different* store package that merely shared a
-// directory name — the inverse of §3.5 rule 5.
-func TestPackageChain_DifferentDirectoriesSharingANameCollide(t *testing.T) {
+// Identity is the package name as well as the resolved directory: effective ids
+// are pkg:<name>:<hook>, so only one directory can hold a given name.
+//
+// The loser is shadowed, not an error — §3.5 rule 3, and the reason it gives is
+// this exact pair. Erroring instead wedged every mutation for anyone who
+// installed the shipped task-writing package machine-wide *and* vendored it,
+// which is the two-step its own README recommends.
+func TestPackageChain_DifferentDirectoriesSharingANameShadow(t *testing.T) {
 	s, fs := chainStore(t)
 	writePackage(t, fs, "/hm", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
 	writePackage(t, fs, s.dir, "policy", []Hook{{ID: "s", Event: "pre-create", Run: []string{"s"}}})
@@ -222,15 +228,24 @@ func TestPackageChain_DifferentDirectoriesSharingANameCollide(t *testing.T) {
 	global := GlobalConfig{Use: []PackageRef{{Name: "policy"}}}
 	cfg := Config{Prefix: "tst", Use: []PackageRef{{Path: "packages/policy"}}}
 
-	_, infos, err := packageChain(fs, s.env, s.dir, global, cfg)
-	if err == nil {
-		t.Fatal("two different directories claiming one package name must be a config error")
+	chain, infos, err := packageChain(fs, s.env, s.dir, global, cfg)
+	if err != nil {
+		t.Fatalf("a repeated package name must shadow, not fail every mutation: %v", err)
 	}
-	if !strings.Contains(err.Error(), "two different directories") {
-		t.Errorf("error %q must say why", err)
+	if len(chain.hooks) != 1 || chain.hooks[0].id != "pkg:policy:g" {
+		t.Fatalf("chain = %+v, want only the per-user package's hook", chain.hooks)
 	}
-	if len(infos) != 2 || infos[1].Status != PackageBroken {
-		t.Errorf("the store entry must be reported broken, got %+v", infos)
+	if len(infos) != 2 {
+		t.Fatalf("Packages() = %d entries, want both listed", len(infos))
+	}
+	if infos[0].Shadowed {
+		t.Error("the entry that won must not be marked shadowed")
+	}
+	if !infos[1].Shadowed || infos[1].Status != PackageOK {
+		t.Errorf("the store entry must be reported shadowed, got %+v", infos[1])
+	}
+	if !strings.Contains(infos[1].Detail, "/hm/packages/policy") {
+		t.Errorf("detail %q must name the directory that won", infos[1].Detail)
 	}
 }
 
@@ -331,5 +346,78 @@ func TestStorePackages_ReportsAnUnusablePackageAsBroken(t *testing.T) {
 	}
 	if infos[0].Hooks != 0 {
 		t.Errorf("a broken package contributes no hooks, got %d", infos[0].Hooks)
+	}
+}
+
+// A hook whose program the package was supposed to ship must fail the load. Left
+// unchecked, a typo in a script name showed `ok` in `package list` and in
+// `hook list` while every mutation failed to spawn it — the two commands a
+// reader reaches for when writes have stopped, both reporting health.
+func TestLoadPackage_ChecksAProgramThePackageShips(t *testing.T) {
+	fs := vfs.NewMem()
+	dir := writePackage(t, fs, "/x", "typo", []Hook{{ID: "gate", Event: "pre-create", Run: []string{"./hooks/gate.sh"}}})
+	if err := fs.Remove(dir + "/hooks/gate.sh"); err != nil {
+		t.Fatalf("remove the script the fixture wrote: %v", err)
+	}
+
+	_, err := loadPackage(fs, dir, "typo")
+	if err == nil || !strings.Contains(err.Error(), "is not there") {
+		t.Fatalf("err = %v, want the missing script refused at load", err)
+	}
+
+	// A PATH lookup and an absolute path name what the machine provides, so a
+	// machine's PATH never decides whether a package loads.
+	ok := writePackage(t, fs, "/x", "shell", []Hook{
+		{ID: "a", Event: "pre-create", Run: []string{"sh", "-c", "exit 0"}},
+		{ID: "b", Event: "pre-create", Run: []string{"/usr/bin/false"}},
+	})
+	if _, err := loadPackage(fs, ok, "shell"); err != nil {
+		t.Errorf("a PATH or absolute program must not be stat-ed: %v", err)
+	}
+}
+
+// CLI-SPEC §2.3 promises `package add` refuses a package that could never run.
+// Resolving the candidate against a fresh map put every cross-entry rule out of
+// reach, so a clash passed the check and detonated at the next mutation.
+func TestInspectPackage_SeesTheEntriesThatAlreadyApply(t *testing.T) {
+	s, fs := chainStore(t)
+	writePackage(t, fs, "/hm", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
+	writePackage(t, fs, s.dir, "policy", []Hook{{ID: "s", Event: "pre-create", Run: []string{"s"}}})
+	if err := fs.WriteAtomic("/hm/config.yaml", []byte("version: 1\nuse:\n    - name: policy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.InspectPackage(PackageRef{Path: "packages/policy"})
+	if !got.Shadowed {
+		t.Fatalf("inspect = %+v, want the entry reported shadowed before it is written", got)
+	}
+	if got.Status != PackageOK {
+		t.Errorf("status = %q, want a shadowed entry to still load", got.Status)
+	}
+}
+
+// `hook list` is the diagnostic for "what gates this store". Returning the load
+// error emptied it in exactly the state it exists to explain.
+func TestHookChain_ListsWhatLoadedWhenAnEntryIsBroken(t *testing.T) {
+	s, fs := chainStore(t)
+	writePackage(t, fs, s.dir, "good", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
+	s.cfg.Use = []PackageRef{{Path: "packages/good"}, {Name: "not-installed"}}
+
+	chain, err := s.HookChain()
+	if err != nil {
+		t.Fatalf("HookChain must not fail on an entry that will not load: %v", err)
+	}
+	if len(chain) != 1 || chain[0].ID != "pkg:good:g" {
+		t.Fatalf("chain = %+v, want the hook that did load", chain)
+	}
+
+	// The trouble is still reported — by the listing that owns it — and the
+	// write path still fails closed.
+	infos, _ := s.Packages()
+	if len(infos) != 2 || infos[1].Status != PackageMissing {
+		t.Errorf("package list must report the missing entry: %+v", infos)
+	}
+	if _, err := s.Create(CreateInput{Title: "x"}); !errors.Is(err, ErrPackageMissing) {
+		t.Errorf("create = %v, want the mutation to fail closed on the missing package", err)
 	}
 }

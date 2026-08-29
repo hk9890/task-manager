@@ -19,6 +19,7 @@ package tasks
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -73,96 +74,154 @@ func hasControlChar(s string) bool {
 // (do the linked IDs exist? do dependencies form a cycle?) are the store's
 // responsibility because they need the whole graph.
 //
-// Constraints are taken directly from TASK-STORAGE-SPEC §4 + §10.
+// Constraints are taken directly from TASK-STORAGE-SPEC §4 + §10. It reports
+// the first violation; fieldViolations reports every one.
 func validateFields(iss *Issue) error {
+	if v := fieldViolations(iss); len(v) > 0 {
+		return v[0]
+	}
+	return nil
+}
+
+// fieldViolations collects every field violation of iss, in the order §4 states
+// the constraints — so fieldViolations(iss)[0] is the error validateFields has
+// always returned.
+//
+// Every violation is collected rather than only the first because the write path
+// has to tell a violation it *introduces* from one it *found* (validateWrite).
+// Stopping at the first would let a write grandfather that one while a violation
+// it really did make went unseen behind it.
+func fieldViolations(iss *Issue) []*ValidationError {
+	var out []*ValidationError
+	add := func(field, format string, args ...any) {
+		out = append(out, invalid(field, format, args...))
+	}
+
 	// title: 1-200 chars after trim; single line (no LF); no control characters.
 	trimmedTitle := strings.TrimSpace(iss.Title)
 	if trimmedTitle == "" {
-		return invalid("title", "must not be empty")
+		add("title", "must not be empty")
 	}
 	if len([]rune(trimmedTitle)) > maxTitleLen {
-		return invalid("title", "must be at most %d characters after trim, got %d", maxTitleLen, len([]rune(trimmedTitle)))
+		add("title", "must be at most %d characters after trim, got %d", maxTitleLen, len([]rune(trimmedTitle)))
 	}
 	if strings.ContainsRune(iss.Title, '\n') {
-		return invalid("title", "must be a single line (no newline characters)")
+		add("title", "must be a single line (no newline characters)")
 	}
 	if hasControlChar(iss.Title) {
-		return invalid("title", "must not contain control characters")
+		add("title", "must not contain control characters")
 	}
 
 	if !iss.Status.Valid() {
-		return invalid("status", "unknown status %q (want one of %s)", iss.Status, joinEnum(Statuses))
+		add("status", "unknown status %q (want one of %s)", iss.Status, joinEnum(Statuses))
 	}
 	if !iss.Type.Valid() {
-		return invalid("type", "unknown type %q (want one of %s)", iss.Type, joinEnum(Types))
+		add("type", "unknown type %q (want one of %s)", iss.Type, joinEnum(Types))
 	}
 	if iss.Priority < PriorityMin || iss.Priority > PriorityMax {
-		return invalid("priority", "must be between %d and %d, got %d", PriorityMin, PriorityMax, iss.Priority)
+		add("priority", "must be between %d and %d, got %d", PriorityMin, PriorityMax, iss.Priority)
 	}
 	if iss.IsClosed() && iss.Closed.IsZero() {
-		return invalid("closed", "closed issue must have a closed timestamp")
+		add("closed", "closed issue must have a closed timestamp")
 	}
 
 	// assignee: 0-128 chars; single line; no control characters.
 	if len([]rune(iss.Assignee)) > maxAssigneeLen {
-		return invalid("assignee", "must be at most %d characters, got %d", maxAssigneeLen, len([]rune(iss.Assignee)))
+		add("assignee", "must be at most %d characters, got %d", maxAssigneeLen, len([]rune(iss.Assignee)))
 	}
 	if strings.ContainsRune(iss.Assignee, '\n') {
-		return invalid("assignee", "must be a single line (no newline characters)")
+		add("assignee", "must be a single line (no newline characters)")
 	}
 	if hasControlChar(iss.Assignee) {
-		return invalid("assignee", "must not contain control characters")
+		add("assignee", "must not contain control characters")
 	}
 
 	// creator: 0-128 chars; single line; no control characters.
 	if len([]rune(iss.Creator)) > maxCreatorLen {
-		return invalid("creator", "must be at most %d characters, got %d", maxCreatorLen, len([]rune(iss.Creator)))
+		add("creator", "must be at most %d characters, got %d", maxCreatorLen, len([]rune(iss.Creator)))
 	}
 	if strings.ContainsRune(iss.Creator, '\n') {
-		return invalid("creator", "must be a single line (no newline characters)")
+		add("creator", "must be a single line (no newline characters)")
 	}
 	if hasControlChar(iss.Creator) {
-		return invalid("creator", "must not contain control characters")
+		add("creator", "must not contain control characters")
 	}
 
 	// labels: 0-64 items; each 1-64 chars matching ^[a-z0-9][a-z0-9:._/-]*$; unique.
 	if len(iss.Labels) > maxLabels {
-		return invalid("labels", "too many labels: %d (max %d)", len(iss.Labels), maxLabels)
+		add("labels", "too many labels: %d (max %d)", len(iss.Labels), maxLabels)
 	}
 	for _, lbl := range iss.Labels {
 		if len([]rune(lbl)) > maxLabelLen {
-			return invalid("labels", "label %q exceeds max length of %d", lbl, maxLabelLen)
+			add("labels", "label %q exceeds max length of %d", lbl, maxLabelLen)
 		}
 		if !labelRe.MatchString(lbl) {
-			return invalid("labels", "label %q does not match required pattern ^[a-z0-9][a-z0-9:._/-]*$", lbl)
+			add("labels", "label %q does not match required pattern ^[a-z0-9][a-z0-9:._/-]*$", lbl)
 		}
 	}
 
 	// blocked_by: 0-256 items.
 	if len(iss.BlockedBy) > maxBlockedBy {
-		return invalid("blocked_by", "too many blockers: %d (max %d)", len(iss.BlockedBy), maxBlockedBy)
+		add("blocked_by", "too many blockers: %d (max %d)", len(iss.BlockedBy), maxBlockedBy)
 	}
 
 	// related: 0-256 items.
 	if len(iss.Related) > maxRelated {
-		return invalid("related", "too many related references: %d (max %d)", len(iss.Related), maxRelated)
+		add("related", "too many related references: %d (max %d)", len(iss.Related), maxRelated)
 	}
 
 	if iss.Parent == iss.ID {
-		return invalid("parent", "issue cannot be its own parent")
+		add("parent", "issue cannot be its own parent")
 	}
 	for _, id := range iss.BlockedBy {
 		if id == iss.ID {
-			return invalid("blocked_by", "issue cannot block itself")
+			add("blocked_by", "issue cannot block itself")
+			break
 		}
 	}
 	if dup := firstDuplicate(iss.BlockedBy); dup != "" {
-		return invalid("blocked_by", "duplicate dependency %q", dup)
+		add("blocked_by", "duplicate dependency %q", dup)
 	}
 	if dup := firstDuplicate(iss.Related); dup != "" {
-		return invalid("related", "duplicate reference %q", dup)
+		add("related", "duplicate reference %q", dup)
 	}
-	return nil
+	return out
+}
+
+// fieldUnchanged reports whether prev and next carry identical inputs for the
+// constraint named field — every value that constraint reads, not only the field
+// it is named after. When they are identical, a violation of it in next is the
+// one prev already had rather than one this write made, which is what
+// validateWrite needs to know.
+//
+// A field this function does not model is reported changed: a constraint added
+// later must fail closed here rather than be grandfathered by default.
+func fieldUnchanged(field string, prev, next *Issue) bool {
+	switch field {
+	case "title":
+		return prev.Title == next.Title
+	case "status":
+		return prev.Status == next.Status
+	case "type":
+		return prev.Type == next.Type
+	case "priority":
+		return prev.Priority == next.Priority
+	case "closed":
+		return prev.Status == next.Status && prev.Closed.Equal(next.Closed)
+	case "assignee":
+		return prev.Assignee == next.Assignee
+	case "creator":
+		return prev.Creator == next.Creator
+	case "labels":
+		return slices.Equal(prev.Labels, next.Labels)
+	case "blocked_by":
+		return prev.ID == next.ID && slices.Equal(prev.BlockedBy, next.BlockedBy)
+	case "related":
+		return slices.Equal(prev.Related, next.Related)
+	case "parent":
+		return prev.ID == next.ID && prev.Parent == next.Parent
+	}
+	return false
 }
 
 func firstDuplicate(ids []string) string {

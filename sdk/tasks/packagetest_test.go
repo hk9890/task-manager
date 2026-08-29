@@ -18,6 +18,7 @@ package tasks
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -52,6 +53,22 @@ func writePackage(t *testing.T, fs vfs.FS, dir, name string, hooks []Hook) strin
 	}
 	if err := fs.WriteAtomic(filepath.Join(pkgDir, PackageManifestName), data, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
+	}
+	// A hook that names a script inside the package gets one. loadPackage checks
+	// that such a program is there, so a fixture declaring a script it never
+	// wrote describes a package that does not load — which is not what a test
+	// about hook ordering or argv means to say.
+	for _, h := range m.Hooks {
+		if len(h.Run) == 0 || isAbsAnyPlatform(h.Run[0]) || !strings.ContainsRune(h.Run[0], '/') {
+			continue
+		}
+		script := filepath.Join(pkgDir, filepath.FromSlash(h.Run[0]))
+		if err := fs.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+			t.Fatalf("mkdir hook dir: %v", err)
+		}
+		if err := fs.WriteAtomic(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("write hook script %s: %v", script, err)
+		}
 	}
 	return pkgDir
 }

@@ -174,7 +174,7 @@ partitions are scanned. By default only the hot (active) set is evaluated.
 Nothing else auto-scans cold — in particular `status != "closed"` does **not** (it
 selects active work); to include closed issues under such a query the caller must opt
 in explicitly. The predicate is computed from the **parsed expression**, so there is
-exactly one detector: `Criteria` / `Find` derive their scope by building the
+exactly one detector: a `Criteria` derives its scope by building the
 expression and running this same predicate, never by inspecting the struct, so a
 `Criteria` and its hand-written equivalent always scope identically. This rule lives
 with the caller (CLI-SPEC.md §3, SDK-SPEC.md §3–4), not with the grammar, so the same

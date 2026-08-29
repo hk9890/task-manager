@@ -179,7 +179,7 @@ call.
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
 | `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and equality. |
 | `query.go` / `search.go` | The query surface: the `*Issue`→`query.Row` adapter and the `ParseError` alias, and `SearchExpr` free-text→expression. |
-| `criteria.go` | The `Criteria` builder and `Build`, which compiles it to a filter expression. The two `*Store` methods that take one, `Find` and `FindPage`, are in `list.go`. |
+| `criteria.go` | The `Criteria` builder and `Build`, which compiles it to a filter expression. A caller passes the result as `Filter.Expr` to `List` or `ListPage`, in `list.go`. |
 | `hooks.go` | Hook types (`Hook`) and their compilation into the runnable chain (HOOK-SPEC §3). Pure: it takes a resolved chain and returns a validated one. |
 | `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |

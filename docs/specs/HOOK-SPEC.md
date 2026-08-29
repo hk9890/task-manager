@@ -223,9 +223,25 @@ mutation.
 
 **A write checks what it introduces, not what it finds.** An entry already in the file is
 left alone, and only the timeout is re-checked when the write changes it. Checking the
-whole list instead makes a bad entry refuse the write that *removes* it: two of them in
-the per-user file then fail every write on the machine, and the only way out is a hand
-edit.
+whole list instead makes a bad entry refuse the write that *removes* it — `taskmgr
+package rm` (CLI-SPEC.md §2.3), which is the way back out of a configuration that has
+stopped every mutation.
+
+**A defect of the package keys themselves** — as opposed to one entry — is reported, not
+raised as a parse error:
+
+| The file says | What happens |
+|---|---|
+| `use:` with a value that is not a list (`use: doc-policy`) | Every mutation fails, naming the file and the list form. The key is left untouched by any write. |
+| `hooks:` (the withdrawn inline block) | Every mutation fails, naming the file and pointing at `taskmgr package add`. |
+| a `use:` entry that is not a mapping (`- doc-policy`), or an empty `-` | Every mutation fails, naming that entry. Other entries are unaffected, and the entry is written back verbatim. |
+
+Each is listed by `taskmgr package list` — under the key's own name for the first two —
+and **no read is affected**. Failing the decode instead would stop `list`, `show`,
+`where` and `package list` alike, which are the commands a reader reaches for precisely
+when writes have stopped, so the recovery path would go down with the fault it exists to
+explain. A `use:` value this build cannot model is also never rewritten: a write aimed at
+some other key leaves the author's line exactly as it stands.
 
 ### 3.5 The chain: two `use:` lists
 
@@ -237,7 +253,7 @@ store's. It applies to **every** store this machine resolves.
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | one of | A package name, resolved to `<taskmgr home>/packages/<name>`. Machine-independent, so a store config can carry it into git and every machine finds its own copy. |
-| `path` | one of | A directory, resolved against the directory holding **this** config file — `.tasks/` for a store, the home for the per-user one. A package under `.tasks/` travels with the store, `store move --central` included. |
+| `path` | one of | A directory, resolved against the directory holding **this** config file — `.tasks/` for a store, the home for the per-user one — and staying **inside** it. A package under `.tasks/` travels with the store, `store move --central` included. An **absolute** path is refused, as a guide fragment's is (§3.7): it names a location only one machine has, so a store config carrying one resolves to nothing on every colleague's clone. A package that lives elsewhere is installed under the taskmgr home and named by `name:`. |
 
 Exactly one of the two is set; an entry with both, or neither, is a config error (§3.4).
 Which is meant is always stated rather than inferred from the string, matching the rule
@@ -254,10 +270,17 @@ never fetched during a `create` or a `close`.
 2. **Effective ids are `pkg:<package>:<hook>`** (§3.2). The package name is part of the
    id, so a denial always says which package to open, and `taskmgr hook list` prints the
    same string.
-3. **A package named by both files contributes once**, from the list that named it first
-   — which is the per-user one. The shadowed entry is reported by `taskmgr package list`
-   rather than dropped silently. Making the duplicate an error instead would let one
-   person's machine-wide install break the repository for every colleague who has it.
+3. **A package contributes once**, from the list that named it first — which is the
+   per-user one. Identity is the **package name** as well as the resolved directory:
+   effective ids are `pkg:<package>:<hook>` (rule 2), so two directories under one name
+   would mint the same ids and a denial could not say which package refused. An entry
+   repeating either is reported `shadowed` by `taskmgr package list`, with the directory
+   that won, rather than dropped silently. Making a duplicate an error instead would let
+   one person's machine-wide install break the repository for every colleague who has it
+   — the install of a package machine-wide *and* into a store is a two-step a package's
+   own instructions may well recommend. Shadowing is not the suppression rule 5 forbids:
+   the entry that wins is the one the earlier list named, so a store still cannot displace
+   a package it inherits.
 4. **`hook_timeout`**: the store's value when it sets one, else the per-user one, else
    the 2s default. One limit still bounds every hook in the merged chain, and no package
    contributes one (§3.1).
@@ -325,6 +348,14 @@ the project root (§3.2).
 This one rule is what makes a package portable. Without it a hook could name its script
 only by absolute path, which differs per machine, and "shipping a gate" would mean
 shipping a path the recipient has to edit.
+
+**A program the package ships must be there for the package to load.** Once `argv[0]` has
+resolved *inside* the package directory it names a file the manifest promised, so loading
+checks that the file exists — a typo in a script name makes the package `broken` rather
+than leaving `taskmgr package list` and `taskmgr hook list` reporting `ok` while every
+mutation fails to spawn it. A bare `argv[0]` and an absolute one are left alone: those
+name what the machine provides, and a machine's `PATH` does not decide whether a package
+loads.
 
 **A package sets no configuration.** No `hook_timeout` (§3.1), no `prefix`, no
 `central_root`. The config surface a package could otherwise reach is either
@@ -418,7 +449,11 @@ broken package on a machine would do that to every project on it.
 **1 KiB**. Over its cap a fragment is cut at the last line break under it and
 marked as cut, never dropped: the text goes verbatim into a caller's context, so
 an uncapped fragment lets one package spend it all, while a silently absent
-section teaches nothing at all.
+section teaches nothing at all. With **no line break under the cap** — the ordinary
+shape of one paragraph under the 1 KiB overview cap — the cut falls at the last whole
+character instead, never mid-sequence: this text is pasted into a caller's context and
+wrapped as JSON, where a broken character is not a cosmetic problem. The mark names the
+cap that applied, which for an `overview` fragment is the 1 KiB one.
 
 **Trust.** A fragment's text reaches an agent's instructions unaltered, so a package
 author writes directly into the reasoning of whoever installs it. That is not a new

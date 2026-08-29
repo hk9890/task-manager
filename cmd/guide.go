@@ -317,6 +317,14 @@ func renderGuideOverview(topics []tasks.GuideTopic) string {
 		default:
 			b.WriteString(indentLines(strings.TrimRight(t.Text, "\n"), "  "))
 			b.WriteString("\n")
+			// A cut fragment is marked wherever it is printed (HOOK-SPEC §3.7):
+			// this text goes verbatim into a caller's context, and half a rule
+			// that reads as a whole one is worse than a rule the reader knows is
+			// incomplete. The overview cap is the tight one, so this is the path
+			// that cuts most often.
+			if t.Truncated {
+				fmt.Fprintf(&b, "  (cut at %d bytes — the whole fragment is %s)\n", guideCap(t), t.Path)
+			}
 		}
 	}
 
@@ -373,10 +381,22 @@ func renderGuideTopic(t tasks.GuideTopic) string {
 			b.WriteString("\n")
 		}
 		if t.Truncated {
-			fmt.Fprintf(&b, "\n(truncated at %d bytes — the whole file is %s)\n", tasks.MaxGuideFragmentBytes, t.Path)
+			fmt.Fprintf(&b, "\n(truncated at %d bytes — the whole file is %s)\n", guideCap(t), t.Path)
 		}
 	}
 	return b.String()
+}
+
+// guideCap is the byte cap the engine applied to one fragment. An overview is
+// held to the tighter of the two, so naming the topic cap for it was wrong by a
+// factor of eight: an author whose overview was being cut read "8192", concluded
+// the cap was not what cut it, and trimmed to just under a limit that was never
+// the one in force.
+func guideCap(t tasks.GuideTopic) int {
+	if t.Overview {
+		return tasks.MaxGuideOverviewBytes
+	}
+	return tasks.MaxGuideFragmentBytes
 }
 
 // guideFlags holds this command's own flags.

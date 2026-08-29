@@ -160,7 +160,10 @@ Unknown keys must be ignored by readers, never rejected. The `use` list and
 Hooks are never declared in this file. They live in packages, which the `use` list
 names; a directory carries the hooks and the scripts they run together, so a hook can
 name its own script without knowing where the package was installed
-([HOOK-SPEC.md](HOOK-SPEC.md) §3.6).
+([HOOK-SPEC.md](HOOK-SPEC.md) §3.6). A file still carrying the withdrawn `hooks:` key
+fails every mutation until the block is removed, and says so — it is the one unknown key
+that is not ignored, because ignoring it means running with the gates it declares silently
+absent ([HOOK-SPEC.md](HOOK-SPEC.md) §3.4).
 
 `prefix` is **immutable**: it is part of every issue ID, every filename, and every
 stored reference (§3), so it is fixed at `init`. `hook_timeout` is editable by hand or
@@ -562,3 +565,15 @@ A writer rejects, before anything touches disk:
 
 An issue body is **not** rejected for being large: it overflows to the content
 sidecar instead (§4.6).
+
+**A write rejects what it introduces, not what it finds.** The rules above are checked
+against the issue the write proposes, and a field violation that the issue **already had
+on disk, unchanged by this write**, does not refuse it. So an issue whose `creator` was
+hand-edited past its length limit can still be closed, reopened and re-linked, and a write
+that touches the offending field is refused as usual.
+
+Without the rule such an issue is frozen rather than repaired: the constraints cover
+fields no input surface can rewrite, so the only refusal available was a permanent one.
+The same principle governs a config file's package list
+([HOOK-SPEC.md](HOOK-SPEC.md) §3.4). What is preserved either way is the invariant that
+matters — the writer never *introduces* a violation.

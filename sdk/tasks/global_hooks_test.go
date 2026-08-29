@@ -90,8 +90,8 @@ func TestPackageChain_SamePackageInBothFilesRunsOnce(t *testing.T) {
 	writePackage(t, s.fs, "/hm", "shared", []Hook{
 		{ID: "gate", Event: "pre-create", Run: []string{"gate"}},
 	})
-	// The store names the very same directory by path.
-	useRef(s, PackageRef{Path: "/hm/packages/shared"})
+	// The store names the very same package.
+	useRef(s, PackageRef{Name: "shared"})
 
 	hs, err := s.hooks()
 	if err != nil {

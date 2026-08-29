@@ -194,6 +194,7 @@ func (s *Store) SetConfig(cfg Config) error                  // replace the file
 func (s *Store) Packages() ([]PackageInfo, error)   // every use: entry that gates this store
 func (s *Store) HookChain() ([]HookInfo, error)     // the effective hook chain, in run order
 func (s *Store) GuideTopics() ([]GuideTopic, error) // the guide fragments those packages contribute
+func (s *Store) InspectPackage(ref PackageRef) PackageInfo // what one entry would resolve to, unwritten
 ```
 
 `Name` reports the registry name the store was opened under — set by `Resolve` for
@@ -207,12 +208,26 @@ whose directories share a name share a prefix (CONFIG-SPEC §5).
 reach the configuration the store is already running with.
 
 `Packages` reports the per-user config's `use:` entries and then the store's, each with
-the directory it resolves to and a status of `ok`, `missing` or `broken` — the vocabulary
-the registry uses for its own entries (CONFIG-SPEC §3). It never fails on an entry that
-will not load; reporting those is what it is for. `HookChain` is the same two lists
-resolved into the hooks they contribute, in the order they run ([HOOK-SPEC](HOOK-SPEC.md)
-§3.5), and it does fail when a package will not load, because a chain missing a gate is
-not a chain.
+the directory it resolves to and a status of `PackageOK`, `PackageMissing` or
+`PackageBroken` — the vocabulary the registry uses for its own entries (CONFIG-SPEC §3).
+It also reports a defect in a file's package *keys* rather than in one entry: a `use:`
+value that is not a list, or the withdrawn `hooks:` block ([HOOK-SPEC](HOOK-SPEC.md)
+§3.4). Such a row is named for the key and carries the file's path. It never fails on an
+entry that will not load; reporting those is what it is for.
+
+`HookChain` is the same two lists resolved into the hooks they contribute, in the order
+they run ([HOOK-SPEC](HOOK-SPEC.md) §3.5). It does not fail on a package that will not
+load either: it returns the hooks that did. This is the same rule as `Packages` and
+`GuideTopics`, and it is the answer to the state the method exists to explain — one
+broken entry used to empty the listing, hiding every gate that was still running. What is
+wrong with an entry is `Packages`' to report, and it reports all of them rather than the
+first.
+
+`InspectPackage` answers what one `use:` entry *would* resolve to, writing nothing, so a
+command can refuse a package that could never run at the point it was named rather than at
+the next unrelated mutation. It resolves the entry against the two lists that already
+apply, so a name or a directory a configured entry has already claimed is reported
+`Shadowed` here and not discovered later.
 
 `GuideTopics` is the same two lists resolved into the guide fragments they contribute
 ([HOOK-SPEC](HOOK-SPEC.md) §3.7), each with its text already read. A fragment with
@@ -370,14 +385,19 @@ type Hook struct {
 
 }
 
-// PackageInfo is one use: entry and what it resolves to on this machine.
+// PackageInfo is one use: entry and what it resolves to on this machine — or one
+// defect of the file's own package keys, named for the key (HOOK-SPEC §3.4).
 type PackageInfo struct {
     Name, Path, Scope string // the package, its directory, and "global" | "store"
-    Status, Detail    string // "ok" | "missing" | "broken", and why when it is not ok
+    Status, Detail    string // one of the three constants below, and why when it is not ok
     Hooks             int    // how many hooks it contributes
     Guide             int    // how many guide fragments it contributes
-    Shadowed          bool   // an earlier entry already took this name
+    Shadowed          bool   // an earlier entry already claimed this name or directory
 }
+
+const PackageOK = "ok"           // the directory is there and its manifest loads
+const PackageMissing = "missing" // nothing at the resolved path
+const PackageBroken = "broken"   // there, but not a finished package
 
 // HookInfo is one hook of the effective chain.
 type HookInfo struct {
@@ -427,7 +447,7 @@ type GlobalConfig struct {
 // PackageRef is one entry of a use: list. Exactly one field is set.
 type PackageRef struct {
     Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<name>
-    Path string `yaml:"path,omitempty"` // relative to the directory holding the config file
+    Path string `yaml:"path,omitempty"` // relative to, and inside, the directory holding the config file
 }
 
 func LoadGlobalConfig() (GlobalConfig, error)  // built-in defaults when the file is absent
@@ -436,6 +456,7 @@ func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
 func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
+func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) // InspectPackage for this file
 ```
 
 The packages named here contribute hooks **before** a store's own on every mutation, and
@@ -446,7 +467,9 @@ same way round.
 
 `GlobalGuideTopics` needs no store, so it answers in a directory where nothing
 resolves. That is the case the guide has to serve: an agent runs it before it knows
-whether it is standing in a project at all.
+whether it is standing in a project at all. `InspectGlobalPackage` is `Store.InspectPackage`
+for this file and needs no store either; it resolves a candidate entry against this
+file's own list, which is the only one that runs earlier (HOOK-SPEC §3.5 rule 1).
 
 `UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
 home's own lock: the first is a read-modify-write inside it, the second replaces the file
@@ -555,7 +578,7 @@ is expressed via the `Expr` field using the filter-expression language
 `Offset` and `Limit` are presentation paging applied after sort/reverse: skip
 `Offset` matches, then return at most `Limit` (0 = all remaining). Negative values
 are clamped to 0. To page a large result set (e.g. virtual scrolling) use
-`ListPage` / `FindPage` (§4), which return the window together with the total match
+`ListPage` (§4), which returns the window together with the total match
 count from a single snapshot.
 
 **Scope semantics (TASK-STORAGE-SPEC §5, QUERY-SPEC.md §5):**
@@ -689,7 +712,7 @@ Reads split into two classes, and the difference is deliberate:
 | Method | `Description` for an overflowed issue |
 |---|---|
 | `Get`, `Detail` | **resolved** — the full body, read from the content sidecar |
-| `All`, `Query`, `List`, `ListPage`, `Find`, `FindPage`, `Ready`, `Blocked` | **empty** |
+| `All`, `List`, `ListPage`, `Ready`, `Blocked` | **empty** |
 
 A bulk path never reads a content sidecar, so listing a thousand issues can never
 materialize gigabytes no matter what they contain. `ResolveBody` is how a caller
@@ -899,6 +922,7 @@ var (
     ErrStoreExists        // a store already exists at the create/move target
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
     ErrStoreNotRegistered // a store name has no registry entry (CONFIG-SPEC §4)
+    ErrPackageMissing     // a use: entry resolves to a directory that is not there
 )
 ```
 
@@ -913,6 +937,11 @@ is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 `ErrAlreadyExists` is returned by `Create` and `Import` when the caller supplies an
 explicit `ID` the store already holds; allocated IDs retry against the existing set
 and cannot hit it.
+
+`ErrPackageMissing` distinguishes a `use:` entry whose directory is simply not there
+from one that is there and unusable — "install this" rather than "repair this". It is
+what sets `PackageInfo.Status` to `PackageMissing`, and it wraps the error every
+mutation fails with while the entry stands (HOOK-SPEC §3.4).
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`,
 `RemoveDep`, `AddRelated`, and `RemoveRelated` when the target issue lives in
@@ -935,7 +964,14 @@ The store rejects (before any byte is written) every invariant listed in the
 storage spec: empty title, unknown enum, priority out of range, self/duplicate/
 dangling references, dependency cycles, and field-constraint violations.
 
-A malformed filter expression (`Query` / `List`) returns a typed parse error
+**A write checks what it introduces, not what it finds** (TASK-STORAGE-SPEC §5). A field
+violation already on disk — a hand edit, a restore, a build with looser rules — does not
+refuse a write that leaves that field alone, so `Close`, `Reopen` and the four edge
+mutations still work on an issue the engine would not have written. A write that touches
+the offending field is refused as usual. Without the rule an invalid field no input
+struct exposes froze its issue permanently: it could never be closed or re-linked again.
+
+A malformed filter expression (`List` / `ListPage`) returns a typed parse error
 locating the failure; it is not a validation error and never reaches disk:
 
 ```go

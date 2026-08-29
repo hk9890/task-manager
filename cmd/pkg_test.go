@@ -232,7 +232,7 @@ func TestHookList_EmptyChainSaysSo(t *testing.T) {
 func TestPackageList_MarksAShadowedEntry(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	pkg := writeCmdPackage(t, home, "shared", `hooks:
+	writeCmdPackage(t, home, "shared", `hooks:
   - id: g
     event: pre-create
     run: ["/bin/true"]
@@ -242,8 +242,15 @@ func TestPackageList_MarksAShadowedEntry(t *testing.T) {
 	if _, _, code := run(t, "package", "add", "--global", "shared"); code != 0 {
 		t.Fatal("setup: package add --global")
 	}
-	if _, _, code := run(t, "--dir", root, "package", "add", "--path", pkg); code != 0 {
-		t.Fatal("setup: package add --path")
+	// The store names the same package. `package add` sees the entry that
+	// already provides it and says so, rather than reporting it at the next
+	// unrelated mutation.
+	addOut, _, code := run(t, "--dir", root, "package", "add", "shared")
+	if code != 0 {
+		t.Fatal("setup: package add")
+	}
+	if !strings.Contains(addOut, "contributes no hooks") {
+		t.Errorf("package add = %q, want it to warn that the entry is shadowed", addOut)
 	}
 
 	out, _, _ := run(t, "--dir", root, "package", "list")
@@ -407,5 +414,139 @@ func TestPackageList_ScalarUseEntryKeepsReadsWorking(t *testing.T) {
 	}
 	if !strings.Contains(out, "broken") || !strings.Contains(out, "name: doc-policy") {
 		t.Errorf("package list = %q, want it broken and the mapping form shown", out)
+	}
+}
+
+// ── package rm ──────────────────────────────────────────────────────────────
+
+// `package add` could write an entry that wedges every mutation, and no verb
+// took one back out: recovery meant hand-editing a lock-protected config file
+// that travels in git to every colleague.
+func TestPackageRm_RemovesAnEntryThatWedgesTheStore(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+
+	if out, _, code := run(t, "--dir", root, "package", "add", "--path", "packages/nope"); code != 0 {
+		t.Fatalf("setup: package add exit %d, out %q", code, out)
+	}
+	// The entry is unresolvable, so every mutation now fails.
+	if _, _, code := run(t, "--dir", root, "create", "--title", "x"); code == 0 {
+		t.Fatal("a missing package must fail the write closed")
+	}
+
+	out, errOut, code := run(t, "--dir", root, "package", "rm", "--path", "packages/nope")
+	if code != 0 {
+		t.Fatalf("package rm: exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "Removed package") {
+		t.Errorf("package rm = %q, want it to name what it removed", out)
+	}
+
+	if _, errOut, code := run(t, "--dir", root, "create", "--title", "x"); code != 0 {
+		t.Fatalf("the store must be writable again: exit %d, stderr %q", code, errOut)
+	}
+	list, _, _ := run(t, "--dir", root, "package", "list")
+	if strings.Contains(list, "nope") {
+		t.Errorf("package list still shows the removed entry:\n%s", list)
+	}
+}
+
+// An entry is matched by what it resolves to, not by its spelling, so the
+// removal takes the entry the user means without them retyping it exactly.
+func TestPackageRm_MatchesAnEntryByWhatItResolvesTo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	writeCmdPackage(t, home, "doc-policy", `hooks:
+  - id: gate
+    event: pre-create
+    run: ["/bin/true"]
+`)
+	root := newStore(t)
+	if _, _, code := run(t, "--dir", root, "package", "add", "doc-policy"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+
+	out, _, code := run(t, "--json", "--dir", root, "package", "rm", "doc-policy")
+	if code != 0 {
+		t.Fatalf("package rm: exit %d", code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("package rm --json: %v (%q)", err, out)
+	}
+	if got["name"] != "doc-policy" || got["scope"] != "store" {
+		t.Errorf("rm DTO = %v, want the removed entry and its file's scope", got)
+	}
+	if got["config"] == "" || got["config"] == nil {
+		t.Errorf("rm DTO = %v, want the config file it left", got)
+	}
+}
+
+// A name that is not there names what is, so the right spelling is one command
+// away rather than one hand-opened file away.
+func TestPackageRm_UnknownNameListsWhatTheFileUses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	writeCmdPackage(t, home, "doc-policy", `hooks:
+  - id: gate
+    event: pre-create
+    run: ["/bin/true"]
+`)
+	root := newStore(t)
+	if _, _, code := run(t, "--dir", root, "package", "add", "doc-policy"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+
+	_, errOut, code := run(t, "--dir", root, "package", "rm", "typo")
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(errOut, "doc-policy") {
+		t.Errorf("stderr = %q, want it to name what the file does use", errOut)
+	}
+}
+
+// The per-user file is reached with the same selector as `add`.
+func TestPackageRm_GlobalScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	writeCmdPackage(t, home, "machine", `hooks:
+  - id: g
+    event: pre-create
+    run: ["/bin/true"]
+`)
+	if _, _, code := run(t, "package", "add", "--global", "machine"); code != 0 {
+		t.Fatal("setup: package add --global")
+	}
+	if _, errOut, code := run(t, "package", "rm", "--global", "machine"); code != 0 {
+		t.Fatalf("package rm --global: exit %d, stderr %q", code, errOut)
+	}
+	out, _, _ := run(t, "package", "list", "--global")
+	if strings.Contains(out, "machine") {
+		t.Errorf("the per-user entry survived the removal:\n%s", out)
+	}
+}
+
+// An absolute path names a location only one machine has, so a store config
+// carrying one resolves to nothing in every clone (HOOK-SPEC §3.5).
+func TestPackageAdd_RefusesAnAbsolutePath(t *testing.T) {
+	isolatedHome(t)
+	root := newStore(t)
+	pkg := writeCmdPackage(t, storeDataDir(root), "vendored", `hooks:
+  - id: g
+    event: pre-create
+    run: ["/bin/true"]
+`)
+
+	_, errOut, code := run(t, "--dir", root, "package", "add", "--path", pkg)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(errOut, "absolute path") {
+		t.Errorf("stderr = %q, want it to name the rule", errOut)
+	}
+	// The relative spelling of the same directory is accepted.
+	if _, errOut, code := run(t, "--dir", root, "package", "add", "--path", "packages/vendored"); code != 0 {
+		t.Fatalf("the relative form must work: exit %d, stderr %q", code, errOut)
 	}
 }

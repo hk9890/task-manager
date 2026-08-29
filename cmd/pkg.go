@@ -49,6 +49,17 @@ type packageDTO struct {
 	Shadowed bool   `json:"shadowed,omitempty"`
 }
 
+// packageRemovedDTO is what `package rm` prints: the entry that was removed and
+// the file it was removed from. It is deliberately not a packageDTO — status,
+// hook and guide counts describe a package a configuration uses, and this one is
+// no longer used.
+type packageRemovedDTO struct {
+	Name   string `json:"name"`
+	Path   string `json:"path,omitempty"`
+	Scope  string `json:"scope"`
+	Config string `json:"config"`
+}
+
 // hookDTO is one hook of the effective chain, as `hook list` prints it. ID is the
 // effective id — the one a denial reason reports.
 type hookDTO struct {
@@ -181,6 +192,104 @@ func sameRefTarget(a, b tasks.PackageRef) bool {
 	return filepath.Clean(strings.TrimSpace(a.Path)) == filepath.Clean(strings.TrimSpace(b.Path))
 }
 
+var packageRmCmd = &cobra.Command{
+	Use:   "rm <name>",
+	Short: "Remove a package from the use list of one config file",
+	Long: `Remove one package from a config file's 'use:' list.
+
+The argument is what 'package add' took: a package name, or with --path the
+directory. Either is matched by what it resolves to rather than by its spelling,
+so 'packages/p' and './packages/p' name the same entry.
+
+Removing an entry does not load the package, deliberately. An entry that cannot
+load is the one that most needs removing — until it is gone it fails every
+mutation in this store, and from a store config in every colleague's clone too.
+
+The package directory itself is untouched: taskmgr never writes a package, and
+never deletes one.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ref := tasks.PackageRef{Name: args[0]}
+		if packageRmPath {
+			ref = tasks.PackageRef{Path: args[0]}
+		}
+		return removePackage(ref, packageFlags.global)
+	},
+}
+
+// packageRmPath mirrors packageAddPath, so an entry is removed by the same two
+// spellings it was added by.
+var packageRmPath bool
+
+// removePackage drops the entry matching ref from the target file's use list.
+//
+// Nothing is inspected first. `add` checks the package because it is about to
+// make the configuration depend on it; `rm` is the way back out of exactly the
+// state where that check would fail, so requiring the package to load here would
+// leave a store with no way to repair its own config but a hand edit of a
+// lock-protected file that travels in git.
+func removePackage(ref tasks.PackageRef, global bool) error {
+	if strings.TrimSpace(ref.Name) == "" && strings.TrimSpace(ref.Path) == "" {
+		return fmt.Errorf("name a package to remove, e.g. 'taskmgr package rm doc-policy'")
+	}
+	t, err := loadConfigTarget(global)
+	if err != nil {
+		return err
+	}
+
+	var removed tasks.PackageRef
+	if err := t.update(func(t *configTarget) error {
+		cur := t.use()
+		next := make([]tasks.PackageRef, 0, len(cur))
+		found := false
+		for _, c := range cur {
+			if !found && sameRefTarget(c, ref) {
+				removed, found = c, true
+				continue
+			}
+			next = append(next, c)
+		}
+		if !found {
+			return fmt.Errorf("package %s is not in %s%s", refLabel(ref), t.path, useSummary(cur))
+		}
+		t.setUse(next)
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if flagJSON {
+		return printJSON(packageRemovedDTO{
+			Name: refName(removed), Path: removed.Path, Scope: t.scope(), Config: t.path,
+		})
+	}
+	_, _ = fmt.Fprintf(stdout, "Removed package %s from %s\n", refLabel(removed), t.path)
+	return nil
+}
+
+// useSummary lists what a file does use, so a name that did not match is one
+// command away from the right one rather than one hand-opened file away.
+func useSummary(refs []tasks.PackageRef) string {
+	if len(refs) == 0 {
+		return " (it uses no packages)"
+	}
+	labels := make([]string, 0, len(refs))
+	for _, r := range refs {
+		labels = append(labels, refLabel(r))
+	}
+	return " (it uses: " + strings.Join(labels, ", ") + ")"
+}
+
+// refName is the package name an entry contributes: the `name:` given, or the
+// last segment of `path:` — the rule that makes a directory name the package
+// name (HOOK-SPEC §3.6).
+func refName(ref tasks.PackageRef) string {
+	if n := strings.TrimSpace(ref.Name); n != "" {
+		return n
+	}
+	return filepath.Base(filepath.Clean(strings.TrimSpace(ref.Path)))
+}
+
 var packageListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List the packages a config file uses, and whether each one loads",
@@ -305,19 +414,26 @@ func packageInfoDTO(in tasks.PackageInfo) packageDTO {
 }
 
 // refLabel names a reference the way it was written, so a message points at the
-// line in the file rather than at a resolved path the user never typed.
+// line in the file rather than at a resolved path the user never typed. An entry
+// this build cannot model has neither spelling, and says so rather than printing
+// as an empty string in the middle of a list.
 func refLabel(ref tasks.PackageRef) string {
-	if ref.Path != "" {
+	switch {
+	case strings.TrimSpace(ref.Path) != "":
 		return "path " + ref.Path
+	case strings.TrimSpace(ref.Name) != "":
+		return ref.Name
 	}
-	return ref.Name
+	return "(an entry with neither name nor path)"
 }
 
 func init() {
 	packageCmd.PersistentFlags().BoolVar(&packageFlags.global, "global", false, "act on the per-user config instead of the store's")
 	packageAddCmd.Flags().BoolVar(&packageAddPath, "path", false, "treat the argument as a directory path instead of a package name")
+	packageRmCmd.Flags().BoolVar(&packageRmPath, "path", false, "treat the argument as a directory path instead of a package name")
 
 	packageCmd.AddCommand(packageAddCmd)
+	packageCmd.AddCommand(packageRmCmd)
 	packageCmd.AddCommand(packageListCmd)
 	rootCmd.AddCommand(packageCmd)
 

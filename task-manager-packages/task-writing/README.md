@@ -50,6 +50,9 @@ A store entry that names a package a colleague has not installed stops their
 mutations until they install it. That is deliberate — a gate the configuration
 depends on must not be silently absent — but it is a cost you put on other
 people, so prefer the machine-wide install while you are trying the package out.
+Doing both is safe: the machine-wide entry runs and the store's is listed
+`shadowed`, because one package name is one package. Remove the one you no longer
+want with `taskmgr package rm task-writing`.
 
 ## The gate fails open when it cannot read the payload
 
@@ -60,13 +63,24 @@ not checked.
 That is a deliberate choice by this package, not taskmgr's default: a pre-hook
 that cannot run denies the transition, which here would mean a machine without
 `jq` could not write to the store at all. An unchecked body is the smaller
-failure. If you would rather have the strict behaviour, change the two early
-`exit 0` lines to `exit 1`.
+failure. For the strict behaviour instead, change both `exit 0` lines that print
+`so the body was not checked` to `exit 1`.
 
 ## What the gate does not do
 
 The check is structural. It sees that `## Acceptance criteria` is present with at
-least one `- [ ]` item; it cannot see whether the criteria are any good. Clearing
-the gate is the floor. The bar is the wish test in
-`taskmgr guide pkg:task-writing:bodies`: can a competent stranger open the issue,
-start without asking a question, and prove they are done without asking a second?
+least one `- [ ]` item — ticked as `- [x]` or `- [X]` counts — and it cannot see
+whether the criteria are any good. Clearing the gate is the floor. The bar is the
+wish test in `taskmgr guide pkg:task-writing:bodies`: can a competent stranger
+open the issue, start without asking a question, and prove they are done without
+asking a second?
+
+**It does not check a write that leaves the body alone.** `new` is the whole
+candidate issue rather than a delta, so a gate that re-read it on every edit would
+refuse `taskmgr update --priority 3` on any issue written before you installed
+this package. Instead the gate compares `new` against `old` and stands aside when
+the description is unchanged. So installing into a store that already has issues
+costs nothing up front: existing bodies keep working, and each one is held to the
+standard the next time somebody edits it. To adopt the standard across a store
+deliberately, rewrite the bodies — `taskmgr list -q 'status != "closed"'` names
+the candidates, and `templates/<type>.md` is what to fill in.

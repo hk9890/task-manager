@@ -214,6 +214,14 @@ func fillStruct(t *testing.T, v reflect.Value) []string {
 	var keys []string
 	for i := range v.NumField() {
 		field := v.Type().Field(i)
+		// An unexported field is outside the round trip entirely: yaml.v3 neither
+		// decodes nor encodes one, so it cannot be "read and then dropped", which
+		// is the failure this guard exists for. `defects` is one — it holds what
+		// the decoder found wrong with the file's package keys, and is derived on
+		// every read rather than persisted.
+		if !field.IsExported() {
+			continue
+		}
 		key, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
 		if key == "" || key == "-" {
 			t.Fatalf("field %s has no YAML key: a modelled field needs one to survive a round trip", field.Name)
