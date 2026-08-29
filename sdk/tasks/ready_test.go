@@ -161,6 +161,50 @@ func TestList_Filters(t *testing.T) {
 	}
 }
 
+// TestSortCreated_NewestFirst pins the primary comparison: distinct Created
+// timestamps order newest first, whatever the IDs say. TestSortCreated_TieBreakByID
+// gives every issue one timestamp, so it reaches the ID tie-break only — the
+// comparator could be fully reversed and stay green on that test alone.
+func TestSortCreated_NewestFirst(t *testing.T) {
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	// IDs ascend as the timestamps descend, so an ID-ordered result and a
+	// newest-first result cannot be confused for one another.
+	oldest := &Issue{ID: "agt-0001", Created: base}
+	middle := &Issue{ID: "agt-0002", Created: base.Add(time.Hour)}
+	newest := &Issue{ID: "agt-0003", Created: base.Add(2 * time.Hour)}
+
+	issues := []*Issue{oldest, newest, middle}
+	sortIssues(issues, SortCreated)
+
+	wantIDs := []string{"agt-0003", "agt-0002", "agt-0001"}
+	for i, iss := range issues {
+		if iss.ID != wantIDs[i] {
+			t.Errorf("SortCreated: position %d = %q, want %q; full: %v",
+				i, iss.ID, wantIDs[i], ids(issues))
+		}
+	}
+}
+
+// TestSortUpdated_NewestFirst is the updated-field peer of
+// TestSortCreated_NewestFirst: the same comparator shape, the same blind spot.
+func TestSortUpdated_NewestFirst(t *testing.T) {
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	oldest := &Issue{ID: "agt-0001", Updated: base}
+	middle := &Issue{ID: "agt-0002", Updated: base.Add(time.Hour)}
+	newest := &Issue{ID: "agt-0003", Updated: base.Add(2 * time.Hour)}
+
+	issues := []*Issue{oldest, newest, middle}
+	sortIssues(issues, SortUpdated)
+
+	wantIDs := []string{"agt-0003", "agt-0002", "agt-0001"}
+	for i, iss := range issues {
+		if iss.ID != wantIDs[i] {
+			t.Errorf("SortUpdated: position %d = %q, want %q; full: %v",
+				i, iss.ID, wantIDs[i], ids(issues))
+		}
+	}
+}
+
 // TestSortCreated_TieBreakByID verifies that SortCreated uses ID as a tie-break
 // when two issues have identical Created timestamps, producing deterministic order.
 func TestSortCreated_TieBreakByID(t *testing.T) {

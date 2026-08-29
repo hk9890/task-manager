@@ -93,6 +93,36 @@ func TestBuilder_TypeOpt(t *testing.T) {
 	}
 }
 
+// TestBuilder_InProgress verifies that the InProgress opt actually reaches the
+// materialised issue. Nothing else in this package used it, so the non-open
+// branch that applies it could become a no-op — and every downstream test that
+// builds an in_progress fixture would then assert against an open issue while
+// believing otherwise, passing for the wrong reason.
+func TestBuilder_InProgress(t *testing.T) {
+	store := storetest.New(t).
+		Issue("tst-0001", storetest.InProgress).
+		Issue("tst-0002").
+		Mem()
+
+	iss, err := store.Get("tst-0001")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if iss.Status != tasks.StatusInProgress {
+		t.Errorf("status = %q, want in_progress", iss.Status)
+	}
+
+	// The default must stay open, so a no-op InProgress cannot pass by making
+	// every issue look the same.
+	other, err := store.Get("tst-0002")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if other.Status != tasks.StatusOpen {
+		t.Errorf("status of an issue with no status opt = %q, want open", other.Status)
+	}
+}
+
 // TestBuilder_Closed verifies that Closed() creates a closed issue.
 func TestBuilder_Closed(t *testing.T) {
 	b := storetest.New(t).

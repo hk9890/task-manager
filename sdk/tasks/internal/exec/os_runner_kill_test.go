@@ -92,8 +92,15 @@ func TestOSRunner_TimeoutSIGKILLsChildrenThatIgnoreSIGTERM(t *testing.T) {
 	// kills anyway, and the test would prove nothing.
 	script := "(trap '' TERM; sleep 30) & echo $! > " + pidFile + "; trap '' TERM; sleep 30"
 
+	// The subject is the escalation from SIGTERM to SIGKILL, not the deadline.
+	// A 100ms timeout made that subject depend on the shell starting, forking and
+	// writing the pid file inside 100ms: injecting a delay before the spawn broke
+	// this test and nothing else in the repository, which is the signature of a
+	// test that a loaded machine can fail for reasons unrelated to the code.
+	// Half a second buys the margin and still fires the timeout immediately —
+	// the script sleeps 30s either way.
 	r := NewOS()
-	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 100 * time.Millisecond})
+	res := r.Run(Spec{Argv: []string{"sh", "-c", script}, Timeout: 500 * time.Millisecond})
 	if res.Category != Timeout {
 		t.Fatalf("got category=%v, want Timeout", res.Category)
 	}

@@ -287,6 +287,69 @@ func TestGuideTopics_CapsAnOversizedFragmentAtALineBoundary(t *testing.T) {
 	}
 }
 
+// TestGuideTopics_AFragmentExactlyAtTheCapIsNotTruncated pins the comparison at
+// its exact value. The tests either side of it use fragments comfortably under
+// and over the cap, so the boundary itself is free to drift: one step tighter
+// and a fragment sitting exactly on MaxGuideFragmentBytes loses its final line
+// and is reported as Truncated to every `taskmgr guide` caller, although nothing
+// exceeded the cap.
+func TestGuideTopics_AFragmentExactlyAtTheCapIsNotTruncated(t *testing.T) {
+	s, fs := chainStore(t)
+	// Whole lines summing to exactly MaxGuideFragmentBytes: 8192 = 128 × 64.
+	line := strings.Repeat("z", 63) + "\n"
+	exact := strings.Repeat(line, MaxGuideFragmentBytes/len(line))
+	if len(exact) != MaxGuideFragmentBytes {
+		t.Fatalf("test setup: fragment is %d bytes, want exactly %d", len(exact), MaxGuideFragmentBytes)
+	}
+
+	writeGuidePackage(t, fs, s.dir, "policy", exact)
+	if err := s.SetConfig(Config{Prefix: "tst", Use: []PackageRef{{Path: "packages/policy"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, err := s.GuideTopics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("want one topic, got %d", len(topics))
+	}
+	if topics[0].Truncated {
+		t.Error("a fragment of exactly MaxGuideFragmentBytes was reported as truncated")
+	}
+	if topics[0].Text != exact {
+		t.Errorf("text is %d bytes, want the whole %d — a fragment at the cap lost content",
+			len(topics[0].Text), len(exact))
+	}
+}
+
+// One byte over the cap is the first fragment that must be cut. Together with
+// the case above this pins the comparison from both sides.
+func TestGuideTopics_AFragmentOneByteOverTheCapIsTruncated(t *testing.T) {
+	s, fs := chainStore(t)
+	line := strings.Repeat("z", 63) + "\n"
+	over := strings.Repeat(line, MaxGuideFragmentBytes/len(line)) + "x"
+	if len(over) != MaxGuideFragmentBytes+1 {
+		t.Fatalf("test setup: fragment is %d bytes, want %d", len(over), MaxGuideFragmentBytes+1)
+	}
+
+	writeGuidePackage(t, fs, s.dir, "policy", over)
+	if err := s.SetConfig(Config{Prefix: "tst", Use: []PackageRef{{Path: "packages/policy"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, err := s.GuideTopics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("want one topic, got %d", len(topics))
+	}
+	if !topics[0].Truncated {
+		t.Error("a fragment one byte over MaxGuideFragmentBytes was not truncated")
+	}
+}
+
 // An overview fragment lands in every caller's context rather than only in the
 // ones that asked for the subject, so it is held to a cap an order of magnitude
 // tighter than a section's.

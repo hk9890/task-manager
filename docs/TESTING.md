@@ -21,15 +21,27 @@ plain `go test ./...` skips them. Raw equivalent:
 tests — anything asserting on what a command printed — run untagged through
 `cmd.Run`; see [implementation/TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
 
+The tag also carries the few L2 tests whose **cost** puts them out of the fast
+loop — `sdk/tasks/edge_bounds_slow_test.go`, which fills a relation list to its
+256-item bound twice. Tag an L2 test for cost only when it dominates the default
+suite, name the reason in its file comment, and keep it in `quality:full`.
+
 A change is not green until `quality:full` passes; it covers everything
 `.github/workflows/ci.yml` checks **except** the vulnerability scan, which runs
 only in CI because it reaches the network: run `mise run vuln` by hand to check it
 early. There is no `make lint` — linting is `mise run lint`.
 
-`mise run test:coverage` runs every layer with a coverage threshold
-(`COVERAGE_THRESHOLD`, default 75). It is a **manual** task and gates nothing: the
-threshold is a policy nobody has adopted, so it stays available without failing
-anyone's build.
+Two coverage tasks are **manual** and gate nothing. `mise run test:coverage` runs
+every layer against a threshold (`COVERAGE_THRESHOLD`, default 75) — a policy
+nobody has adopted, so it stays available without failing anyone's build.
+`mise run test:coverage:summary` ranks both modules per-function, least-covered
+first, and is the one to reach for: it names the lines no test executes, which is
+the gap a kill-rate cannot show.
+
+Read either as a pointer, never as a verdict. A covered line is one that **ran**,
+not one whose behaviour anything asserted — this repository has already shipped
+three tests named for a directory fsync that asserted only that the call returned
+nil. Coverage says where to look; the assertion is still the work.
 
 ## Conventions
 
@@ -53,6 +65,10 @@ anyone's build.
   `mise run test` must stay disk-free.
 - Assert errors with `errors.Is` against the sentinels; validation failures are
   `*ValidationError` with a `Field`.
+- **Durability:** assert the parent-directory fsync through the `fsyncDirFn` seam
+  in `sdk/tasks/internal/vfs`, from an internal test file in package `vfs`. A test
+  that only checks the call returned nil passes with the fsync deleted, because a
+  lost directory entry shows up on the next crash and never in the return value.
 
 ## Spec conformance
 

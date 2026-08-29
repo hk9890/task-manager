@@ -55,11 +55,32 @@ import (
 func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 	t.Helper()
 
+	violations, err := storeInvariantViolations(s)
+	if err != nil {
+		t.Errorf("AssertStoreInvariants: %v", err)
+		return
+	}
+	for _, v := range violations {
+		t.Errorf("%s", v)
+	}
+}
+
+// storeInvariantViolations is the checker itself: it returns one message per
+// violated invariant, in the order the package doc lists them, and an error only
+// when the store could not be read at all.
+//
+// AssertStoreInvariants is the caller every test uses; this split exists so the
+// checker's own tests can observe what it found. testing.TB cannot be
+// implemented outside the testing package, so a checker that only ever calls
+// t.Errorf can be proven to run but never proven to still detect anything — and
+// a checker that silently stopped detecting would keep every caller green.
+func storeInvariantViolations(s *tasks.Store) ([]string, error) {
+	var out []string
+
 	// --- collect the hot (active) set via the public API --------------------
 	hotIssues, err := s.All()
 	if err != nil {
-		t.Errorf("AssertStoreInvariants: All() failed: %v", err)
-		return
+		return nil, fmt.Errorf("All() failed: %w", err)
 	}
 
 	// --- collect the closed set via direct directory scan -------------------
@@ -68,15 +89,14 @@ func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 	closedDir := filepath.Join(s.Dir(), "closed")
 	closedIssues, err := readClosedIssues(s, closedDir)
 	if err != nil {
-		t.Errorf("AssertStoreInvariants: reading closed/ failed: %v", err)
-		return
+		return nil, fmt.Errorf("reading closed/ failed: %w", err)
 	}
 
-	// --- build lookup maps --------------------------------------------------
+	// --- invariant 2: no duplicate IDs within a partition -------------------
 	hotByID := make(map[string]*tasks.Issue, len(hotIssues))
 	for _, iss := range hotIssues {
 		if _, dup := hotByID[iss.ID]; dup {
-			t.Errorf("invariant violated: duplicate ID %q in hot dir", iss.ID)
+			out = append(out, fmt.Sprintf("invariant violated: duplicate ID %q in hot dir", iss.ID))
 		}
 		hotByID[iss.ID] = iss
 	}
@@ -84,23 +104,27 @@ func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 	closedByID := make(map[string]*tasks.Issue, len(closedIssues))
 	for _, iss := range closedIssues {
 		if _, dup := closedByID[iss.ID]; dup {
-			t.Errorf("invariant violated: duplicate ID %q in closed/", iss.ID)
+			out = append(out, fmt.Sprintf("invariant violated: duplicate ID %q in closed/", iss.ID))
 		}
 		closedByID[iss.ID] = iss
 	}
 
 	// --- invariant 1: no ID in BOTH hot and closed/ (C1 split-brain) --------
-	for id := range hotByID {
-		if _, inClosed := closedByID[id]; inClosed {
-			t.Errorf("invariant C1 violated: ID %q exists in BOTH hot dir and closed/ (split-brain)", id)
+	// Iterated over the sorted hot slice rather than the map so the report is
+	// stable across runs.
+	for _, iss := range hotIssues {
+		if _, inClosed := closedByID[iss.ID]; inClosed {
+			out = append(out, fmt.Sprintf(
+				"invariant C1 violated: ID %q exists in BOTH hot dir and closed/ (split-brain)", iss.ID))
 		}
 	}
 
 	// --- invariant 3: hot set must not contain a closed-status issue ---------
-	for id, iss := range hotByID {
+	for _, iss := range hotIssues {
 		if iss.Status == tasks.StatusClosed {
-			t.Errorf("invariant violated: hot-dir issue %q has status %q — closed issues must live in closed/",
-				id, iss.Status)
+			out = append(out, fmt.Sprintf(
+				"invariant violated: hot-dir issue %q has status %q — closed issues must live in closed/",
+				iss.ID, iss.Status))
 		}
 	}
 
@@ -117,19 +141,20 @@ func AssertStoreInvariants(t testing.TB, s *tasks.Store) {
 	allIssues := append(hotIssues, closedIssues...) //nolint:gocritic // not appending to hotIssues slice
 	for _, iss := range allIssues {
 		if iss.Parent != "" && !allExists(iss.Parent) {
-			t.Errorf("invariant violated: issue %q has dangling parent ref %q", iss.ID, iss.Parent)
+			out = append(out, fmt.Sprintf("invariant violated: issue %q has dangling parent ref %q", iss.ID, iss.Parent))
 		}
 		for _, blk := range iss.BlockedBy {
 			if !allExists(blk) {
-				t.Errorf("invariant violated: issue %q has dangling blocked_by ref %q", iss.ID, blk)
+				out = append(out, fmt.Sprintf("invariant violated: issue %q has dangling blocked_by ref %q", iss.ID, blk))
 			}
 		}
 		for _, rel := range iss.Related {
 			if !allExists(rel) {
-				t.Errorf("invariant violated: issue %q has dangling related ref %q", iss.ID, rel)
+				out = append(out, fmt.Sprintf("invariant violated: issue %q has dangling related ref %q", iss.ID, rel))
 			}
 		}
 	}
+	return out, nil
 }
 
 // readClosedIssues reads and parses all issue .md files in closedDir.
