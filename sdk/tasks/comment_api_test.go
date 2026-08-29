@@ -23,6 +23,7 @@ package tasks
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -738,6 +739,194 @@ func TestMigration_InlineFrontmatterCommentsMovedToSidecar(t *testing.T) {
 	}
 	if strings.Contains(string(mdBytes), "comments:") {
 		t.Error("issue .md still contains 'comments:' after migration")
+	}
+}
+
+// legacyMD renders an issue .md in the pre-sidecar frontmatter format, with
+// one inline comment per (author, body) pair. Every comment shares a
+// timestamp, so a repeated pair differs from its twin only by position.
+func legacyMD(id string, pairs [][2]string) string {
+	md := "---\n" +
+		"id: " + id + "\n" +
+		"title: legacy\n" +
+		"status: open\n" +
+		"type: task\n" +
+		"priority: 2\n" +
+		"created: 2026-06-01T10:00:00Z\n" +
+		"updated: 2026-06-01T10:00:00Z\n" +
+		"comments:\n"
+	for _, p := range pairs {
+		md += "  - author: " + p[0] + "\n" +
+			"    created: 2026-06-01T10:00:00Z\n" +
+			"    body: " + p[1] + "\n"
+	}
+	return md + "---\n"
+}
+
+// sidecarIDs returns the ids of every document in an issue's sidecar, in
+// append order — the raw stream, before replaces-chain resolution.
+func sidecarIDs(t *testing.T, s *Store, id string) []string {
+	t.Helper()
+	stream, err := readCommentStream(s.fs, s.commentsPath(id))
+	if err != nil {
+		t.Fatalf("readCommentStream: %v", err)
+	}
+	ids := make([]string, len(stream))
+	for i, c := range stream {
+		ids[i] = c.ID
+	}
+	return ids
+}
+
+// TestMigrateInlineComments_InterruptedRetry_NoDuplicates covers the crash
+// window inside migrateInlineComments. The migration appends every legacy
+// comment to the sidecar and only then rewrites the .md without the inline
+// list; the two halves are separately durable, so a failure between them
+// leaves the sidecar migrated and the .md unchanged. The next comment
+// mutation migrates again — and while the ids were random, that second pass
+// appended every comment a second time under fresh ids, which no reader could
+// collapse, so every comment came back twice.
+func TestMigrateInlineComments_InterruptedRetry_NoDuplicates(t *testing.T) {
+	s, m := newMemStore(t)
+
+	iss, err := unwrap(s.Create(CreateInput{Title: "legacy"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mdPath := s.filePath(iss.ID)
+	legacy := [][2]string{{"hans", "first"}, {"alice", "second"}}
+	if err := m.WriteAtomic(mdPath, []byte(legacyMD(iss.ID, legacy)), 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	// Interrupt the migration after the appends, before the .md rewrite.
+	diskFull := errors.New("no space left on device")
+	m.FailOn("WriteAtomic", mdPath, diskFull)
+
+	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); !errors.Is(err, diskFull) {
+		t.Fatalf("AddComment during interrupted migration: got %v, want %v", err, diskFull)
+	}
+
+	// The half-done state the retry has to cope with: sidecar written, .md
+	// still carrying the inline list. If either half ever changes, this test
+	// stops exercising the window it was written for, so assert both.
+	if got := len(sidecarIDs(t, s, iss.ID)); got != len(legacy) {
+		t.Fatalf("sidecar after interrupted migration = %d docs, want %d", got, len(legacy))
+	}
+	mdBytes, err := m.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(mdBytes), "comments:") {
+		t.Fatal("interrupted migration rewrote the .md; the crash window is not being exercised")
+	}
+
+	// The fault is consumed once it fires, so this retry reaches the .md.
+	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); err != nil {
+		t.Fatalf("AddComment after interrupted migration: %v", err)
+	}
+
+	// Each legacy comment must be readable exactly once, alongside the new one.
+	comments, err := s.Comments(iss.ID)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	bodies := map[string]int{}
+	for _, c := range comments {
+		bodies[strings.TrimSpace(c.Body)]++
+	}
+	for _, want := range []string{"first", "second", "new comment"} {
+		if bodies[want] != 1 {
+			t.Errorf("body %q appears %d times, want 1 (all: %v)", want, bodies[want], bodies)
+		}
+	}
+	if len(comments) != 3 {
+		t.Errorf("Comments = %d, want 3: %+v", len(comments), comments)
+	}
+
+	// The sidecar itself must hold no duplicate id: the retry has to skip what
+	// the interrupted attempt wrote, not merely resolve down to one comment.
+	ids := sidecarIDs(t, s, iss.ID)
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			t.Errorf("sidecar holds duplicate comment id %q: %v", id, ids)
+		}
+		seen[id] = true
+	}
+	if len(ids) != 3 {
+		t.Errorf("sidecar = %d docs, want 3: %v", len(ids), ids)
+	}
+
+	// The migration completed on the retry.
+	mdBytes, err = m.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(mdBytes), "comments:") {
+		t.Error("issue .md still contains 'comments:' after the retry")
+	}
+}
+
+// TestMigrateInlineComments_IdenticalComments_BothSurvive verifies that two
+// legacy comments identical in author, timestamp and body still migrate to
+// distinct ids. Position is part of the derivation for exactly this case:
+// without it the second would collide with the first and be skipped as
+// already-migrated, silently dropping a comment.
+func TestMigrateInlineComments_IdenticalComments_BothSurvive(t *testing.T) {
+	s, m := newMemStore(t)
+
+	iss, err := unwrap(s.Create(CreateInput{Title: "legacy"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	twins := [][2]string{{"hans", "same text"}, {"hans", "same text"}}
+	if err := m.WriteAtomic(s.filePath(iss.ID), []byte(legacyMD(iss.ID, twins)), 0o644); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+
+	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	comments, err := s.Comments(iss.ID)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	var same int
+	for _, c := range comments {
+		if strings.TrimSpace(c.Body) == "same text" {
+			same++
+		}
+	}
+	if same != 2 {
+		t.Errorf("identical legacy comments = %d after migration, want 2: %+v", same, comments)
+	}
+}
+
+// TestMigratedCommentID_StableAndWellFormed checks the two properties the
+// retry skip rests on — the id is a pure function of the legacy comment and
+// its position, and distinct inputs give distinct ids — plus the shape
+// TASK-STORAGE-SPEC §4.4 requires of every comment id.
+func TestMigratedCommentID_StableAndWellFormed(t *testing.T) {
+	lc := legacyComment{Author: "hans", Created: "2026-06-01T10:00:00Z", Body: "hello"}
+
+	first := migratedCommentID(lc, 0)
+	if again := migratedCommentID(lc, 0); again != first {
+		t.Errorf("migratedCommentID is not stable: %q then %q", first, again)
+	}
+	if next := migratedCommentID(lc, 1); next == first {
+		t.Errorf("index 0 and 1 produced the same id %q", first)
+	}
+	if want := regexp.MustCompile(`^[0-9a-z]{8}$`); !want.MatchString(first) {
+		t.Errorf("migratedCommentID = %q, want ^[0-9a-z]{8}$", first)
+	}
+
+	// Length-prefixing keeps a field boundary unambiguous: moving a character
+	// from the author into the body must change the id.
+	shifted := legacyComment{Author: "han", Created: lc.Created, Body: "shello"}
+	if migratedCommentID(shifted, 0) == first {
+		t.Error("a field-boundary shift produced the same id")
 	}
 }
 
