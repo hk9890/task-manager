@@ -33,10 +33,13 @@ package tasks
 //   - All disk access goes through the vfs.FS seam; no os import here.
 //   - resolveComments and sanitizeCommentBody are PURE: no FS, no os import.
 //   - newCommentID is pure: random, no stream read.
+//   - migratedCommentID is pure: content-derived, so a retried migration is
+//     idempotent (see migrateInlineComments).
 
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,6 +56,9 @@ const (
 	commentFileExt = ".yml"
 	// docSeparator is the multi-document YAML stream separator, at column 0.
 	docSeparator = "---\n"
+	// commentIDLen is the length of a comment id in base36 characters. Every
+	// producer must match TASK-STORAGE-SPEC §4.4's `^[0-9a-z]{8}$`.
+	commentIDLen = 8
 )
 
 // commentsPath returns the path to the sidecar file for issue id.
@@ -370,7 +376,48 @@ func sanitizeCommentBody(body string) string {
 // matching ^[0-9a-z]{8}$. It does NOT read the stream; per-issue collisions
 // are negligible given the ~36^8 keyspace.
 func newCommentID() string {
-	return randToken(8)
+	return randToken(commentIDLen)
+}
+
+// migratedCommentID returns the sidecar id for one legacy inline comment,
+// derived from that comment's own content and its position in the frontmatter
+// list. It matches ^[0-9a-z]{8}$ like every other comment id.
+//
+// It is deliberately not newCommentID. migrateInlineComments appends every
+// comment to the sidecar before it rewrites the .md, and the two halves are
+// separately durable (TASK-STORAGE-SPEC §4.4 rule 7), so a crash between them
+// leaves the sidecar migrated while the .md still carries the inline list —
+// and the migration runs again on the next comment mutation. Random ids would
+// make the second run's documents look like new comments and every comment
+// would be read twice. A content-derived id lands on what the sidecar already
+// holds, which is what lets the migration skip it.
+//
+// index is part of the digest so two legacy comments identical in author,
+// timestamp and body still get distinct ids. It is stable across attempts
+// because the .md — and so the list it holds — is untouched until the final
+// write.
+//
+// The digest is FNV-1a, not a cryptographic hash: this is a dedup key for a
+// handful of comments on one issue, not a security boundary.
+//
+// This is a PURE function: no I/O.
+func migratedCommentID(lc legacyComment, index int) string {
+	h := fnv.New64a()
+	// Length-prefix each field so no two distinct legacy comments can produce
+	// the same byte stream (author "ab" + body "c" must not digest as "a" + "bc").
+	for _, f := range []string{lc.Author, lc.Created, lc.Body} {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(f), f)
+	}
+	_, _ = fmt.Fprintf(h, "#%d", index)
+
+	v := h.Sum64()
+	base := uint64(len(idAlphabet))
+	out := make([]byte, commentIDLen)
+	for i := range out {
+		out[i] = idAlphabet[v%base]
+		v /= base
+	}
+	return string(out)
 }
 
 // validateCommentBody verifies that a comment body, after sanitization, will
@@ -481,15 +528,37 @@ func (s *Store) migrateInlineComments(issueFilePath string) error {
 	}
 
 	// Append legacy comments to the sidecar, in order.
+	//
+	// The appends and the .md rewrite below are separately durable and there is
+	// no barrier between them, so an interrupted migration — a crash, a full
+	// disk — leaves the sidecar written and the .md still carrying the inline
+	// list. The next comment mutation on this issue migrates again. Both halves
+	// must therefore be idempotent: ids come from migratedCommentID rather than
+	// newCommentID, and an id the sidecar already holds is skipped instead of
+	// appended a second time. Without the skip a retry would grow the sidecar
+	// on every attempt; without the derived id the skip could not recognize
+	// what the previous attempt wrote.
 	sidecarPath := s.commentsPath(iss.ID)
-	for _, lc := range legacy {
+	existing, err := readCommentStream(s.fs, sidecarPath)
+	if err != nil {
+		return err
+	}
+	migrated := make(map[string]struct{}, len(existing))
+	for _, c := range existing {
+		migrated[c.ID] = struct{}{}
+	}
+	for i, lc := range legacy {
+		id := migratedCommentID(lc, i)
+		if _, done := migrated[id]; done {
+			continue // written by an earlier attempt that did not reach the .md
+		}
 		created, tsErr := parseTimestamp(lc.Created)
 		if tsErr != nil {
 			// Use a fallback time if the timestamp is unparseable.
 			created = s.now()
 		}
 		c := Comment{
-			ID:      newCommentID(),
+			ID:      id,
 			Author:  lc.Author,
 			Created: created,
 			Body:    sanitizeCommentBody(lc.Body),
@@ -497,16 +566,17 @@ func (s *Store) migrateInlineComments(issueFilePath string) error {
 		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {
 			return fmt.Errorf("migrate comment to sidecar: %w", err)
 		}
+		migrated[id] = struct{}{}
 	}
 
 	// Rewrite the issue .md to the same path (hot or closed/) without the
 	// inline comments field (Marshal now omits it). For closed files this is
 	// an internal migration-only rewrite, not a user mutation.
-	migrated, err := Marshal(iss)
+	out, err := Marshal(iss)
 	if err != nil {
 		return err
 	}
-	return s.fs.WriteAtomic(issueFilePath, migrated, 0o644)
+	return s.fs.WriteAtomic(issueFilePath, out, 0o644)
 }
 
 // issueFilePath returns the actual on-disk path for an issue's .md file,
