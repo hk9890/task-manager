@@ -160,3 +160,91 @@ func TestResolves_ModuleTagIsTheVersionShapeNotThePrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestResolves_Wildcard: a glob citation is checked against disk like any other.
+// The branch was reached by no test, so the gate would have accepted a wildcard
+// that matches nothing — exactly the rot it exists to catch.
+func TestResolves_Wildcard(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "cmd", "root.go"), "package cmd\n")
+	writeFile(t, filepath.Join(root, "sdk", "tasks", "store.go"), "package tasks\n")
+
+	live := []string{"cmd/*.go", "sdk/tasks/*.go", "cmd/root*"}
+	for _, token := range live {
+		if !resolves(root, token) {
+			t.Errorf("%q matches a file on disk and must be accepted", token)
+		}
+	}
+	dead := []string{"cmd/*.md", "cmd/nosuch-*.go", "sdk/absent/*.go"}
+	for _, token := range dead {
+		if resolves(root, token) {
+			t.Errorf("%q matches nothing on disk and must be reported", token)
+		}
+	}
+}
+
+// TestAnchorsOf_DuplicateHeadingsGetGitHubsSuffix: GitHub disambiguates a repeated
+// heading by appending -1, -2, … to the later slugs. Nothing repeated a heading in
+// the fixtures, so the rule was unasserted — and an off-by-one there makes the gate
+// reject valid links into any document with two identically named sections.
+func TestAnchorsOf_DuplicateHeadingsGetGitHubsSuffix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "page.md")
+	writeFile(t, path, strings.Join([]string{
+		"# Page",
+		"",
+		"## Conventions",
+		"",
+		"## Conventions",
+		"",
+		"## Conventions",
+	}, "\n"))
+
+	got := anchorsOf(path)
+	// The first occurrence keeps the bare slug; later ones are suffixed from 1.
+	for _, want := range []string{"conventions", "conventions-1", "conventions-2"} {
+		if !got[want] {
+			t.Errorf("anchor %q missing from %v", want, got)
+		}
+	}
+	// The numbering starts at the SECOND occurrence: a "-0" would mean the first
+	// heading was suffixed too, and a link to it would 404.
+	if got["conventions-0"] {
+		t.Errorf("anchor %q was minted; GitHub numbers duplicates from 1", "conventions-0")
+	}
+	if got["conventions-3"] {
+		t.Errorf("anchor %q was minted for three headings", "conventions-3")
+	}
+}
+
+// TestMarkdownFiles_CollectsTheRootFilesAndDocsTree: the function that decides
+// which documents the gate owns had no test, so the gate could have stopped
+// checking the root steering files — or stopped walking docs/ — and every run
+// would still have printed "no rot".
+func TestMarkdownFiles_CollectsTheRootFilesAndDocsTree(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "README.md"), "# readme\n")
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "# agents\n")
+	writeFile(t, filepath.Join(root, "docs", "TESTING.md"), "# testing\n")
+	writeFile(t, filepath.Join(root, "docs", "specs", "CLI-SPEC.md"), "# cli\n")
+	// Not owned: a non-Markdown file, a Markdown file nested outside docs/, and
+	// the copies a worktree under .claude/ holds of both.
+	writeFile(t, filepath.Join(root, "go.work"), "go 1.26\n")
+	writeFile(t, filepath.Join(root, "cmd", "notes.md"), "# not a doc\n")
+	writeFile(t, filepath.Join(root, ".claude", "worktrees", "wt", "README.md"), "# copy\n")
+	writeFile(t, filepath.Join(root, ".claude", "worktrees", "wt", "docs", "TESTING.md"), "# copy\n")
+
+	got, err := markdownFiles(root)
+	if err != nil {
+		t.Fatalf("markdownFiles: %v", err)
+	}
+
+	want := []string{"AGENTS.md", "README.md", "docs/TESTING.md", "docs/specs/CLI-SPEC.md"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("position %d = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}

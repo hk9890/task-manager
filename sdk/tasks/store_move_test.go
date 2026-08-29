@@ -301,6 +301,58 @@ func TestRenameCentral_Rejections(t *testing.T) {
 	}
 }
 
+// TestRenameCentral_RefusesAFolderTheRegistryDoesNotKnow covers the on-disk half
+// of the clash check. TestRenameCentral_Rejections covers only the registry-level
+// clash, where an entry already carries the new name; this is the other leftover
+// — a folder under stores/ with no entry pointing at it, which is exactly what an
+// interrupted rename or promote leaves behind.
+//
+// Without the guard the rename moves a live store onto that folder and the files
+// already there are the destination MoveTree refuses, or worse, silently mixes.
+func TestRenameCentral_RefusesAFolderTheRegistryDoesNotKnow(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/a", "/dev/a/.tasks", "aaa")
+	if _, err := moveToCentralWith("/dev/a", "a", m, fakeEnv(nil), nil); err != nil {
+		t.Fatalf("promote a: %v", err)
+	}
+
+	// An orphaned folder: on disk under stores/, named by no registry entry.
+	orphan := storeDirFor("leftover")
+	if err := m.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatalf("seed the orphaned folder: %v", err)
+	}
+
+	if _, err := renameCentralWith("a", "leftover", m, fakeEnv(nil)); !errors.Is(err, ErrStoreExists) {
+		t.Errorf("rename onto an orphaned folder: got %v, want ErrStoreExists", err)
+	}
+	// The refusal must leave the store where it was.
+	if _, err := m.Stat(storeDirFor("a")); err != nil {
+		t.Errorf("store a must survive a refused rename: %v", err)
+	}
+}
+
+// TestMoveToCentral_RefusesAFolderTheRegistryDoesNotKnow is the sibling guard in
+// the promote path. It shares its shape with the rename guard above and fails the
+// same way: a promote onto a leftover folder would put a live store on top of
+// files nothing accounts for.
+func TestMoveToCentral_RefusesAFolderTheRegistryDoesNotKnow(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/dev/proj", "/dev/proj/.tasks", "prj")
+
+	orphan := storeDirFor("proj")
+	if err := m.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatalf("seed the orphaned folder: %v", err)
+	}
+
+	if _, err := moveToCentralWith("/dev/proj", "proj", m, fakeEnv(nil), nil); !errors.Is(err, ErrStoreExists) {
+		t.Errorf("promote onto an orphaned folder: got %v, want ErrStoreExists", err)
+	}
+	// The project store must still be where it started.
+	if _, err := m.Stat("/dev/proj/.tasks"); err != nil {
+		t.Errorf("the project store must survive a refused promote: %v", err)
+	}
+}
+
 func TestRelinkCentral_RepointsEntry(t *testing.T) {
 	m := vfs.NewMem()
 	makeStore(t, m, "/dev/oldhome", "/dev/oldhome/.tasks", "prj")

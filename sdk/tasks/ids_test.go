@@ -50,6 +50,28 @@ func TestIDStem_ParsesLegacyAndToken(t *testing.T) {
 	}
 }
 
+// TestValidIssueID_LengthBound pins maxIDLen at its exact value in both
+// directions. Nothing else exercises an ID at the limit: the only other
+// length assertion checks a 39-character allocated ID, which leaves the
+// comparison free to drift either way. A tightening makes every legal
+// 64-character ID unreadable — Unmarshal rejects a store file that is valid —
+// and a loosening lets an over-long ID into the store.
+func TestValidIssueID_LengthBound(t *testing.T) {
+	// "a" + "-" + token, sized so the whole ID is exactly maxIDLen.
+	atLimit := "a-" + strings.Repeat("b", maxIDLen-2)
+	overLimit := atLimit + "b"
+
+	if len(atLimit) != maxIDLen {
+		t.Fatalf("test setup: atLimit is %d chars, want maxIDLen %d", len(atLimit), maxIDLen)
+	}
+	if !validIssueID(atLimit) {
+		t.Errorf("validIssueID(<%d chars>) = false, want true — an ID at maxIDLen is legal", maxIDLen)
+	}
+	if validIssueID(overLimit) {
+		t.Errorf("validIssueID(<%d chars>) = true, want false — one over maxIDLen is not", len(overLimit))
+	}
+}
+
 // TestRandToken_LengthAndAlphabet checks length and alphabet.
 func TestRandToken_LengthAndAlphabet(t *testing.T) {
 	for _, n := range []int{1, 6, 12} {
