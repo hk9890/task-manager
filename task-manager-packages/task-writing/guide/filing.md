@@ -56,5 +56,8 @@ A finished body:
 
 A refusal names the section that is missing and writes nothing.
 
-Choosing the type, the rules a good body clears, and a template per type:
-taskmgr guide pkg:task-writing:types
+That is the whole of what this store requires to file. Nothing else needs reading
+first: `taskmgr guide pkg:task-writing:types` holds the fuller standard — how the
+types differ, the six rules a good body clears, a template per type — and it is
+worth a command when you are deciding *what* to write, not when you are writing
+it.
