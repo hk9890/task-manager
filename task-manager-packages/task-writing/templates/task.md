@@ -9,8 +9,7 @@ Inside     the question to answer or the step to take, and the OUTPUT that ends
 Not inside an open-ended "look into X". A task with no stopping condition never
            closes.
 
-A finished body to match the register is in taskmgr guide
-pkg:task-writing:bodies.
+A finished body to match the register is in taskmgr guide filing.
 
 Delete this comment block before filing.
 -->

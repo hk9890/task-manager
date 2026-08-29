@@ -78,37 +78,57 @@ func TestL4_TaskWritingPackage_LoadsAndContributesBothHalves(t *testing.T) {
 		t.Fatalf("the shipped package must load:\n%s", stdout)
 	}
 
-	guideOut, _, code := taskmgr(t, root, "guide", "pkg:task-writing:bodies")
+	guideOut, _, code := taskmgr(t, root, "guide", "pkg:task-writing:filing")
 	if code != 0 {
 		t.Fatalf("guide: exit %d", code)
 	}
-	if !strings.Contains(guideOut, "The four sections") {
-		t.Errorf("the package's guide fragment must be reachable by its topic:\n%s", guideOut)
+	if !strings.Contains(guideOut, "## Acceptance criteria") {
+		t.Errorf("the package's filing fragment must be reachable by its topic:\n%s", guideOut)
+	}
+	typesOut, _, code := taskmgr(t, root, "guide", "pkg:task-writing:types")
+	if code != 0 {
+		t.Fatalf("guide types: exit %d", code)
+	}
+	if !strings.Contains(typesOut, "The six rules") {
+		t.Errorf("the package's own topic must be reachable by its topic:\n%s", typesOut)
 	}
 }
 
-// The overview is what a caller injects, so this package's whole purpose rests on
-// its `overview:` fragment reaching it: the four section names, and the command
-// that explains them.
-func TestL4_TaskWritingPackage_StatesItselfInTheOverview(t *testing.T) {
+// This package's rule governs one job, so it rides inside that job rather than in
+// the overview: the caller about to file gets it from the command it was going to
+// run anyway, and the caller doing something else pays nothing for it.
+func TestL4_TaskWritingPackage_PutsItsRuleInTheFilingJob(t *testing.T) {
 	root := installShippedPackage(t)
+
+	filing, _, code := taskmgr(t, root, "guide", "filing")
+	if code != 0 {
+		t.Fatalf("guide filing: exit %d", code)
+	}
+	// One command has to be sufficient to file: the tool's mechanics and this
+	// store's rule, without a second fetch.
+	for _, want := range []string{
+		"## Filing an issue",        // the built-in job
+		"## Acceptance criteria",    // the rule the gate enforces
+		"From package task-writing", // and which of the two this is
+	} {
+		if !strings.Contains(filing, want) {
+			t.Errorf("guide filing must carry %q:\n%s", want, filing)
+		}
+	}
 
 	overview, _, code := taskmgr(t, root, "guide")
 	if code != 0 {
 		t.Fatalf("guide: exit %d", code)
 	}
-	for _, want := range []string{
-		"## Acceptance criteria",
-		"taskmgr guide pkg:task-writing:bodies",
-	} {
-		if !strings.Contains(overview, want) {
-			t.Errorf("the overview must carry %q so a caller learns the rule before it files:\n%s", want, overview)
-		}
+	// The job list says the rules exist, so a caller knows before it chooses —
+	// and carries none of the rule text, which is the whole economy of the list.
+	if !strings.Contains(overview, "this store adds rules (task-writing)") {
+		t.Errorf("the job list must mark filing as carrying this store's rules:\n%s", overview)
 	}
-	// The full standard stays behind its own command; inlining it here is what
-	// the overview exists to avoid.
-	if strings.Contains(overview, "The six rules") {
-		t.Error("the overview must point at the standard, not restate it")
+	for _, unwanted := range []string{"## Acceptance criteria", "The six rules"} {
+		if strings.Contains(overview, unwanted) {
+			t.Errorf("the job list must point at the rules, not restate them, but holds %q", unwanted)
+		}
 	}
 }
 

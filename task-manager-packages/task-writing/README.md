@@ -7,20 +7,23 @@ templates that shape it, and the gates that hold it.
 
 | Part | Effective id | What it does |
 |---|---|---|
-| Overview fragment | `pkg:task-writing:overview` | Lands in `taskmgr guide` itself, so every caller learns the four sections and where the standard is |
-| Guide section | `pkg:task-writing:bodies` | The standard in full — type contracts, what each section owns, the templates — fetched by name |
+| Guide section | `pkg:task-writing:filing` | The gate's rule, printed inside `taskmgr guide filing` — so it reaches the caller that is about to file, without a second command |
+| Guide section | `pkg:task-writing:types` | Choosing a type, the six rules a body clears, the templates — a job of its own, fetched by name |
 | Gate | `pkg:task-writing:body-sections` | Refuses a `bug`/`feature`/`chore`/`task` whose body skips a section |
 | Gate | `pkg:task-writing:epic-sections` | Refuses an `epic` without Context, Outcome, Success criteria |
 | Templates | — | `templates/<type>.md`, one per type, each with that type's contract at the top |
 
 Docs are never gated: a `doc` holds a document, not a path through work.
 
-The three parts are the point. A gate alone teaches by refusing, which costs a
-round trip per rule. The overview fragment states the rule to everyone who runs
-`taskmgr guide` — it is capped at 1 KiB, so it names the rule and the command that
-explains it, and stops. The guide section is that explanation, fetched by whoever
-is about to write a body. All of it ships in one directory at one version, so
-prose and gate cannot drift apart.
+The pairing is the point. A gate alone teaches by refusing, which costs a round
+trip per rule. Placing the prose into `filing` means an agent that runs one
+command — the one it was going to run anyway, before writing a body — already has
+the rule the gate will hold it to. All of it ships in one directory at one
+version, so prose and gate cannot drift apart.
+
+This package states no `overview:` fragment on purpose. Its rule governs one job,
+so it belongs in that job rather than in the text every caller receives whatever
+they came to do; the job's line in `taskmgr guide` says the store adds rules there.
 
 ## Install it
 
@@ -71,7 +74,7 @@ failure. For the strict behaviour instead, change both `exit 0` lines that print
 The check is structural. It sees that `## Acceptance criteria` is present with at
 least one `- [ ]` item — ticked as `- [x]` or `- [X]` counts — and it cannot see
 whether the criteria are any good. Clearing the gate is the floor. The bar is the
-wish test in `taskmgr guide pkg:task-writing:bodies`: can a competent stranger
+wish test in `taskmgr guide pkg:task-writing:types`: can a competent stranger
 open the issue, start without asking a question, and prove they are done without
 asking a second?
 

@@ -56,16 +56,15 @@ and the difference is when the reader gets it:
 ```
 doc-policy/
 ├── taskmgr-package.yaml
-├── guide/overview.md   ← everyone who runs `taskmgr guide` reads this
-├── guide/paths.md      ← read when someone asks for it
+├── guide/paths.md      ← arrives with `taskmgr guide filing`
 └── hooks/doc-path.sh
 ```
 
 ```yaml
 version: 1
-overview: ./guide/overview.md
 guide:
   - id: paths
+    into: filing
     file: ./guide/paths.md
 hooks:
   - id: doc-needs-path
@@ -75,22 +74,29 @@ hooks:
 ```
 
 ```bash
-taskmgr guide                       # the overview — your overview.md is in it
-taskmgr guide pkg:doc-policy:paths  # your full section
+taskmgr guide                       # the job list — `filing` is marked as having your rules
+taskmgr guide filing                # the job, with your section printed inside it
+taskmgr guide pkg:doc-policy:paths  # your section on its own
 taskmgr guide packages              # every package's text, and nothing built in
 ```
 
-**`overview:` is the one that matters.** `taskmgr guide` with no argument prints the
-overview, and that is what an agent injects into its own instructions before it does
-anything. Text you put there reaches every caller. Keep it to the rule and the command
-that explains it — the 1 KiB cap is there to make sure you do:
+**`into:` is the one to reach for.** `taskmgr guide` prints a list of jobs, and a caller
+about to file an issue runs `taskmgr guide filing`. A fragment placed into that job arrives
+with it, under a heading naming your package, so the reader gets your rule at the moment it
+is about to break it — and a caller doing something else pays nothing for it. Your job's
+line in the list says the store adds rules, so nobody has to guess that it does.
 
-> Every issue but a doc carries four sections, and a write without them is refused:
-> `## Context` `## Problem` `## Recommended action` `## Acceptance criteria`.
-> Read `taskmgr guide pkg:doc-policy:paths` before you write a body.
+Name the job you are adding to. If it does not exist in the version someone is running,
+your fragment is still reachable by its own id, the guide says so, and — this is the part
+that matters — **your hooks keep running**. A documentation mismatch never becomes a
+refused write.
 
-**`guide:` is where the explanation goes** — the contracts, the examples, the reasoning.
-It is capped at 8 KiB and costs nothing until someone asks for it by name.
+**`overview:` is for a rule with no job to hang it on**, one that governs every command in
+the store. `taskmgr guide` with no argument prints it to every caller, so it is capped at
+1 KiB, and a package that puts its only rule there is charging every caller for something
+most of them cannot use.
+
+Either way, a `guide:` fragment is capped at 8 KiB.
 
 The prose and the gate ship in one directory at one version, so they cannot drift apart.
 Write the fragment as instructions to whoever files the issue, and say what the gate will

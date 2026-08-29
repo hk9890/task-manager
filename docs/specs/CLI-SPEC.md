@@ -671,28 +671,39 @@ Idempotent.
 
 ### 5.1 Guide topics
 
-The guide is in named parts, and a caller takes the part it needs.
+The guide is in named parts, and a part is one **job** — filing an issue, finding
+work, recording progress, reading output in a script — never one concept. The
+reader arrives knowing what it is about to do and not which of this tool's ideas
+that touches, so a roster of concepts costs it a translation step and, in the
+measured case, a second fetch to correct the guess.
 
-**With no argument it prints the overview** — what the tool is, the roster of parts
-with the command that fetches each, and whatever the store's packages put in the
-overview themselves (HOOK-SPEC.md §3.7). Never the whole guide. The reader injects
-this output into its own instructions before it acts, so the no-argument form is
-the small constant every caller can afford, and it names what to fetch next; a
-caller that needs the filter language and one that needs the filing loop do not
-each pay for the other's sections.
+**With no argument it prints the job list**: which job maps to which command, the
+topics this store's packages own, and where the rest of the surface is. It carries
+no section text and no description of what the tool is. This is the one part every
+caller receives on every run whatever it came to do, and it is spent on routing
+because routing is the expensive part — the guide's own prose is a small fraction
+of a caller's context beside what it spends working out which parts it needs.
 
-The roster is **generated** from the sections the binary carries and the fragments
-the store's packages contribute. A part that exists is therefore always named, which
-is what makes fetch-on-demand safe: a caller can only ask for what the overview told
-it exists.
+The job list is **generated** from the sections the binary carries and the
+fragments this store's packages contribute, so a job cannot be added without being
+named. It is deliberately **not** the complete roster: `packages`, and a fragment a
+package placed into a job, are both reachable without being listed, because neither
+is a job anyone sets out to do. `--list` is the complete roster, and the job list
+names it.
 
 **With arguments it prints exactly the topics named**, in the order they were named
 — the caller composes the slice it wants rather than accepting this command's order.
 
+A job's output is meant to be **sufficient**: a caller that names one should not
+need a second. So the fragments a package placed into that job (HOOK-SPEC.md §3.7)
+print with it, after the built-in text, each under a heading naming its package —
+the reader has to be able to tell a convention of this store from a rule of the
+tool.
+
 | Topic | Selects |
 |---|---|
-| *(none)* | The overview: the roster, and the packages' overview fragments. |
-| a core id | One built-in section. `--list` is the roster as data. |
+| *(none)* | The job list, and the packages' overview fragments. |
+| a job id | One built-in section, then every package fragment placed into it. |
 | `pkg:<package>:<id>` | One package's fragment, its `overview` one included. |
 | `packages` | Every package fragment at once, and nothing built in. |
 
@@ -708,13 +719,22 @@ denies it the whole guide in order to report one missing part. HOOK-SPEC.md §3.
 states the rule this is the command surface for: fail-closed protects a write from
 running without its gate, and a guide is not a gate.
 
-Two consequences, both normative:
+Three consequences, all normative:
 
 - **An unknown core topic exits `1`.** No package can make one exist, so naming one
-  is only ever a mistake in the caller, catchable when it is written.
+  is only ever a mistake in the caller, catchable when it is written. The error
+  **suggests the job that holds what was asked for** when one is close — the names
+  callers guess are this tool's own words used elsewhere, so a caller reaching for
+  a command name (`ready`) or a concept the guide no longer files under (`model`)
+  lands on a near miss rather than a dead end.
 - **An unknown `pkg:` topic exits `0`** with a line saying it is not available here.
   Whether a package is installed is a property of the machine, so refusing would
   turn a colleague's missing install into a failed command.
+- **A placement naming no job exits `0`** and is reported in the job list, with the
+  fragment still reachable by its own id. A package whose prose names a job this
+  binary has since renamed is a documentation mismatch, and must stay one: failing
+  its manifest would stop its hooks, turning that mismatch into refused writes for
+  every store using it (HOOK-SPEC.md §3.7).
 
 ---
 
@@ -808,11 +828,12 @@ entry left. It is deliberately not a `packageDTO`: `status`, `hooks` and `guide`
 a package a configuration uses, and this one no longer does.
 
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
-`{id, kind, summary, package, scope, detail}`. `kind` is `core` for a section the
-binary owns and `package` for one a package contributes; `package` and `scope` name
-where a `package` row came from and are omitted for a `core` one; `detail` explains a
-fragment that could not be read. The rows are in print order, so the roster and the
-guide agree about sequence.
+`{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
+the binary owns and `package` for one a package contributes; `package` and `scope`
+name where a `package` row came from and are omitted for a `core` one; `into` is the
+job the fragment prints inside and is omitted when it declared none; `detail`
+explains a fragment that could not be read. The rows are in print order, so the
+roster and the guide agree about sequence.
 
 **`edgeResultDTO`** — emitted by `dep add`, `dep rm`, `rel add` and `rel rm`:
 `{op, from, to}`. `op` is one of `dep_add` | `dep_remove` | `rel_add` |

@@ -386,9 +386,12 @@ and the difference is *when the reader gets them*.
 ```yaml
 version: 1
 overview: ./guide/overview.md      # printed in the overview, every time
-guide:                             # printed when the topic is named
-  - id: bodies
-    file: ./guide/bodies.md
+guide:
+  - id: filing-rules               # printed inside the `filing` job, and by id
+    into: filing
+    file: ./guide/filing.md
+  - id: types                      # a job this package owns; printed when named
+    file: ./guide/types.md
 hooks:
   - id: body-sections
     event: pre-create
@@ -399,6 +402,24 @@ hooks:
 |---|---|---|
 | `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. `overview` is reserved (below). |
 | `file` | **yes** | The fragment, as a path **inside** the package directory. |
+| `into` | no | One built-in job this fragment also prints inside (CLI-SPEC.md §5.1). It **must not contain `:`**: it names a job, not an effective topic id. Omitted, the fragment is reachable only by its own id. |
+
+**Placing a fragment into a job.** A guide topic is one job, and what a job prints
+has to be sufficient — a caller that names one should not need a second. `into` is
+what lets a package hold that promise: its rules for filing arrive with `taskmgr
+guide filing`, after the built-in text and under a heading naming the package, so
+the caller never has to learn that a second topic existed. A fragment stays
+addressable by its own `pkg:<package>:<id>` either way; `into` adds a way to reach
+it and removes none. A package that owns a job outright declares no `into`, and its
+topic is listed alongside the built-in jobs.
+
+**An `into` that names no job is not an error.** Which jobs exist is a property of
+the binary, and this manifest is parsed on the **write path**: a package naming a
+job that has since been renamed would become broken (§3.4), and a broken package
+runs no hooks — so a documentation mismatch would become refused writes in every
+store that uses it. Only the *shape* of `into` is validated when the manifest
+loads. The guide resolves the target when it prints, reports one it cannot place,
+and exits `0`.
 
 **The `overview` fragment.** `overview: <file>` declares the fragment printed in
 the guide's overview — the part every caller receives, since it is what an
@@ -412,6 +433,14 @@ caller of the guide, including callers with no interest in the subject, so it ha
 room to state what the store expects and name the topic that explains it — and no
 room to explain it here. A package that needs more than that is describing a
 section, and `guide:` is where a section goes.
+
+**`overview:` or `into:`.** A rule that governs one job belongs in that job, via
+`into:`: it reaches the caller that is about to do the job, at the moment the rule
+is cheapest to learn, and costs nothing to the caller doing something else — the
+job's line in the list already says the store adds rules there. Reserve `overview:`
+for a rule with no single job to hang it on, one that governs every command in the
+store. A package placing its only rule in the overview is charging every caller for
+something most of them cannot use.
 
 **Why a package teaches as well as gates.** A gate teaches by refusing: the agent
 files, is denied, reads the reason, and retries. That loop works and costs a round

@@ -13,8 +13,7 @@ Not inside implementation, and "all children are closed" as the success
 An epic replaces Problem and Recommended action with Outcome and Success
 criteria. The gate pkg:task-writing:epic-sections checks for these four.
 
-A finished body to match the register is in taskmgr guide
-pkg:task-writing:bodies.
+A finished body to match the register is in taskmgr guide filing.
 
 Delete this comment block before filing.
 -->

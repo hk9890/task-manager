@@ -64,120 +64,90 @@ type guideSection struct {
 	text    string
 }
 
-// guideSections is the guide, in print order. The ids are the caller's stable
-// handle on a part of it, so they are named after what the part holds.
+// guideSections is the guide, in print order. A topic is one **job**, not one
+// concept, and that is the whole of its design: the reader arrives knowing what
+// it is about to do and not which of this tool's ideas that touches, so a roster
+// of concepts costs it a translation step and, measurably, a second fetch to
+// correct the guess. One job is therefore one command, and the answer it returns
+// is sufficient — a caller filing an issue should never need a second topic.
+//
+// The cost of that is duplication: filing and progress both explain the body,
+// because both need it. That is a maintenance cost paid once by whoever edits
+// this file, in place of a token cost paid by every caller on every run.
 var guideSections = []guideSection{
 	{
-		id:      "model",
-		summary: "types, statuses, priorities, the three edges, ready and blocked",
-		text: `## The model
+		id:      "filing",
+		summary: "file or edit an issue: types, priorities, edges, and the body",
+		text: `## Filing an issue
 
-Each issue has a type, a status, and a numeric priority:
+Only --title is required.
 
-  type      task (default) · bug · feature · epic · chore · doc
-  status    open · in_progress · blocked · deferred · closed
-  priority  0 critical · 1 high · 2 normal (default) · 3 low · 4 trivial
-
-Issues relate three ways:
-
-  parent      grouping under an epic (one parent per issue)
-  blocked-by  a hard dependency: the dependent is not "ready" until every
-              blocker is closed (enforced acyclic)
-  related     a non-blocking, symmetric link (set on one side, shown on both)
-
-Two views are derived from the dependency graph:
-
-  ready    open issues with no open blockers — what you can start now
-           (epics appear here too; add type != epic for leaf tasks only)
-  blocked  non-closed issues waiting on at least one open blocker
-
-Documents (type doc) never appear in either view — they are not work. They are
-otherwise ordinary issues: listed, searchable, closable, and linkable with
-related. Use them for design pages, session notes, handovers and reviews, and
-say which kind in a label (kind:design, kind:session, ...):
-
-  taskmgr create --title "Auth redesign" --type doc \
-      --label kind:design --description-file page.html
-  taskmgr rel add <doc-id> <task-id>
-
-A body of any size is accepted; large ones are stored beside the issue rather
-than in it. show truncates a long body and says so — use --json when you need
-all of it.
-
-IDs are opaque (e.g. rep-fev72z), not sequential. There is no way to derive one,
-so capture it from --json and reuse it:
-
-  id=$(taskmgr create --title "Schema" --type task --json | jq -r .id)
-`,
-	},
-	{
-		id:      "loop",
-		summary: "create, find work, record progress, wire relationships",
-		text: `## The core loop
-
-  # Create — only --title is required.
   taskmgr create --title "Add export endpoint" --type feature --priority 1
 
-  # Create with its place in the graph already set. --blocked-by and --label
-  # repeat; --parent takes one epic. Every id must already exist.
-  taskmgr create --title "Export UI" --type feature \
-      --parent <epic-id> --blocked-by <api-id> --label area:reports
+  type      task (default) · bug · feature · epic · chore · doc
+  priority  0 critical · 1 high · 2 normal (default) · 3 low · 4 trivial
+  status    open (default) · in_progress · blocked · deferred · closed
 
-  # Find work, then inspect one issue
-  taskmgr ready                 # actionable now, priority then age
-  taskmgr blocked               # what is waiting, and on what
-  taskmgr show <id>             # full detail: fields, edges, description, comments
+Three edges place an issue in the graph. Set them here when the other issue
+already exists, or add them later (taskmgr guide progress):
 
-  # Make progress
-  taskmgr update <id> --status in_progress
-  taskmgr comment add <id> "Chose ISO-8601 to match the reports module."
-  taskmgr close <id> --reason "shipped in <commit>"
+  --parent <epic-id>    grouping under an epic (one parent per issue)
+  --blocked-by <id>     a hard dependency, repeatable, enforced acyclic
+  --related <id>        a non-blocking, symmetric link
 
-  # Wire relationships after the fact
-  taskmgr dep add <dependent> <blocker>   # dependent becomes blocked by blocker
-  taskmgr rel add <a> <b>                 # symmetric related link
+IDs are opaque (e.g. rep-fev72z), not sequential. There is no way to derive or
+guess one, so capture it from --json and reuse it:
+
+  id=$(taskmgr create --title "Schema" --type task --json | jq -r .id)
 
 Filing a set that depends on itself: create in dependency order, because an id
-does not exist until its issue does. Take each id from --json (see "The model"),
-pass it to the next create as --parent or --blocked-by, and use dep add for an
-edge you only discover later.
-`,
-	},
-	{
-		id:      "body",
-		summary: "the one Markdown body, and how to write a multi-line one",
-		text: `## The description body
+does not exist until its issue does.
 
-Each issue has one Markdown description body — put acceptance criteria,
-instructions, and context there (there is no separate field for them).
+## The description body
 
---description "..." takes one inline string, fine for a single line. For a
-multi-line body, --description-file reads a path, or "-" reads stdin — feed it a
-heredoc so you do not fight shell quoting. The same pair works on create and
-update; comments take --file the same way.
+Each issue has one Markdown description body. Acceptance criteria, instructions
+and context all go in it — there is no separate field for any of them.
 
-  taskmgr update <id> --description-file - <<'EOF'
+--description takes one inline string, which is fine for a single line. For a
+multi-line body use --description-file, which reads a path, or "-" for stdin:
+
+  taskmgr create --title "Schema" --type task --description-file - <<'EOF'
   ## Acceptance criteria
   - [ ] UTF-8 with BOM
-  - [ ] ISO-8601 dates
   EOF
 
   taskmgr create --title "Schema" --description-file notes.md   # ...or a file
-  echo "scaffold pushed" | taskmgr comment add <id> --file -
 
-Do not rely on --description "a\nb" — the \n is stored literally. Use
---description-file - (or, inline, $'a\nb' ANSI-C quoting).
+Do not rely on --description "a\nb" — the \n is stored literally, as two
+characters. Use --description-file - or, inline, $'a\nb' ANSI-C quoting.
 
-update --description replaces the body — it does not append. To amend, run show,
-then resubmit the full modified text. Prefer close --reason over
-update --status closed so history explains itself. A mutation's --json echoes the
-issue's scalar fields but not the description or comments — run show to confirm.
+A body of any size is accepted; a large one is stored beside the issue rather
+than in it. show truncates a long body and says so — use --json for all of it.
+
+A document (type doc) is not work and never appears in ready or blocked. Use one
+for a design page, session notes or a handover, and say which kind in a label:
+
+  taskmgr create --title "Auth redesign" --type doc --label kind:design \
+      --description-file page.md
 `,
 	},
 	{
-		id:      "query",
-		summary: "the filter language: fields, operators, and what ~ matches",
-		text: `## Finding work with filters
+		id:      "finding",
+		summary: "find what to work on: the ready and blocked views, and filters",
+		text: `## Finding work
+
+Two views are derived from the dependency graph, not from the status field:
+
+  taskmgr ready     open issues with no open blockers — what you can start now
+  taskmgr blocked   non-closed issues waiting on at least one open blocker
+  taskmgr show <id> full detail: fields, edges, description, comments
+
+blocked is not the same as status == "blocked". An issue can be open and yet
+blocked, or carry the blocked status with no open blocker at all — the status is
+a label a person set, and the view is what the graph says. Epics appear in ready
+too; add type != epic for leaf tasks only. Documents appear in neither.
+
+## Filters
 
 taskmgr list -q '<expr>' selects issues with <field> <op> <value> predicates
 joined by && || ! and parentheses:
@@ -187,7 +157,7 @@ joined by && || ! and parentheses:
   taskmgr list -q 'ready && priority <= 2'
   taskmgr list --all -q 'closed > "2026-01-01"'
   taskmgr search export          # shorthand for: list -q 'text ~ "export"'
-  taskmgr search drill nav       # every word must match: text ~ "drill" && text ~ "nav"
+  taskmgr search drill nav       # every word must match
 
 Fields:    status, type, priority, assignee, creator, parent, label,
            text (id/title/description), created, updated, closed,
@@ -197,22 +167,65 @@ Values:    quote strings ("open"); numbers and dates are bare or quoted;
            quote multi-word values — text ~ "drill nav", not text ~ drill nav
 
 ~ matches a substring, not a whole word: text ~ "rate" also matches "separate".
-ready and blocked come from the dependency graph, not the status field — blocked
-is not the same as status == "blocked" (an issue can be open yet blocked, or
-carry the blocked status with no open blocker).
-
 Closed issues are excluded unless the expression selects them or you pass --all.
 taskmgr labels / statuses / types list the values actually in use.
 `,
 	},
 	{
-		id:      "output",
-		summary: "--json, exit codes, and where an error message goes",
+		id:      "progress",
+		summary: "record progress, wire edges, and close an issue",
+		text: `## Recording progress
+
+  taskmgr update <id> --status in_progress
+  taskmgr comment add <id> "Chose ISO-8601 to match the reports module."
+  echo "scaffold pushed" | taskmgr comment add <id> --file -
+  taskmgr close <id> --reason "shipped in <commit>"
+
+Prefer close --reason over update --status closed: close stamps the close time
+and moves the issue to the cold partition, and the reason is what explains the
+history to whoever reads it next.
+
+Closing an issue is what releases the ones it was blocking, so run taskmgr ready
+again afterwards to see what opened up.
+
+## Editing an issue that already exists
+
+update --description replaces the body — it does not append. To amend one, run
+show, take the text, and resubmit the whole modified body:
+
+  taskmgr show <id> --json | jq -r .description   # ...edit, then resubmit
+  taskmgr update <id> --description-file -
+
+A mutation's --json echoes the issue's scalar fields, but not the description and
+not the comments; run show to confirm those landed.
+
+Labels are edited by name, not by rewriting the set:
+
+  taskmgr update <id> --add-label area:reports --remove-label needs-triage
+
+## Wiring edges after the fact
+
+  taskmgr dep add <dependent> <blocker>   # dependent becomes blocked by blocker
+  taskmgr rel add <a> <b>                 # symmetric related link
+  taskmgr update <id> --parent <epic-id>
+`,
+	},
+	{
+		id:      "scripting",
+		summary: "--json, exit codes, and choosing which store to act on",
 		text: `## Output and exit conventions
 
-Add --json to any command for stable snake_case output — parse that, do not
+Add --json to any command for stable snake_case output — parse that, never
 scrape the human table. Exit 0 on success, non-zero on error; the message goes to
 stderr prefixed "taskmgr:" and names the offending field and the allowed values.
+
+## Which store a command acts on
+
+taskmgr acts on the project you run it from. It never fails on this, so ask:
+
+  taskmgr where                    which store resolves here, and why
+  taskmgr -C <path> ready          act on a project elsewhere
+  taskmgr --store-name <name> ready   act on a central store by its registry name
 `,
 	},
 }
@@ -238,70 +251,86 @@ func renderGuideSections(sections []guideSection) string {
 	return strings.Join(parts, "\n")
 }
 
-// guideOverviewHead is the fixed opening of the overview: what the tool is, and
-// the instruction to fetch before acting. The roster below it is generated, so a
-// section cannot be added without appearing here.
-const guideOverviewHead = `taskmgr — how to use it
+// guideOverviewHead is the fixed opening of the overview. It is two lines
+// because everything else it could say is a line the caller pays for and cannot
+// act on: what an issue tracker is, what this one is called, and what it is for
+// are all things the reader either knows or does not need.
+const guideOverviewHead = `taskmgr — file, find and finish issues from this CLI.
+Pick the job, run its command, then act.
 
-taskmgr is an issue tracker you drive entirely through this CLI: create issues,
-link them, find what is ready to work on, record progress. It acts on the project
-you run it from — taskmgr where reports which store that is, and -C <path> targets
-a project elsewhere.
-
-This is the overview. The guide itself is in parts, and each part is one command:
 `
 
-// guideOverviewTail closes the overview: the fetch-before-you-act table, the
-// reason it is worth the round trip, and where the rest of the surface lives.
-//
-// The table is imperative on purpose. An overview that only lists its parts is a
-// menu, and a caller under load skims a menu and proceeds on what it already
-// believes it knows — which for this tool is wrong in three specific ways it
-// cannot discover by guessing. Naming the command to run for each intent is what
-// makes an index behave like an instruction.
+// guideOverviewTail closes the overview with the surfaces that are not jobs.
 const guideOverviewTail = `
-Name several at once: taskmgr guide model loop.
-
-Read before you act:
-
-  filing or editing an issue    taskmgr guide model loop body packages
-  finding work to pick up       taskmgr guide model query
-  parsing output in a script    taskmgr guide output
-
-Read first; three things here cost a wasted attempt every time they are guessed:
-IDs are opaque and cannot be derived, --description stores a literal backslash-n,
-and this store can refuse a write for reasons only its own sections state.
-
-More:
-
-  taskmgr commands          machine catalog of every command (YAML; --json for JSON)
-  taskmgr <command> --help  one command's flags, usage, and an example
-  taskmgr guide --list      this roster as data (--json for JSON)
+  taskmgr commands          every command and flag, as a catalog
+  taskmgr <command> --help  one command
+  taskmgr guide --list      every topic, as data (--json)
 `
 
-// renderGuideOverview builds what an unqualified `taskmgr guide` prints: the
-// fixed head, the generated roster of core sections, the roster line for this
-// store's package sections, whatever those packages put in the overview itself,
-// and the fixed tail.
+// renderGuideOverview builds what an unqualified `taskmgr guide` prints: the job
+// list, and nothing else.
 //
-// The package half is why this is generated rather than written out. A caller
-// injecting the overview has to learn that this store expects something *and*
-// which command states it, and only the store can say that.
+// It is a **router**, not a summary. Measurement is what decided that: the
+// guide's own prose is about 2% of a session's tokens, while an agent that has
+// to work out which parts it needs spends roughly a quarter of the session
+// finding out. So the overview spends its lines on routing and none on teaching,
+// and every caller pays for it on every run.
+//
+// A package reaches this output in two ways, both generated. A fragment placed
+// into a built-in job marks that job's line, so a caller learns the store adds
+// rules at the moment it is choosing — without paying for the rules themselves,
+// which it is about to fetch anyway. A fragment the package owns outright gets
+// its own line, because a topic no line names is a topic nothing can reach.
 func renderGuideOverview(topics []tasks.GuideTopic) string {
 	var b strings.Builder
 	b.WriteString(guideOverviewHead)
 
+	into := make(map[string][]string)
+	for _, t := range topics {
+		if t.Overview || t.Into == "" {
+			continue
+		}
+		into[t.Into] = append(into[t.Into], t.Package)
+	}
+
 	w := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
 	for _, s := range guideSections {
-		_, _ = fmt.Fprintf(w, "  taskmgr guide %s\t%s\n", s.id, s.summary)
+		summary := s.summary
+		if pkgs := uniqueStrings(into[s.id]); len(pkgs) > 0 {
+			summary += fmt.Sprintf(" — this store adds rules (%s)", strings.Join(pkgs, ", "))
+		}
+		_, _ = fmt.Fprintf(w, "  taskmgr guide %s\t%s\n", s.id, summary)
 	}
-	_, _ = fmt.Fprintf(w, "  taskmgr guide %s\t%s\n", guidePackagesTopic, packagesSummary(topics))
 	_ = w.Flush()
 
-	// A package's overview fragment is printed whole, under the package's name.
-	// It is capped an order of magnitude tighter than a section (SDK
-	// MaxGuideOverviewBytes) precisely so it can appear here in every caller's
-	// context without crowding out the mechanics above.
+	// A package's own topic is a job this store has and the tool does not, so it
+	// belongs in the same list rather than behind a second command. It gets its
+	// own column block: an effective topic id is three times the width of a job
+	// id, and sharing a block would indent every job line to match it.
+	pw := tabwriter.NewWriter(&b, 0, 4, 2, ' ', 0)
+	for _, t := range topics {
+		if t.Overview || t.Into != "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(pw, "  taskmgr guide %s\t%s\n", t.ID, guidePackageSummary(t))
+	}
+	_ = pw.Flush()
+
+	// An `into:` naming a job that does not exist is reported, not hidden and not
+	// fatal: the fragment is still reachable by its own id, and saying so here is
+	// what tells the package's author that the placement was silently dropped.
+	if orphans := guideOrphans(topics); len(orphans) > 0 {
+		b.WriteString("\n")
+		for _, t := range orphans {
+			fmt.Fprintf(&b, "  (%s asks to print inside %q, which is not a topic here — fetch it by name)\n", t.ID, t.Into)
+		}
+	}
+
+	// The `overview:` fragment still reaches every caller. Placing a rule into a
+	// job is the better tool for one that only matters to that job — it arrives
+	// with the job, and costs nothing to a caller doing something else — but a
+	// store with a rule that governs *every* command has no job to hang it on,
+	// and this is where that goes. The 1 KiB cap is what keeps it affordable.
 	for _, t := range topics {
 		if !t.Overview {
 			continue
@@ -332,17 +361,40 @@ func renderGuideOverview(topics []tasks.GuideTopic) string {
 	return b.String()
 }
 
-// packagesSummary describes the `packages` roster line for this store, so a
-// caller can tell whether the topic is worth a command before spending one.
-func packagesSummary(topics []tasks.GuideTopic) string {
-	switch n := len(topics); n {
-	case 0:
-		return "what this store expects on top of the above (nothing here)"
-	case 1:
-		return "what this store expects on top of the above (1 section here)"
-	default:
-		return fmt.Sprintf("what this store expects on top of the above (%d sections here)", n)
+// guidePackageSummary is the roster line for a topic a package owns outright.
+func guidePackageSummary(t tasks.GuideTopic) string {
+	if t.Detail != "" {
+		return fmt.Sprintf("from package %s (unreadable: %s)", t.Package, t.Detail)
 	}
+	return fmt.Sprintf("from package %s", t.Package)
+}
+
+// guideOrphans lists the fragments whose `into:` names no built-in topic.
+func guideOrphans(topics []tasks.GuideTopic) []tasks.GuideTopic {
+	var out []tasks.GuideTopic
+	for _, t := range topics {
+		if t.Into == "" {
+			continue
+		}
+		if _, ok := coreSection(t.Into); !ok {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// uniqueStrings removes duplicates while keeping first-seen order.
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // indentLines prefixes every line of s, so a package's overview text sits under
@@ -409,21 +461,23 @@ type guideTopicDTO struct {
 	Summary string `json:"summary,omitempty"`
 	Package string `json:"package,omitempty"`
 	Scope   string `json:"scope,omitempty"`
+	Into    string `json:"into,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 }
 
 var guideCmd = &cobra.Command{
 	Use:   "guide [topic...]",
 	Short: "Print a short how-to for working with taskmgr (start here)",
-	Long: `Print a compact, workflow-shaped how-to for taskmgr: the issue model, the
-everyday command loop, the filter language in brief, and where to find more. It is
-the prose companion to "taskmgr commands" (the machine catalog) and is emitted by
-the binary, so it travels with the CLI.
+	Long: `Print a how-to for taskmgr, in parts, one part per job: filing an issue,
+finding work, recording progress, and reading output in a script. It is the prose
+companion to "taskmgr commands" (the machine catalog) and is emitted by the
+binary, so it travels with the CLI.
 
-With no arguments it prints everything, including any sections the packages this
-store uses contribute. Name one or more topics to print only those, and --list to
-see what the topics are. The topic "packages" selects every package-contributed
-section at once.
+With no arguments it prints the job list — which job maps to which command, and
+nothing else. Name a job to print it: one job is one command, and what it prints
+is meant to be sufficient, so the rules this store's packages add to that job
+print with it. --list gives every topic, the package ones included, and the topic
+"packages" selects every package-contributed section at once.
 
 This command never fails on the state of the machine: no store, an uninstalled
 package, an unreadable section — each is reported in the output and exits 0, so a
@@ -496,13 +550,69 @@ func guideOutput(args []string, topics []tasks.GuideTopic) (string, error) {
 			if !ok {
 				// A core topic that does not exist can never be made to exist by
 				// installing anything, so it is only ever a mistake in the
-				// caller — reported as one, at the moment it is written.
-				return "", fmt.Errorf("unknown guide topic %q: run taskmgr guide --list to see the topics", name)
+				// caller — reported as one, at the moment it is written. The
+				// suggestion is what makes that cheap to act on: the names that
+				// get guessed are the ones this tool uses elsewhere, so a caller
+				// reaching for a command name lands here with a near miss.
+				return "", fmt.Errorf("unknown guide topic %q: %srun taskmgr guide for the job list, or taskmgr guide --list for every topic",
+					name, guideSuggestion(name))
 			}
+			// A job is one command, and its answer has to be sufficient. So a
+			// package's rules for this job print here, after the built-in text —
+			// not behind a second topic the caller had no reason to know about.
 			parts = append(parts, s.text)
+			for _, t := range topics {
+				if t.Into == name {
+					parts = append(parts, renderGuideTopic(t))
+				}
+			}
 		}
 	}
 	return strings.Join(parts, "\n"), nil
+}
+
+// guideAliases maps a name a caller is likely to reach for onto the job that now
+// holds it. Two kinds are in here, and both were observed rather than imagined:
+// the five concept ids this guide carried before jobs replaced them, and the
+// command names that read like topics — an agent wanting to know what to work on
+// guessed "ready", which is a command and a query field but never was a topic.
+var guideAliases = map[string]string{
+	"model":  "filing",
+	"loop":   "filing",
+	"body":   "filing",
+	"query":  "finding",
+	"output": "scripting",
+
+	"create":  "filing",
+	"file":    "filing",
+	"ready":   "finding",
+	"blocked": "finding",
+	"list":    "finding",
+	"search":  "finding",
+	"update":  "progress",
+	"close":   "progress",
+	"comment": "progress",
+	"json":    "scripting",
+	"store":   "scripting",
+}
+
+// guideSuggestion names the topic a mistaken one probably meant, or "" when
+// nothing is close enough to be worth printing. A wrong suggestion costs the
+// reader a wasted fetch, so this stays deliberately literal: a known alias, or a
+// job whose id starts with what was typed.
+func guideSuggestion(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if to, ok := guideAliases[n]; ok {
+		return fmt.Sprintf("did you mean %q? ", to)
+	}
+	if n != "" {
+		for _, s := range guideSections {
+			if strings.HasPrefix(s.id, n) {
+				return fmt.Sprintf("did you mean %q? ", s.id)
+			}
+		}
+	}
+	return ""
 }
 
 // coreSection finds a core section by id.
@@ -529,13 +639,23 @@ func runGuideList(topics []tasks.GuideTopic) error {
 		Summary: fmt.Sprintf("every package section at once (%d here)", len(topics)),
 	})
 	for _, t := range topics {
-		row := guideTopicDTO{ID: t.ID, Kind: "package", Package: t.Package, Scope: t.Scope, Detail: t.Detail}
+		row := guideTopicDTO{ID: t.ID, Kind: "package", Package: t.Package, Scope: t.Scope, Into: t.Into, Detail: t.Detail}
 		row.Summary = fmt.Sprintf("contributed by package %s", t.Package)
 		if t.Overview {
 			// Say that this one arrives on its own: a caller that already has the
 			// overview has already read it, and does not need to spend a command.
 			row.Kind = "overview"
 			row.Summary = fmt.Sprintf("package %s, already printed in the overview", t.Package)
+		}
+		if t.Into != "" {
+			// Where a fragment prints is the thing a caller needs from this row:
+			// one placed into a job arrives with that job, so asking for it by id
+			// is a command it did not have to spend.
+			if _, ok := coreSection(t.Into); ok {
+				row.Summary = fmt.Sprintf("package %s, printed inside %q", t.Package, t.Into)
+			} else {
+				row.Summary = fmt.Sprintf("package %s, asks for %q which is not a topic here", t.Package, t.Into)
+			}
 		}
 		if t.Detail != "" {
 			row.Summary = "unreadable"

@@ -100,7 +100,7 @@ IFS=$old_ifs
 
 if [ -n "$missing" ]; then
   echo "task-writing: the description is missing:$missing"
-  echo "Run 'taskmgr guide pkg:task-writing:bodies' for what each section owns."
+  echo "Run 'taskmgr guide filing' for what each section owns."
   exit 1
 fi
 
