@@ -10,8 +10,7 @@ Not inside a diagnosis you have not verified. A confident wrong cause sends the
            implementer down it and costs more than no cause at all. If you have a
            hypothesis, mark it as one.
 
-A finished body to match the register is in taskmgr guide
-pkg:task-writing:bodies.
+A finished body to match the register is in taskmgr guide filing.
 
 Delete this comment block before filing.
 -->

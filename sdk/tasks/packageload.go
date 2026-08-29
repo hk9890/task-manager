@@ -462,6 +462,12 @@ type GuideTopic struct {
 	// belongs in the guide's overview rather than waiting to be asked for, and is
 	// held to the tighter MaxGuideOverviewBytes.
 	Overview bool
+	// Into is the built-in topic this fragment also prints inside, as the package
+	// declared it (GuideEntry.Into); empty when it declared none. The engine does
+	// not know which topics exist, so it neither validates nor resolves this —
+	// the caller printing the guide matches it against its own topics and reports
+	// one that names nothing.
+	Into string
 	// Package is the package that contributes the fragment.
 	Package string
 	// Scope is "global" or "store": which config file's `use:` list brought the
@@ -533,7 +539,7 @@ func guideTopics(fs vfs.FS, guide []packageGuide, infos []PackageInfo) []GuideTo
 	out := make([]GuideTopic, 0, len(guide))
 	for _, pg := range guide {
 		pkg := packageOfID(pg.id)
-		t := GuideTopic{ID: pg.id, Overview: pg.overview, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
+		t := GuideTopic{ID: pg.id, Overview: pg.overview, Into: pg.into, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
 		limit := MaxGuideFragmentBytes
 		if pg.overview {
 			limit = MaxGuideOverviewBytes

@@ -69,6 +69,31 @@ func TestGuideFromManifest_RejectsUnusableIDs(t *testing.T) {
 	}
 }
 
+// `into` names one built-in topic, so a ':' in it is the caller confusing it with
+// an effective topic id — caught here, where the manifest is written.
+func TestGuideFromManifest_RejectsAnIntoThatLooksLikeAnEffectiveID(t *testing.T) {
+	m := packageManifest{Guide: []GuideEntry{{ID: "rules", Into: "pkg:policy:filing", File: "g.md"}}}
+	_, err := guideFromManifest(m, "policy", "/p")
+	if err == nil || !strings.Contains(err.Error(), "must not contain") {
+		t.Fatalf("err = %v, want one containing %q", err, "must not contain")
+	}
+}
+
+// Whether the named topic exists is not this layer's question, and must not be:
+// the manifest is parsed on the write path, so a package naming a topic the
+// binary has since renamed would become broken — and a broken package runs no
+// hooks, turning a documentation mismatch into refused writes.
+func TestGuideFromManifest_CarriesAnUnknownIntoWithoutJudgingIt(t *testing.T) {
+	m := packageManifest{Guide: []GuideEntry{{ID: "rules", Into: "nosuchtopic", File: "g.md"}}}
+	got, err := guideFromManifest(m, "policy", "/p")
+	if err != nil {
+		t.Fatalf("an unresolvable into must not fail the manifest: %v", err)
+	}
+	if len(got) != 1 || got[0].into != "nosuchtopic" {
+		t.Fatalf("into must be carried verbatim, got %+v", got)
+	}
+}
+
 // The `overview:` key declares the fragment that reaches the guide's overview,
 // so it comes first and is marked — the two things that separate it from a
 // section a caller has to ask for.

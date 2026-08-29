@@ -233,7 +233,9 @@ apply, so a name or a directory a configured entry has already claimed is report
 ([HOOK-SPEC](HOOK-SPEC.md) §3.7), each with its text already read. A fragment with
 `Overview` set came from the manifest's `overview:` key: it belongs in the guide's
 overview rather than waiting to be asked for, and is held to the tighter
-`MaxGuideOverviewBytes`. It fails on neither
+`MaxGuideOverviewBytes`. `Into` is carried **verbatim and unresolved**: which topics
+exist is the front end's knowledge, not the engine's, so the caller printing the
+guide matches it against its own and reports one that names nothing. It fails on neither
 a package that will not load nor a fragment that cannot be read — an unreadable
 fragment is reported in its own `Detail` — because a caller asking for the guide is
 asking what it can learn, and answering nothing because one document is missing
@@ -408,14 +410,16 @@ type HookInfo struct {
 
 // GuideEntry is one guide section declared in a package manifest (HOOK-SPEC §3.7).
 type GuideEntry struct {
-    ID   string `yaml:"id,omitempty"` // effective topic is "pkg:<package>:<id>"; no ':' in it
-    File string `yaml:"file"`         // a path inside the package directory
+    ID   string `yaml:"id,omitempty"`   // effective topic is "pkg:<package>:<id>"; no ':' in it
+    File string `yaml:"file"`           // a path inside the package directory
+    Into string `yaml:"into,omitempty"` // a built-in topic it also prints inside; no ':' in it
 }
 
 // GuideTopic is one fragment with its text read.
 type GuideTopic struct {
     ID, Package, Scope string // ID is "pkg:<package>:<id>"; Scope is "global" | "store"
     Overview           bool   // the manifest's overview: fragment, not a guide: entry
+    Into               string // the topic it prints inside, verbatim and unresolved
     Path               string // the fragment file on this machine
     Text, Detail       string // the text, or why it could not be read — never both
     Truncated          bool   // cut to its cap, on a line boundary

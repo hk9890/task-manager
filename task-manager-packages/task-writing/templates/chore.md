@@ -8,8 +8,7 @@ Inside     what is untidy and the cost it imposes now; the shape afterwards; the
 Not inside a behaviour change smuggled along for the ride. The moment behaviour
            moves, it is a bug or a feature and gets its own issue.
 
-A finished body to match the register is in taskmgr guide
-pkg:task-writing:bodies.
+A finished body to match the register is in taskmgr guide filing.
 
 Delete this comment block before filing.
 -->

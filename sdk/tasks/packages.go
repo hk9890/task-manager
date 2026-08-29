@@ -291,6 +291,19 @@ type GuideEntry struct {
 	ID string `yaml:"id,omitempty"`
 	// File is the fragment, as a path inside the package directory.
 	File string `yaml:"file"`
+	// Into optionally names a built-in guide topic that this fragment prints
+	// inside, after that topic's own text. It is how a package adds its rules to
+	// a job the tool already defines, rather than making the caller fetch a
+	// second topic it had no reason to know exists. Empty leaves the fragment
+	// reachable only by its own effective topic id.
+	//
+	// Whether the named topic exists is deliberately **not** decided here. A
+	// manifest is parsed on the write path, so a package naming a topic this
+	// binary has since renamed would become broken — and a broken package runs
+	// no hooks, which would turn a documentation mismatch into refused writes.
+	// The guide resolves the target when it prints, and reports one it cannot
+	// place (HOOK-SPEC §3.7).
+	Into string `yaml:"into,omitempty"`
 }
 
 // packageGuide is one guide fragment read out of a manifest: the effective topic
@@ -302,6 +315,10 @@ type packageGuide struct {
 	// guide's overview rather than waiting to be asked for, and is capped at
 	// MaxGuideOverviewBytes instead of MaxGuideFragmentBytes.
 	overview bool
+	// into is the built-in topic the fragment prints inside, empty when the entry
+	// declared none. It is carried verbatim: this package cannot know which
+	// topics the binary defines.
+	into string
 }
 
 // guideFromManifest turns a parsed manifest into the guide fragments it
@@ -344,11 +361,20 @@ func guideFromManifest(m packageManifest, name, dir string) ([]packageGuide, err
 		}
 		seen[declared] = true
 
+		// Only the shape of `into` is checked here — a ':' would make it read as
+		// an effective topic id, which it is not. The target itself is resolved
+		// by the guide, for the reason GuideEntry.Into states.
+		into := strings.TrimSpace(g.Into)
+		if strings.Contains(into, packageIDSep) {
+			return nil, fmt.Errorf("package %s: guide %q: into %q must not contain %q (it names one built-in topic, not an effective topic id)",
+				name, declared, into, packageIDSep)
+		}
+
 		path, err := resolveGuideFile(g.File, dir)
 		if err != nil {
 			return nil, fmt.Errorf("package %s: guide %q: %w", name, declared, err)
 		}
-		out = append(out, packageGuide{id: packageGuideID(name, declared), path: path})
+		out = append(out, packageGuide{id: packageGuideID(name, declared), path: path, into: into})
 	}
 	return out, nil
 }

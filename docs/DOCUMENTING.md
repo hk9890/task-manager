@@ -63,18 +63,20 @@ filling the gap somewhere else.
   the output into its own instructions, so the guide is the skill, and a section it lacks
   is a step the caller hardcodes instead ([CLI-SPEC §5.1](specs/CLI-SPEC.md#51-guide-topics)).
 
-  Three things hold the size down in its place. **The bare command prints the overview,
-  never the whole guide** — the roster and where to go next — so what every caller pays
-  for is a constant that a new section does not move. The guide is **addressable**, so a
-  section costs only the callers that name it. And a section that is *this project's*
-  convention rather than taskmgr's belongs in a package's guide fragment
-  ([HOOK-SPEC §3.7](specs/HOOK-SPEC.md#37-guide-fragments)), not in the binary.
+  Three things hold the size down in its place. **The bare command prints the job list,
+  never the whole guide** — which job maps to which command, and nothing else — so what
+  every caller pays for is a constant that a new section does not move. The guide is
+  **addressable**, so a section costs only the callers that name it. And a section that is
+  *this project's* convention rather than taskmgr's belongs in a package's guide fragment
+  ([HOOK-SPEC §3.7](specs/HOOK-SPEC.md#37-guide-fragments)), placed into the job it
+  governs, not in the binary.
 
-  The budget that is actually scarce is therefore the **overview**, not the guide. A new
-  core section must be true of every store, name a mechanic of the CLI that a caller would
-  otherwise get wrong, and arrive with its id and one-line summary — the summary is what
-  lands in the overview, so it is the part to write carefully. Anything failing the first
-  test is a fragment.
+  The budget that is actually scarce is therefore the **job list**, not the guide. A new
+  core section must be a *job* someone sets out to do — not a concept the tool has — must
+  be true of every store, must name a mechanic of the CLI that a caller would otherwise
+  get wrong, and arrives with its id and one-line summary. The summary is the part that
+  lands in the job list, so it is the part to write carefully. Anything failing the first
+  two tests is a fragment.
 - **No prose command reference.** `taskmgr commands` is derived from the live command tree
   and cannot drift; `--help` carries the flags; [CLI-SPEC](specs/CLI-SPEC.md) is the
   normative contract. A fourth copy in a user-guide page would be the only one that could

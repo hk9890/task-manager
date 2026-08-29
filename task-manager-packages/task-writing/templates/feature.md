@@ -8,8 +8,7 @@ Not inside internal design that has not actually been decided. An invented
            structure reads as a requirement and the implementer will build it.
            State constraints instead, and let the design be made where it is made.
 
-A finished body to match the register is in taskmgr guide
-pkg:task-writing:bodies.
+A finished body to match the register is in taskmgr guide filing.
 
 Delete this comment block before filing.
 -->

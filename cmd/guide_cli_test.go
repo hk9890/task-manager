@@ -93,15 +93,22 @@ func TestL4_Guide_OverviewCarriesThePackageOverviewFragment(t *testing.T) {
 	if strings.Contains(stdout, "every bug names its repro") {
 		t.Error("a package's full section must not be inlined into the overview")
 	}
-	if !strings.Contains(stdout, "taskmgr guide packages") {
-		t.Error("the overview must name the command that fetches the package sections")
+	// A fragment the package owns outright is a job this store has and the tool
+	// does not, so the job list is where it has to appear: a topic no line names
+	// is a topic nothing can reach.
+	if !strings.Contains(stdout, "taskmgr guide pkg:policy:bodies") {
+		t.Errorf("the overview must name a package's own topic:\n%s", stdout)
 	}
 }
 
-// The roster is generated from the section table, so a section cannot be added
-// without the overview naming it — the failure that would make lazy loading a
-// trap, since a caller can only fetch what the overview told it exists.
-func TestL4_Guide_OverviewNamesEveryCoreSection(t *testing.T) {
+// The job list is generated from the section table, so a job cannot be added
+// without the overview naming it — the failure that would make fetch-on-demand a
+// trap, since a caller can only fetch what it was told exists.
+//
+// `packages` is deliberately not in it: it is a way of asking for every package
+// fragment at once, not a job anyone sets out to do. `--list` is the complete
+// roster, and the overview names that instead.
+func TestL4_Guide_OverviewNamesEveryJob(t *testing.T) {
 	root := initStoreWithGuidePackage(t, "gd", "body rules\n")
 
 	overview, _, code := taskmgr(t, root, "guide")
@@ -120,26 +127,29 @@ func TestL4_Guide_OverviewNamesEveryCoreSection(t *testing.T) {
 		t.Fatalf("guide --list --json: %v", err)
 	}
 	for _, r := range rows {
-		if r.Kind != "core" {
+		if r.Kind != "core" || r.ID == "packages" {
 			continue
 		}
 		if !strings.Contains(overview, "taskmgr guide "+r.ID) {
-			t.Errorf("the overview does not name core topic %q, so a caller cannot fetch it:\n%s", r.ID, overview)
+			t.Errorf("the overview does not name job %q, so a caller cannot fetch it:\n%s", r.ID, overview)
 		}
+	}
+	if !strings.Contains(overview, "taskmgr guide --list") {
+		t.Errorf("the overview must name the roster that holds what it does not:\n%s", overview)
 	}
 }
 
 func TestL4_Guide_TopicSelectsOneSection(t *testing.T) {
 	root := initStoreWithGuidePackage(t, "gd", "every bug names its repro.\n")
 
-	stdout, _, code := taskmgr(t, root, "guide", "query")
+	stdout, _, code := taskmgr(t, root, "guide", "finding")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0", code)
 	}
-	if !strings.Contains(stdout, "Finding work with filters") {
+	if !strings.Contains(stdout, "## Finding work") {
 		t.Error("the named topic must be printed")
 	}
-	if strings.Contains(stdout, "The core loop") {
+	if strings.Contains(stdout, "## Filing an issue") {
 		t.Error("naming one topic must not print the others — that is the point of naming it")
 	}
 }
@@ -157,7 +167,7 @@ func TestL4_Guide_PackagesTopicSelectsOnlyThePackageSections(t *testing.T) {
 	if !strings.Contains(stdout, "pkg:policy:bodies") || !strings.Contains(stdout, "From package policy") {
 		t.Errorf("each fragment must be printed under a heading naming its package:\n%s", stdout)
 	}
-	if strings.Contains(stdout, "## The model") {
+	if strings.Contains(stdout, "## Filing an issue") {
 		t.Error("the packages topic must not print core sections")
 	}
 }
@@ -179,7 +189,7 @@ func TestL4_GuideList_NamesCoreAndPackageTopics(t *testing.T) {
 	}
 	var sawCore, sawPackage bool
 	for _, r := range rows {
-		if r.ID == "model" && r.Kind == "core" {
+		if r.ID == "filing" && r.Kind == "core" {
 			sawCore = true
 		}
 		if r.ID == "pkg:policy:bodies" && r.Kind == "package" && r.Package == "policy" {
@@ -206,6 +216,125 @@ func TestL4_Guide_AnUnreadableFragmentDoesNotFailTheCommand(t *testing.T) {
 	}
 }
 
+// initStoreWithPlacedFragment creates a store whose package contributes one guide
+// fragment placed into the built-in topic `into`, and returns the project root.
+// It declares a hook as well, so a test can check that a placement the guide
+// cannot honour leaves the package's gate running.
+func initStoreWithPlacedFragment(t *testing.T, into, fragment string) string {
+	t.Helper()
+	root := t.TempDir()
+	if _, err := tasks.Init(root, "pl"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	pkg := filepath.Join(root, ".tasks", "packages", "policy")
+	if err := os.MkdirAll(filepath.Join(pkg, "guide"), 0o755); err != nil {
+		t.Fatalf("mkdir package: %v", err)
+	}
+	manifest := fmt.Sprintf(
+		"version: 1\nguide:\n    - id: rules\n      into: %s\n      file: ./guide/rules.md\nhooks:\n    - id: gate\n      event: pre-create\n      run: [\"/bin/true\"]\n",
+		into)
+	if err := os.WriteFile(filepath.Join(pkg, tasks.PackageManifestName), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pkg, "guide", "rules.md"), []byte(fragment), 0o644); err != nil {
+		t.Fatalf("write fragment: %v", err)
+	}
+	cfg := filepath.Join(root, ".tasks", "config.yaml")
+	if err := os.WriteFile(cfg, []byte("prefix: pl\nuse:\n    - path: packages/policy\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return root
+}
+
+// A job is one command, and what it prints has to be sufficient. A package's
+// rules for that job therefore arrive with it — the caller never learns that a
+// second topic existed, which is the round trip the placement removes.
+func TestL4_Guide_APlacedFragmentPrintsInsideItsJob(t *testing.T) {
+	root := initStoreWithPlacedFragment(t, "filing", "every bug names its repro.\n")
+
+	stdout, stderr, code := taskmgr(t, root, "guide", "filing")
+	if code != 0 {
+		t.Fatalf("guide filing: exit %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "## Filing an issue") {
+		t.Errorf("the job's own text must still be printed:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "every bug names its repro") {
+		t.Errorf("the placed fragment must print inside the job:\n%s", stdout)
+	}
+	// A reader has to be able to tell a store convention from a rule of the tool,
+	// and inside a built-in topic that distinction is the only thing separating
+	// them.
+	if !strings.Contains(stdout, "From package policy") {
+		t.Errorf("a placed fragment must carry its provenance:\n%s", stdout)
+	}
+	// Placement adds a way to reach it; it does not remove one.
+	byID, _, code := taskmgr(t, root, "guide", "pkg:policy:rules")
+	if code != 0 {
+		t.Fatalf("guide pkg:policy:rules: exit %d", code)
+	}
+	if !strings.Contains(byID, "every bug names its repro") {
+		t.Errorf("a placed fragment must stay addressable by its own id:\n%s", byID)
+	}
+	// The job line says the store adds rules, so a caller choosing a job knows
+	// before it spends the command.
+	overview, _, _ := taskmgr(t, root, "guide")
+	if !strings.Contains(overview, "this store adds rules") {
+		t.Errorf("the job list must mark a job a package adds rules to:\n%s", overview)
+	}
+}
+
+// A placement naming a topic this binary does not have is a documentation
+// mismatch, and it must stay one: reported, exit 0, fragment still reachable, and
+// above all the package's hooks still running. Failing the package here would
+// turn a renamed topic into refused writes for every store that uses it.
+func TestL4_Guide_APlacementIntoNothingIsReportedNotFatal(t *testing.T) {
+	root := initStoreWithPlacedFragment(t, "nosuchtopic", "every bug names its repro.\n")
+
+	stdout, stderr, code := taskmgr(t, root, "guide")
+	if code != 0 {
+		t.Fatalf("guide must exit 0 with an unplaceable fragment: exit %d\nstderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "nosuchtopic") || !strings.Contains(stdout, "not a topic here") {
+		t.Errorf("an unplaceable fragment must be reported in the output:\n%s", stdout)
+	}
+	byID, _, code := taskmgr(t, root, "guide", "pkg:policy:rules")
+	if code != 0 || !strings.Contains(byID, "every bug names its repro") {
+		t.Errorf("an unplaceable fragment must stay reachable by its own id: exit %d\n%s", code, byID)
+	}
+	// The gate is the half that must not be affected by any of this.
+	hooks, _, code := taskmgr(t, root, "hook", "list")
+	if code != 0 {
+		t.Fatalf("hook list: exit %d", code)
+	}
+	if !strings.Contains(hooks, "pkg:policy:gate") {
+		t.Errorf("the package's hooks must still run when its guide placement fails:\n%s", hooks)
+	}
+}
+
+// The names that get guessed are the ones this tool uses elsewhere: an agent
+// looking for what to work on reached for "ready", which is a command and a query
+// field but never a topic.
+func TestL4_Guide_AnUnknownTopicSuggestsTheJobThatHoldsIt(t *testing.T) {
+	root := t.TempDir()
+	for _, tc := range []struct{ typed, want string }{
+		{"ready", "finding"},
+		{"model", "filing"},
+		{"body", "filing"},
+		{"output", "scripting"},
+		{"fil", "filing"},
+	} {
+		_, stderr, code := taskmgr(t, root, "guide", tc.typed)
+		if code == 0 {
+			t.Errorf("guide %q must fail", tc.typed)
+			continue
+		}
+		if !strings.Contains(stderr, fmt.Sprintf("did you mean %q?", tc.want)) {
+			t.Errorf("guide %q: stderr must suggest %q, got %q", tc.typed, tc.want, stderr)
+		}
+	}
+}
+
 // A store that will not resolve is the ordinary case for this command — an agent
 // runs the guide before it knows where it is standing.
 func TestL4_Guide_Human(t *testing.T) {
@@ -214,19 +343,28 @@ func TestL4_Guide_Human(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("guide exit=%d stderr=%q", code, stderr)
 	}
-	// The overview names its parts and, above all, where the rest of the surface
-	// is. It no longer carries the sections themselves — those are one command
-	// each, which is the whole point of the roster it prints.
+	// The overview is a router: which job maps to which command, and where the
+	// rest of the surface is. It carries no section text at all.
 	for _, want := range []string{
-		"taskmgr guide model",
-		"taskmgr guide loop",
-		"taskmgr guide query",
-		"Read before you act",
+		"taskmgr guide filing",
+		"taskmgr guide finding",
+		"taskmgr guide progress",
+		"taskmgr guide scripting",
 		"taskmgr commands",
 		"taskmgr <command> --help",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("guide output missing %q\n---\n%s", want, stdout)
+		}
+	}
+	// The router pays for itself only by staying small: it is the one part every
+	// caller receives on every run, whatever it came to do.
+	if n := len(stdout); n > 1024 {
+		t.Errorf("the overview is %d bytes; it is paid on every invocation, so it stays under 1024\n---\n%s", n, stdout)
+	}
+	for _, unwanted := range []string{"## Filing an issue", "## Finding work", "--description-file"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("the overview must carry no section text, but holds %q", unwanted)
 		}
 	}
 }
@@ -244,7 +382,7 @@ func TestL4_Guide_JSON(t *testing.T) {
 	if strings.TrimSpace(obj["guide"]) == "" {
 		t.Errorf("guide --json: 'guide' field is empty; got keys %v", keysOf(obj))
 	}
-	if !strings.Contains(obj["guide"], "taskmgr guide model") {
+	if !strings.Contains(obj["guide"], "taskmgr guide filing") {
 		t.Errorf("guide --json: 'guide' text is not the overview")
 	}
 }

@@ -7,14 +7,24 @@ version: 1
 # holds: a body that skips a section is refused with the reason. Neither can
 # drift from the other — they ship in one directory, at one version.
 
-# The overview fragment reaches every caller that runs `taskmgr guide`, so it
-# states the rule and names the section that explains it — and stops there. The
-# 1 KiB cap is what keeps it that way.
-overview: ./guide/overview.md
-
+# This package states no `overview:` fragment, and the choice is deliberate. Its
+# rule governs one job — writing an issue body — so it belongs inside that job,
+# where it reaches the caller that is about to file and costs nothing to the
+# caller doing something else. The overview still says the job has extra rules,
+# because `into:` is what puts that marker on the job's line.
+#
+# An `overview:` fragment is for a rule with no job to hang it on: one that
+# governs every command in the store.
 guide:
-  - id: bodies
-    file: ./guide/bodies.md
+  # The gate's own rule, printed inside `taskmgr guide filing`.
+  - id: filing
+    into: filing
+    file: ./guide/filing.md
+
+  # Choosing a type, the six rules, the templates. A job of its own: it is read
+  # when deciding what to write, not when writing it.
+  - id: types
+    file: ./guide/types.md
 
 hooks:
   # Work types carry Context / Problem / Recommended action / Acceptance
