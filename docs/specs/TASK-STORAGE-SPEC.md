@@ -306,7 +306,7 @@ deleted: true
 
 | Field | Type | Required | Constraint |
 |---|---|---|---|
-| `id` | string | yes | A short random token, `^[0-9a-z]{8}$`, self-assigned on append **without reading the stream**. The ~36⁸ keyspace makes per-issue collisions negligible, so parallel branches never clash. Identifies the comment; ordering comes from position, not the id. |
+| `id` | string | yes | A short token, `^[0-9a-z]{8}$`. On an ordinary append it is random and self-assigned **without reading the stream**: the ~36⁸ keyspace makes per-issue collisions negligible, so parallel branches never clash. The legacy-inline migration is the one exception — it derives the id from the comment and reads the stream, so a retry is idempotent (rule 7). Identifies the comment; ordering comes from position, not the id. |
 | `author` | string | no | 0–128 chars; single line; no control characters. |
 | `created` | timestamp | yes | `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$` (§6). |
 | `replaces` | string | no | The `id` of an earlier comment (one appearing earlier in the stream) in the same issue that this document supersedes — used for both edits and deletes. |
@@ -321,7 +321,7 @@ deleted: true
    with an `O_APPEND` + `fsync` write under the store lock (§7), not the
    temp-file + `rename` used for every other file (the single exception to §6).
    Appending does not touch the task file.
-2. **Identity & ordering.** A comment's `id` is an opaque, stable random handle; it
+2. **Identity & ordering.** A comment's `id` is an opaque, stable handle; it
    carries no ordering. Documents are stored in chronological **append order**, so
    position — not the id — gives sequence.
 3. **Editing and deleting are append-with-`replaces`.** Comments are never changed
@@ -349,6 +349,30 @@ deleted: true
    and supported pattern. The sidecar always lives in `comments/<id>.yml`
    regardless of the task's state; only the task `.md` moves on close, so no
    sidecar path ever changes.
+
+7. **Migrating inline comments is idempotent.** A pre-sidecar task file carried
+   its comments inline in the frontmatter. A reader that touches such an issue
+   moves them: it appends each one to the sidecar, then rewrites the `.md`
+   without the inline list. Those two halves are **separately durable and have
+   no barrier between them** — the sidecar grows by append (rule 1) and the
+   `.md` by temp-file + rename (§6) — so an interruption between them leaves the
+   sidecar migrated while the `.md` still holds the inline list, and the next
+   touch migrates again.
+
+   The migration must therefore be repeatable without duplicating anything:
+
+   - The id of a migrated comment is **derived from that comment** — its author,
+     timestamp, body, and its position in the inline list — so every attempt
+     assigns the same id to the same comment. Position is part of the
+     derivation, so two inline comments identical in every field still migrate
+     to distinct ids and both survive.
+   - Before appending, the migration **reads the sidecar** and skips any id it
+     already holds. This is the sole read-before-append in the format; an
+     ordinary append never reads the stream (rule 2).
+
+   Deriving the id alone is not enough: a repeated append of the same id would
+   resolve to one comment for a reader, but would still grow the sidecar on
+   every attempt. Both halves are required.
 
 ### 4.5 Lock file — `.lock`
 
