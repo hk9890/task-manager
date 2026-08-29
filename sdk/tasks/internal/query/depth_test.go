@@ -92,6 +92,33 @@ func TestCompile_NestingDepth_Extreme(t *testing.T) {
 	}
 }
 
+// TestParse_FlatSiblingGroups_AreNotNesting proves the depth counter unwinds.
+//
+// Every other test in this file builds ONE straight chain, where the counter
+// only ever climbs — so a cap that had become a running budget of open
+// parentheses would give the same answers on all of them. This expression has
+// 300 sibling groups and a maximum nesting depth of one: it must parse. If the
+// deferred decrement in parsePrimary is dropped, the 257th group trips the cap
+// and a legitimate flat query is refused with a nesting error that has nothing
+// to do with nesting.
+func TestParse_FlatSiblingGroups_AreNotNesting(t *testing.T) {
+	const groups = 300
+	if groups <= 256 {
+		t.Fatalf("test setup: %d groups is under the cap and proves nothing", groups)
+	}
+
+	parts := make([]string, groups)
+	for i := range parts {
+		parts[i] = "(ready)"
+	}
+	expr := strings.Join(parts, " || ")
+
+	if _, err := query.Parse(expr); err != nil {
+		t.Errorf("Parse of %d flat sibling groups failed: %v\n"+
+			"nesting depth here is 1, so the depth counter is not unwinding", groups, err)
+	}
+}
+
 // TestParse_NestingDepth_ShallowStillWorks verifies ordinary nested expressions
 // (e.g. 5 levels) still parse fine after the depth-cap change.
 func TestParse_NestingDepth_ShallowStillWorks(t *testing.T) {

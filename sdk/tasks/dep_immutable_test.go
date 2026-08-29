@@ -144,15 +144,55 @@ func TestDep_AfterReopen_Succeeds(t *testing.T) {
 	}
 }
 
-// TestWriteIssue_DefenseInDepth_ClosedIssueNotResurrected verifies the
-// belt-and-braces guard in writeIssue: if an issue is in closed/, a direct
-// call to writeIssue must return ErrImmutable rather than silently writing to
-// the hot dir. This exercises the guard via the public AddDep path after the
-// early guard is in place (belt-and-braces: a second layer of protection).
+// TestWriteIssue_ClosedIssueRefused calls writeIssue directly with an issue
+// that lives in closed/, which is the only way to reach its defense-in-depth
+// guard (TASK-STORAGE-SPEC §5). Every public mutator passes getMutable first,
+// and that guard returns ErrImmutable before writeIssue is entered — so the
+// second layer is unreachable from outside the package, and the test below,
+// which drives AddDep/RemoveDep, never executes it.
 //
-// We test this via the same lifecycle crossing used above: close then try
-// AddDep. The early guard in AddDep fires first, and the defense-in-depth
-// guard in writeIssue backs it up. We verify neither write ends up in hot.
+// The guard exists for a future caller that skips getMutable. This test is what
+// makes it a checked promise rather than a comment.
+func TestWriteIssue_ClosedIssueRefused(t *testing.T) {
+	s, _ := newMemStore(t)
+
+	iss, err := unwrap(s.Create(CreateInput{Title: "to be closed"}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	closed, err := unwrap(s.Close(iss.ID, ""))
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The issue now lives in closed/. Writing it back into the hot partition
+	// would either duplicate it across both or silently resurrect it.
+	if err := s.writeIssue(closed); !errors.Is(err, ErrImmutable) {
+		t.Errorf("writeIssue on a closed issue: got %v, want ErrImmutable", err)
+	}
+
+	m := s.fs.(*vfs.Mem)
+	hotPath := "/.tasks/" + iss.ID + ".md"
+	if _, statErr := m.ReadFile(hotPath); statErr == nil {
+		t.Errorf("writeIssue wrote %s: the closed issue was resurrected into the hot partition", hotPath)
+	}
+
+	// The refusal must not have disturbed the closed copy either.
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatalf("Get after the refusal: %v", err)
+	}
+	if got.Status != StatusClosed {
+		t.Errorf("status = %q after a refused writeIssue, want closed", got.Status)
+	}
+}
+
+// TestWriteIssue_DefenseInDepth_ClosedIssueNotResurrected verifies the public
+// half of the same rule: AddDep and RemoveDep on a closed issue are refused, and
+// no hot-dir file is left behind.
+//
+// The refusal comes from the EARLY guard in getMutable, not from writeIssue —
+// TestWriteIssue_ClosedIssueRefused above covers the second layer directly.
 func TestWriteIssue_DefenseInDepth_ClosedIssueNotResurrected(t *testing.T) {
 	s, _ := newMemStore(t)
 

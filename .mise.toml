@@ -133,6 +133,30 @@ if [ "${COVERAGE%.*}" -lt "${COVERAGE_THRESHOLD:-75}" ]; then echo "FAIL: below 
 [tasks."test:coverage".env]
 CGO_ENABLED = "1"
 
+[tasks."test:coverage:summary"]
+description = "Per-package coverage for both modules, ranked least-covered first. Reports; gates nothing."
+run = """
+# Deliberately NOT part of `quality` or `quality:full`. A coverage floor invites
+# tests written to raise a number rather than to pin behaviour, which is the
+# failure mode this repository has already produced: three tests named for a
+# directory fsync that asserted only that the call returned nil. What the summary
+# is for is the other half — showing which lines no test executes at all, which
+# was invisible between audits.
+#
+# Coverage is a pointer, not a verdict: a covered line is a line that RAN, not one
+# whose behaviour anything asserted. Read a low number as a place to look.
+set -e
+for mod in . sdk; do
+  echo "── $mod ──"
+  ( cd "$mod" && go test -tags=integration -coverprofile=coverage.out -covermode=atomic ./... >/dev/null 2>&1 || true
+    go tool cover -func=coverage.out | awk '$1 != "total:" {print}' | sort -k3 -n | head -25
+    go tool cover -func=coverage.out | grep total:
+    rm -f coverage.out )
+done
+"""
+[tasks."test:coverage:summary".env]
+CGO_ENABLED = "1"
+
 # ---- gates -----------------------------------------------------------------
 
 [tasks."check:docs"]

@@ -14,114 +14,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// L2 tests for the four edge mutations: the blocked_by / related count bounds,
-// and the no-op contract shared by RemoveDep and RemoveRelated.
+// L2 tests for the four edge mutations: the no-op contract shared by RemoveDep
+// and RemoveRelated.
 //
-// The bounds half:
-// validate_fields_test.go proves validateFields rejects a 257th item; these
-// prove the STORE refuses it too. The edge mutations reach the FS through
-// writeFiles without passing validateAndIndex, so before validation moved to
-// that funnel the 257th AddDep was written to disk and only failed the next
-// time the issue was re-validated (TASK-STORAGE-SPEC §4 + §10).
+// The bounds half of this subject — that the STORE, not only validateFields,
+// refuses a 257th blocker or related edge — lives in edge_bounds_slow_test.go
+// behind the integration tag: filling a list to its limit through the public API
+// costs about 17 seconds for the pair, which is half the default suite.
 package tasks
 
 import (
 	"errors"
 	"testing"
 )
-
-// seedBlockers creates n issues and returns their IDs. Each is a valid target
-// for AddDep/AddRelated, which reject a reference to an issue that is absent.
-func seedBlockers(t *testing.T, s *Store, n int) []string {
-	t.Helper()
-	ids := make([]string, n)
-	for i := range ids {
-		iss, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
-		if err != nil {
-			t.Fatalf("Create blocker %d: %v", i, err)
-		}
-		ids[i] = iss.ID
-	}
-	return ids
-}
-
-// TestAddDep_AtBound_AcceptsThenRefuses verifies that AddDep fills blocked_by to
-// maxBlockedBy and then refuses the next one with a *ValidationError, leaving
-// the stored issue at the bound rather than one past it.
-func TestAddDep_AtBound_AcceptsThenRefuses(t *testing.T) {
-	s, _ := newMemStore(t)
-
-	dep, err := unwrap(s.Create(CreateInput{Title: "dependent"}))
-	if err != nil {
-		t.Fatalf("Create dependent: %v", err)
-	}
-	ids := seedBlockers(t, s, maxBlockedBy+1)
-
-	for i := 0; i < maxBlockedBy; i++ {
-		if err := s.AddDep(dep.ID, ids[i]); err != nil {
-			t.Fatalf("AddDep %d of %d: %v", i+1, maxBlockedBy, err)
-		}
-	}
-
-	err = s.AddDep(dep.ID, ids[maxBlockedBy])
-	if err == nil {
-		t.Fatalf("AddDep past the bound: expected a validation error, got nil")
-	}
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
-		t.Fatalf("AddDep past the bound: got %T (%v); want *ValidationError", err, err)
-	}
-	if ve.Field != "blocked_by" {
-		t.Errorf("error Field = %q; want %q", ve.Field, "blocked_by")
-	}
-
-	// The refusal must not have been written: re-read from the store.
-	got, err := s.Get(dep.ID)
-	if err != nil {
-		t.Fatalf("Get after refusal: %v", err)
-	}
-	if len(got.BlockedBy) != maxBlockedBy {
-		t.Errorf("stored blocked_by = %d; want %d (the refused edge was written)", len(got.BlockedBy), maxBlockedBy)
-	}
-}
-
-// TestAddRelated_AtBound_AcceptsThenRefuses is the related-edge peer of
-// TestAddDep_AtBound_AcceptsThenRefuses.
-func TestAddRelated_AtBound_AcceptsThenRefuses(t *testing.T) {
-	s, _ := newMemStore(t)
-
-	subject, err := unwrap(s.Create(CreateInput{Title: "subject"}))
-	if err != nil {
-		t.Fatalf("Create subject: %v", err)
-	}
-	ids := seedBlockers(t, s, maxRelated+1)
-
-	for i := 0; i < maxRelated; i++ {
-		if err := s.AddRelated(subject.ID, ids[i]); err != nil {
-			t.Fatalf("AddRelated %d of %d: %v", i+1, maxRelated, err)
-		}
-	}
-
-	err = s.AddRelated(subject.ID, ids[maxRelated])
-	if err == nil {
-		t.Fatalf("AddRelated past the bound: expected a validation error, got nil")
-	}
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
-		t.Fatalf("AddRelated past the bound: got %T (%v); want *ValidationError", err, err)
-	}
-	if ve.Field != "related" {
-		t.Errorf("error Field = %q; want %q", ve.Field, "related")
-	}
-
-	got, err := s.Get(subject.ID)
-	if err != nil {
-		t.Fatalf("Get after refusal: %v", err)
-	}
-	if len(got.Related) != maxRelated {
-		t.Errorf("stored related = %d; want %d (the refused edge was written)", len(got.Related), maxRelated)
-	}
-}
 
 // TestRemoveDep_Absent_WritesNothing verifies the no-op contract: removing a
 // blocker that is not present leaves Updated untouched and writes no file.

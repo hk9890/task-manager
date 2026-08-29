@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // baseIssue returns a minimal valid issue that can be mutated per test case.
@@ -126,6 +127,30 @@ func TestValidateFields_Constraints(t *testing.T) {
 			mutate:    func(i *Issue) { i.Title = strings.Repeat("日", 201) },
 			wantErr:   true,
 			wantField: "title",
+		},
+
+		// ── closed timestamp (§4: a closed issue carries a close time) ─────────
+		{
+			name:      "status closed with a zero closed timestamp",
+			mutate:    func(i *Issue) { i.Status = StatusClosed },
+			wantErr:   true,
+			wantField: "closed",
+		},
+		{
+			name: "status closed with a closed timestamp (accepted)",
+			mutate: func(i *Issue) {
+				i.Status = StatusClosed
+				i.Closed = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+			},
+			wantErr: false,
+		},
+		{
+			name: "an open issue needs no closed timestamp",
+			mutate: func(i *Issue) {
+				i.Status = StatusOpen
+				i.Closed = time.Time{}
+			},
+			wantErr: false,
 		},
 
 		// ── assignee ───────────────────────────────────────────────────────────

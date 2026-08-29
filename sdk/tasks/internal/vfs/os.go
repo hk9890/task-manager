@@ -23,6 +23,20 @@ import (
 	"path/filepath"
 )
 
+// fsyncDirFn is the seam every caller in this file goes through instead of
+// calling fsyncDir directly.
+//
+// A directory fsync leaves no trace an assertion can reach: the write succeeds
+// either way, the bytes read back either way, and the difference shows up only
+// as a lost file after a crash — which a test cannot stage. So the tests that
+// carried durability in their names asserted the only thing they could see,
+// that the call returned nil, and the fsync could be deleted with all of them
+// green. Routing through a variable makes "the parent directory was synced" an
+// observable event, and makes a failing fsync injectable.
+//
+// It is only ever reassigned by tests in this package (fsyncdir_internal_test.go).
+var fsyncDirFn = fsyncDir
+
 // fsyncDir opens the directory at dir, calls Sync, and closes it.
 // This ensures that a preceding rename or new-file creation is durable:
 // the directory entry itself must be flushed to disk so the operation
@@ -91,7 +105,7 @@ func (osFS) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	if err := os.Rename(tmpName, name); err != nil {
 		return fmt.Errorf("vfs.WriteAtomic rename: %w", err)
 	}
-	if err := fsyncDir(dir); err != nil {
+	if err := fsyncDirFn(dir); err != nil {
 		return fmt.Errorf("vfs.WriteAtomic fsyncDir: %w", err)
 	}
 	return nil
@@ -124,7 +138,7 @@ func (osFS) Append(name string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("vfs.Append close: %w", err)
 	}
 	if isNew {
-		if err := fsyncDir(filepath.Dir(name)); err != nil {
+		if err := fsyncDirFn(filepath.Dir(name)); err != nil {
 			return fmt.Errorf("vfs.Append fsyncDir: %w", err)
 		}
 	}
@@ -139,7 +153,7 @@ func (osFS) Rename(oldpath, newpath string) error {
 	// name is crash-durable. When src and dst are in different directories,
 	// both entries change; for the common (same-dir) case one fsync covers
 	// both. Cross-dir renames are not used by the store today.
-	if err := fsyncDir(filepath.Dir(newpath)); err != nil {
+	if err := fsyncDirFn(filepath.Dir(newpath)); err != nil {
 		return fmt.Errorf("vfs.Rename fsyncDir: %w", err)
 	}
 	return nil
@@ -156,7 +170,7 @@ func (osFS) MoveTree(src, dst string) error {
 	}
 	err := os.Rename(src, dst)
 	if err == nil {
-		if err := fsyncDir(filepath.Dir(dst)); err != nil {
+		if err := fsyncDirFn(filepath.Dir(dst)); err != nil {
 			return fmt.Errorf("vfs.MoveTree fsyncDir: %w", err)
 		}
 		return nil
@@ -171,7 +185,7 @@ func (osFS) MoveTree(src, dst string) error {
 	// a crash in between cannot leave neither copy on disk. copyTree fsyncs the
 	// files and the directories it creates, but not the parent it links dst
 	// into; the rename branch above gets this from its own fsyncDir.
-	if err := fsyncDir(filepath.Dir(dst)); err != nil {
+	if err := fsyncDirFn(filepath.Dir(dst)); err != nil {
 		return fmt.Errorf("vfs.MoveTree fsyncDir: %w", err)
 	}
 	if err := os.RemoveAll(src); err != nil {
@@ -211,7 +225,7 @@ func copyTree(src, dst string) error {
 		if err := os.Chmod(dst, fi.Mode().Perm()); err != nil {
 			return err
 		}
-		return fsyncDir(dst)
+		return fsyncDirFn(dst)
 	case fi.Mode().IsRegular():
 		return copyFile(src, dst, fi.Mode().Perm())
 	default:
