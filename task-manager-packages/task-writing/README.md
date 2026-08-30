@@ -10,6 +10,7 @@ templates that shape it, and the gates that hold it.
 | Guide section | `pkg:task-writing:filing` | The gate's rule, printed inside `taskmgr guide filing` — so it reaches the caller that is about to file, without a second command |
 | Guide section | `pkg:task-writing:types` | Choosing a type, the six rules a body clears, the templates — a job of its own, fetched by name |
 | Guide section | `pkg:task-writing:decomposing` | Turning a review, a plan or a spec into a set: grounding, one issue per what, real edges, approval before filing |
+| Guide section | `pkg:task-writing:closing` | Checking the acceptance criteria before the close, printed inside `taskmgr guide progress` — the job the caller is already in |
 | Gate | `pkg:task-writing:body-sections` | Refuses a `bug`/`feature`/`chore`/`task` whose body skips a section |
 | Gate | `pkg:task-writing:epic-sections` | Refuses an `epic` without Context, Outcome, Success criteria |
 | Templates | — | `templates/<type>.md`, one per type, each with that type's contract at the top |
@@ -22,9 +23,10 @@ command — the one it was going to run anyway, before writing a body — alread
 the rule the gate will hold it to. All of it ships in one directory at one
 version, so prose and gate cannot drift apart.
 
-This package states no `overview:` fragment on purpose. Its rule governs one job,
-so it belongs in that job rather than in the text every caller receives whatever
-they came to do; the job's line in `taskmgr guide` says the store adds rules there.
+This package states no `overview:` fragment on purpose. Each of its rules governs
+one job, so each belongs in that job rather than in the text every caller receives
+whatever they came to do; the job's line in `taskmgr guide` says the store adds
+rules there.
 
 ## Install it
 

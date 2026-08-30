@@ -7,11 +7,11 @@ version: 1
 # holds: a body that skips a section is refused with the reason. Neither can
 # drift from the other — they ship in one directory, at one version.
 
-# This package states no `overview:` fragment, and the choice is deliberate. Its
-# rule governs one job — writing an issue body — so it belongs inside that job,
-# where it reaches the caller that is about to file and costs nothing to the
-# caller doing something else. The overview still says the job has extra rules,
-# because `into:` is what puts that marker on the job's line.
+# This package states no `overview:` fragment, and the choice is deliberate. Each
+# of its rules governs one job — writing an issue body, closing an issue — so each
+# belongs inside that job, where it reaches the caller that is about to do it and
+# costs nothing to the caller doing something else. The overview still says the
+# job has extra rules, because `into:` is what puts that marker on the job's line.
 #
 # An `overview:` fragment is for a rule with no job to hang it on: one that
 # governs every command in the store.
@@ -31,6 +31,14 @@ guide:
   # the first body exists, so it belongs to no single create.
   - id: decomposing
     file: ./guide/decomposing.md
+
+  # Checking the acceptance criteria before the close, printed inside
+  # `taskmgr guide progress`. Not a job of its own: it is the last step of the
+  # job the caller is already in, and the close is where a body's criteria are
+  # finally spent.
+  - id: closing
+    into: progress
+    file: ./guide/closing.md
 
 hooks:
   # Work types carry Context / Problem / Recommended action / Acceptance
