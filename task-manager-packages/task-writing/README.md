@@ -9,6 +9,7 @@ templates that shape it, and the gates that hold it.
 |---|---|---|
 | Guide section | `pkg:task-writing:filing` | The gate's rule, printed inside `taskmgr guide filing` — so it reaches the caller that is about to file, without a second command |
 | Guide section | `pkg:task-writing:types` | Choosing a type, the six rules a body clears, the templates — a job of its own, fetched by name |
+| Guide section | `pkg:task-writing:decomposing` | Turning a review, a plan or a spec into a set: grounding, one issue per what, real edges, approval before filing |
 | Gate | `pkg:task-writing:body-sections` | Refuses a `bug`/`feature`/`chore`/`task` whose body skips a section |
 | Gate | `pkg:task-writing:epic-sections` | Refuses an `epic` without Context, Outcome, Success criteria |
 | Templates | — | `templates/<type>.md`, one per type, each with that type's contract at the top |

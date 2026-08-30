@@ -26,6 +26,12 @@ guide:
   - id: types
     file: ./guide/types.md
 
+  # Turning a review, a plan or a spec into a set: grounding, one issue per what,
+  # real edges, approval before filing. A job of its own — it is the work before
+  # the first body exists, so it belongs to no single create.
+  - id: decomposing
+    file: ./guide/decomposing.md
+
 hooks:
   # Work types carry Context / Problem / Recommended action / Acceptance
   # criteria. An epic carries a different four (its own hook, below) and a doc
