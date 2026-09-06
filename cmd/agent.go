@@ -23,6 +23,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -101,7 +102,19 @@ func envSet(v string) bool {
 // over detection and clears any detected session with it: the session id belongs
 // to the harness that published it, and pinning it to a different agent's name
 // would attribute the write to a session that never made it.
-func resolveActor(cmd *cobra.Command, name, agentFlag, sessionFlag string) tasks.Actor {
+//
+// A session with no agent is refused rather than stored. It would be a value no
+// reader can act on: the human view prints the provenance line only when there is
+// an agent to name, and `agent == ""` would class the issue as filed by a person
+// while `session == …` still matched it. The two are one fact, so the input that
+// carries half of it is a mistake worth naming.
+//
+// The two provenance values are trimmed here, matching what the store already does
+// to an issue's (buildIssue). The comment path writes what it is handed, so without
+// this `--agent "  "` would store nothing on a create and a quoted blank on a
+// comment. `name` is deliberately left alone — that is the pre-existing --author
+// behaviour, not this flag's.
+func resolveActor(cmd *cobra.Command, name, agentFlag, sessionFlag string) (tasks.Actor, error) {
 	agent, session := detectAgent(os.Getenv)
 	if cmd.Flags().Changed("agent") {
 		agent, session = agentFlag, ""
@@ -109,7 +122,11 @@ func resolveActor(cmd *cobra.Command, name, agentFlag, sessionFlag string) tasks
 	if cmd.Flags().Changed("session") {
 		session = sessionFlag
 	}
-	return tasks.Actor{Name: defaultUser(name), Agent: agent, Session: session}
+	agent, session = strings.TrimSpace(agent), strings.TrimSpace(session)
+	if agent == "" && session != "" {
+		return tasks.Actor{}, fmt.Errorf("--session names a session of no agent: pass --agent too, or drop it")
+	}
+	return tasks.Actor{Name: defaultUser(name), Agent: agent, Session: session}, nil
 }
 
 // addActorFlags registers the two provenance flags every write-with-an-author

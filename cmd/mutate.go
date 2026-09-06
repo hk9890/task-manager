@@ -337,7 +337,10 @@ var commentAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		by := resolveActor(cmd, commentAddFlags.author, commentAddFlags.agent, commentAddFlags.session)
+		by, err := resolveActor(cmd, commentAddFlags.author, commentAddFlags.agent, commentAddFlags.session)
+		if err != nil {
+			return err
+		}
 		c, err := s.AddComment(args[0], by, body)
 		if err != nil {
 			return err
@@ -370,7 +373,10 @@ var commentEditCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		by := resolveActor(cmd, commentEditFlags.author, commentEditFlags.agent, commentEditFlags.session)
+		by, err := resolveActor(cmd, commentEditFlags.author, commentEditFlags.agent, commentEditFlags.session)
+		if err != nil {
+			return err
+		}
 		c, err := s.EditComment(args[0], args[1], by, body)
 		if err != nil {
 			return err
@@ -392,7 +398,10 @@ var commentRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		by := resolveActor(cmd, commentRmFlags.author, commentRmFlags.agent, commentRmFlags.session)
+		by, err := resolveActor(cmd, commentRmFlags.author, commentRmFlags.agent, commentRmFlags.session)
+		if err != nil {
+			return err
+		}
 		if err := s.DeleteComment(args[0], args[1], by); err != nil {
 			return err
 		}

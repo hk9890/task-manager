@@ -214,6 +214,57 @@ func TestCreate_SessionFlagOverridesDetection(t *testing.T) {
 	}
 }
 
+// A session with no agent beside it is half a fact, and the half no reader can
+// act on. It is refused rather than stored.
+func TestCreate_SessionWithoutAgentIsRefused(t *testing.T) {
+	root := newStore(t)
+	setMarkers(t, nil)
+
+	out, errOut, code := run(t, "--dir", root, "create", "--title", "orphan session", "--session", "s-9")
+	if code == 0 {
+		t.Fatalf("expected a non-zero exit, got 0; stdout %q", out)
+	}
+	if !strings.Contains(errOut, "--session") {
+		t.Errorf("stderr does not name the offending flag: %q", errOut)
+	}
+	if out != "" {
+		t.Errorf("stdout must stay empty on an error, got %q", out)
+	}
+}
+
+func TestCommentAdd_SessionWithoutAgentIsRefused(t *testing.T) {
+	root := newStore(t)
+	setMarkers(t, map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s-1"})
+	id := createIssue(t, root)
+	setMarkers(t, nil)
+
+	if _, errOut, code := run(t, "--dir", root, "comment", "add", id, "note", "--session", "s-9"); code == 0 {
+		t.Fatalf("expected a non-zero exit, got 0; stderr %q", errOut)
+	}
+}
+
+// The store trims an issue's provenance; the comment path writes what it is
+// handed. Trimming in the CLI is what keeps the two commands agreeing.
+func TestProvenance_BlankFlagsAreTrimmedAway(t *testing.T) {
+	root := newStore(t)
+	setMarkers(t, map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s-1"})
+	id := createIssue(t, root, "--agent", "   ")
+
+	dto := showJSON(t, root, id)
+	if _, ok := dto["agent"]; ok {
+		t.Errorf("a whitespace-only --agent must store nothing, got %v", dto["agent"])
+	}
+
+	if _, errOut, code := run(t, "--dir", root, "comment", "add", id, "note", "--agent", "   "); code != 0 {
+		t.Fatalf("comment add: exit %d, stderr %q", code, errOut)
+	}
+	comments := showJSON(t, root, id)["comments"].([]any)
+	c := comments[0].(map[string]any)
+	if _, ok := c["agent"]; ok {
+		t.Errorf("a whitespace-only --agent must store nothing on a comment, got %v", c["agent"])
+	}
+}
+
 func TestCommentAdd_RecordsTheDetectedAgent(t *testing.T) {
 	root := newStore(t)
 	setMarkers(t, map[string]string{"CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s-1"})

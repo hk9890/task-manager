@@ -59,7 +59,11 @@ that is saying the opposite of what its presence would otherwise mean.
 explicit `--agent` clears any detected session with it — a session id belongs to the
 harness that published it, so carrying it over to another agent's name would attribute
 the write to a session that never made it. `TASKMGR_NO_AGENT` suppresses detection
-only; an explicit `--agent` still records what it names.
+only; an explicit `--agent` still records what it names. Both values are trimmed,
+and a `--session` that ends up with no agent beside it is **refused**: the two are
+one fact, and half of it is a value no reader can act on — the human view names a
+session only under its agent, and `agent == ""` would call the issue hand-filed
+while `session == …` still matched it.
 
 **Detection is inherited.** A marker reaches every descendant process, so a script an
 agent launched is recorded as that agent too. That is the intended reading — the write
@@ -662,13 +666,15 @@ The envelope is a JSON object (timestamps RFC3339):
   "title": "…", "type": "bug", "priority": 1,
   "status": "closed",             // any valid status; default open
   "assignee": "…", "creator": "…",
+  "agent": "…", "session": "…",   // optional; recorded verbatim, never detected (§1.1)
   "labels": ["ext:ext-1"],
   "parent": "<id>", "blocked_by": ["<id>"], "related": ["<id>"],
   "created_at": "2025-01-02T10:00:00Z",
   "updated_at": "2025-03-01T09:00:00Z",
   "closed_at": "2025-03-01T09:00:00Z", "close_reason": "fixed",
   "description": "markdown body",
-  "comments": [{"author": "alice", "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
+  "comments": [{"author": "alice", "agent": "…", "session": "…",
+                "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
 }
 ```
 

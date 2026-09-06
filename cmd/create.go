@@ -65,7 +65,10 @@ var createCmd = &cobra.Command{
 			desc = string(b)
 		}
 
-		by := resolveActor(cmd, createFlags.creator, createFlags.agent, createFlags.session)
+		by, err := resolveActor(cmd, createFlags.creator, createFlags.agent, createFlags.session)
+		if err != nil {
+			return err
+		}
 
 		in := tasks.CreateInput{
 			Title:       createFlags.title,

@@ -95,6 +95,8 @@ func issuesEqualIgnoringUpdated(a, b *Issue) bool {
 		a.Priority == b.Priority &&
 		a.Assignee == b.Assignee &&
 		a.Creator == b.Creator &&
+		a.Agent == b.Agent &&
+		a.Session == b.Session &&
 		a.Parent == b.Parent &&
 		a.Created.Equal(b.Created) &&
 		a.Closed.Equal(b.Closed) &&
