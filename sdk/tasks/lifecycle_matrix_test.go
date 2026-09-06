@@ -91,7 +91,7 @@ func prepareSubject(t *testing.T, s *tasks.Store, state lifecycleState) (subject
 	subjectID = subject.ID
 
 	// Add a comment so EditComment/DeleteComment have a target.
-	c, err := s.AddComment(subjectID, "setup", "initial comment")
+	c, err := s.AddComment(subjectID, tasks.Actor{Name: "setup"}, "initial comment")
 	if err != nil {
 		t.Fatalf("AddComment setup: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateOpen,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				_, err := s.AddComment(subjectID, "alice", "note on open")
+				_, err := s.AddComment(subjectID, tasks.Actor{Name: "alice"}, "note on open")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -521,7 +521,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
 				// AddComment on closed issue must succeed (sidecar-append exception).
-				_, err := s.AddComment(subjectID, "alice", "post-close note")
+				_, err := s.AddComment(subjectID, tasks.Actor{Name: "alice"}, "post-close note")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -553,7 +553,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateReopened,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				_, err := s.AddComment(subjectID, "alice", "note on reopened")
+				_, err := s.AddComment(subjectID, tasks.Actor{Name: "alice"}, "note on reopened")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -566,7 +566,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateOpen,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				_, err := s.EditComment(subjectID, commentID, "alice", "edited body")
+				_, err := s.EditComment(subjectID, commentID, tasks.Actor{Name: "alice"}, "edited body")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -576,7 +576,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateClosed,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				_, err := s.EditComment(subjectID, commentID, "alice", "edited on closed")
+				_, err := s.EditComment(subjectID, commentID, tasks.Actor{Name: "alice"}, "edited on closed")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -597,7 +597,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateReopened,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				_, err := s.EditComment(subjectID, commentID, "alice", "edited on reopened")
+				_, err := s.EditComment(subjectID, commentID, tasks.Actor{Name: "alice"}, "edited on reopened")
 				return err
 			},
 			wantErr: opResult{wantSuccess: true},
@@ -610,7 +610,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateOpen,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				return s.DeleteComment(subjectID, commentID, "alice")
+				return s.DeleteComment(subjectID, commentID, tasks.Actor{Name: "alice"})
 			},
 			wantErr: opResult{wantSuccess: true},
 		},
@@ -619,7 +619,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateClosed,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				return s.DeleteComment(subjectID, commentID, "alice")
+				return s.DeleteComment(subjectID, commentID, tasks.Actor{Name: "alice"})
 			},
 			wantErr: opResult{wantSuccess: true},
 			postCheck: func(t *testing.T, s *tasks.Store, subjectID string) {
@@ -639,7 +639,7 @@ func TestLifecycleMatrix_EveryOperationInEveryState(t *testing.T) {
 			state: stateReopened,
 			run: func(t *testing.T, s *tasks.Store, subjectID, blockerID, commentID string) error {
 				t.Helper()
-				return s.DeleteComment(subjectID, commentID, "alice")
+				return s.DeleteComment(subjectID, commentID, tasks.Actor{Name: "alice"})
 			},
 			wantErr: opResult{wantSuccess: true},
 		},

@@ -615,6 +615,7 @@ and is deliberately not reachable from the engine (the CLI imports the SDK, neve
   "id": "proj-0042", "title": "Fix drill navigation",
   "status": "closed", "type": "bug", "priority": 1,
   "assignee": "hans", "creator": "hans",
+  "agent": "claude-code", "session": "81735307-43f7-458b-a4c5-fe1602ffc6d6",
   "labels": ["area:details"],
   "parent": "proj-0007", "blocked_by": ["proj-0040"], "related": ["proj-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-13T09:00:00Z",
@@ -622,6 +623,13 @@ and is deliberately not reachable from the engine (the CLI imports the SDK, neve
   "description": "## Description\nDrilling a related issue should navigate fully."
 }
 ```
+
+`agent` and `session` carry the coding-agent provenance of the issue
+(TASK-STORAGE-SPEC §4.3), so a gate can hold agent-filed work to a different
+standard than what a person filed by hand. They describe the issue's **creation**,
+not the write that fired this event: on a `pre-close` they still name whichever
+session filed it. Both are absent when a person filed the issue directly, so a gate
+reading them must treat "no agent" as the ordinary case rather than a defect.
 
 **Derived relationships (`blocks`, `children`) are not included** — they need a store
 scan and most hooks don't use them. A hook that does can query the store itself (it has
@@ -647,6 +655,7 @@ open_children=$(taskmgr -C "$TASKMGR_STORE/.." list --json \
   "new": {
     "id": "proj-0050", "title": "Add export", "status": "open",
     "type": "feature", "priority": 2, "creator": "hans",
+    "agent": "claude-code", "session": "81735307-43f7-458b-a4c5-fe1602ffc6d6",
     "created": "2026-06-13T11:00:00Z", "updated": "2026-06-13T11:00:00Z",
     "description": "## Goal\nExport tasks as CSV.\n"
   }

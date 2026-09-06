@@ -544,7 +544,7 @@ func TestSpec_CLI_EdgeJSON_OpVocabulary(t *testing.T) {
 	}
 
 	// comment rm is the fifth of the family and carries its own key set.
-	cmt, err := s.AddComment(a.ID, "alice", "note")
+	cmt, err := s.AddComment(a.ID, tasks.Actor{Name: "alice"}, "note")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}

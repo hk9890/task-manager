@@ -70,6 +70,32 @@ a line saying so and still exits `0`.
   and an example rather than a bare error, and an unknown command suggests the closest
   match.
 
+## Who filed what
+
+An issue records the person it is attributed to (`creator`, defaulting to `$USER`) and,
+when a coding agent filed it on that person's behalf, which agent and which of its
+sessions. Comments record the same three for whoever wrote each one. Nobody passes them:
+`taskmgr` recognises Claude Code, Gemini CLI, Copilot CLI, Cursor, opencode, pi and Kiro
+from the environment those harnesses give the commands they run.
+
+That makes a session's work findable after the fact — which is the point, since a session
+is where an agent's reasoning lives and the tracker is what outlives it:
+
+```bash
+taskmgr list -q 'agent == "claude-code"'          # everything an agent filed
+taskmgr list -q 'agent == ""'                     # everything filed by hand
+taskmgr list --all --json -q 'session == "…"'     # one session's issues
+```
+
+A session id is only meaningful on the machine that produced it: it names a transcript
+there and nothing anywhere else. Treat it as a bookmark, not an identifier you can resolve
+elsewhere.
+
+Two knobs, both rarely needed. `TASKMGR_NO_AGENT=1` records the write as if a person made
+it. `--agent` and `--session` on `create` and the `comment` commands set the values
+outright — for a harness `taskmgr` does not recognise, or a wrapper that knows better than
+the environment does.
+
 ## Two things a script gets wrong
 
 - **Capture IDs; there is no way to derive one.** They are random tokens, so

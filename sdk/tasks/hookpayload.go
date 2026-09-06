@@ -44,6 +44,8 @@ type hookIssue struct {
 	Priority    int        `json:"priority"`
 	Assignee    string     `json:"assignee,omitempty"`
 	Creator     string     `json:"creator,omitempty"`
+	Agent       string     `json:"agent,omitempty"`
+	Session     string     `json:"session,omitempty"`
 	Labels      []string   `json:"labels,omitempty"`
 	Parent      string     `json:"parent,omitempty"`
 	BlockedBy   []string   `json:"blocked_by,omitempty"`
@@ -64,7 +66,8 @@ func toHookIssue(i *Issue) *hookIssue {
 	}
 	h := &hookIssue{
 		ID: i.ID, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
-		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator, Labels: i.Labels,
+		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator,
+		Agent: i.Agent, Session: i.Session, Labels: i.Labels,
 		Parent: i.Parent, BlockedBy: i.BlockedBy, Related: i.Related,
 		Created: i.Created, Updated: i.Updated, CloseReason: i.CloseReason,
 		Description: i.Description,

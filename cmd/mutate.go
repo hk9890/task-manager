@@ -266,15 +266,21 @@ var commentCmd = &cobra.Command{
 // variable none of their code mentions.
 var (
 	commentAddFlags struct {
-		author string
-		file   string
+		author  string
+		agent   string
+		session string
+		file    string
 	}
 	commentEditFlags struct {
-		author string
-		file   string
+		author  string
+		agent   string
+		session string
+		file    string
 	}
 	commentRmFlags struct {
-		author string
+		author  string
+		agent   string
+		session string
 	}
 )
 
@@ -331,8 +337,8 @@ var commentAddCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentAddFlags.author)
-		c, err := s.AddComment(args[0], author, body)
+		by := resolveActor(cmd, commentAddFlags.author, commentAddFlags.agent, commentAddFlags.session)
+		c, err := s.AddComment(args[0], by, body)
 		if err != nil {
 			return err
 		}
@@ -364,8 +370,8 @@ var commentEditCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentEditFlags.author)
-		c, err := s.EditComment(args[0], args[1], author, body)
+		by := resolveActor(cmd, commentEditFlags.author, commentEditFlags.agent, commentEditFlags.session)
+		c, err := s.EditComment(args[0], args[1], by, body)
 		if err != nil {
 			return err
 		}
@@ -386,8 +392,8 @@ var commentRmCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		author := defaultUser(commentRmFlags.author)
-		if err := s.DeleteComment(args[0], args[1], author); err != nil {
+		by := resolveActor(cmd, commentRmFlags.author, commentRmFlags.agent, commentRmFlags.session)
+		if err := s.DeleteComment(args[0], args[1], by); err != nil {
 			return err
 		}
 		if flagJSON {
@@ -468,12 +474,15 @@ func init() {
 	relCmd.AddCommand(relAddCmd, relRmCmd)
 
 	commentAddCmd.Flags().StringVar(&commentAddFlags.author, "author", "", "comment author (default: $USER)")
+	addActorFlags(commentAddCmd, &commentAddFlags.agent, &commentAddFlags.session)
 	commentAddCmd.Flags().StringVar(&commentAddFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
 	commentEditCmd.Flags().StringVar(&commentEditFlags.author, "author", "", "comment author (default: $USER)")
+	addActorFlags(commentEditCmd, &commentEditFlags.agent, &commentEditFlags.session)
 	commentEditCmd.Flags().StringVar(&commentEditFlags.file, "file", "", `read body from a file ("-" for stdin)`)
 
 	commentRmCmd.Flags().StringVar(&commentRmFlags.author, "author", "", "comment author for tombstone (default: $USER)")
+	addActorFlags(commentRmCmd, &commentRmFlags.agent, &commentRmFlags.session)
 
 	commentCmd.AddCommand(commentAddCmd, commentEditCmd, commentRmCmd)
 

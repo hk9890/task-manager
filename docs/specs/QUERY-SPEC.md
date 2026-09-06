@@ -65,6 +65,8 @@ operator a field does not support is a parse error (§4).
 | `priority` | int | `==` `!=` `<` `<=` `>` `>=` | integer (`0`–`4` stored) |
 | `assignee` | string | `==` `!=` `~` | quoted or bareword |
 | `creator` | string | `==` `!=` `~` | quoted or bareword |
+| `agent` | string | `==` `!=` `~` | quoted or bareword |
+| `session` | string | `==` `!=` `~` | quoted or bareword |
 | `parent` | issue ID | `==` `!=` | an issue ID, e.g. `"proj-0007"`; `==` may be `""` (no parent) |
 | `label` | string set | `==` `!=` `~` | quoted or bareword |
 | `text` | virtual string | `~` | quoted or bareword |
@@ -83,6 +85,12 @@ operator a field does not support is a parse error (§4).
   matches none) instead of erroring.
 - **`assignee`** — `==` / `!=` exact; `~` case-insensitive substring.
 - **`creator`** — same as `assignee`: `==` / `!=` exact; `~` case-insensitive substring.
+- **`agent` / `session`** — same matching as `creator`, over the coding-agent
+  provenance recorded at creation (TASK-STORAGE-SPEC §4.3). Both are empty on an
+  issue a person filed directly, so `agent == ""` selects exactly those. Neither is
+  an enum: the set of agents is open, and a `session` is whatever its harness
+  published, so a value that matches nothing is a legal expression returning no
+  rows rather than an error.
 - **`label`** — the issue carries a *set* of labels. `label == "x"` is true iff the
   set contains exactly `"x"` (membership); `label != "x"` is its negation;
   `label ~ "x"` is true iff some label contains the case-insensitive substring `x`.

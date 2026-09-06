@@ -159,12 +159,20 @@ joined by && || ! and parentheses:
   taskmgr search export          # shorthand for: list -q 'text ~ "export"'
   taskmgr search drill nav       # every word must match
 
-Fields:    status, type, priority, assignee, creator, parent, label,
-           text (id/title/description), created, updated, closed,
+Fields:    status, type, priority, assignee, creator, agent, session,
+           parent, label, text (id/title/description),
+           created, updated, closed,
            and the booleans ready / blocked
 Operators: == != < <= > >= and ~ (case-insensitive substring)
 Values:    quote strings ("open"); numbers and dates are bare or quoted;
            quote multi-word values — text ~ "drill nav", not text ~ drill nav
+
+agent and session say which coding agent filed an issue, and in which of its
+sessions — taskmgr fills both in from your harness's environment, so you never
+pass them. Your own session id is what makes your work this session findable:
+
+  taskmgr list -q 'agent == "claude-code"'
+  taskmgr list --all -q 'session == "<this session's id>"'
 
 ~ matches a substring, not a whole word: text ~ "rate" also matches "separate".
 Closed issues are excluded unless the expression selects them or you pass --all.

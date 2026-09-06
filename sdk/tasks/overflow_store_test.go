@@ -821,10 +821,10 @@ func TestComments_CapEnforcedThroughStore(t *testing.T) {
 	s, _ := newMemStore(t)
 	iss := mustCreate(t, s, CreateInput{Title: "issue"})
 
-	if _, err := s.AddComment(iss.ID, "hans", strings.Repeat("c", MaxCommentBody+1)); err == nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "hans"}, strings.Repeat("c", MaxCommentBody+1)); err == nil {
 		t.Fatal("an oversized comment must be rejected")
 	}
-	if _, err := s.AddComment(iss.ID, "hans", "a normal comment"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "a normal comment"); err != nil {
 		t.Fatalf("a normal comment must still be accepted: %v", err)
 	}
 	// The rejected comment must not have been written.
@@ -859,7 +859,7 @@ func TestComments_MetadataReadsDoNotNeedTheSidecar(t *testing.T) {
 	if _, err := s.Comments(iss.ID); err != nil {
 		t.Errorf("Comments: %v", err)
 	}
-	if _, err := s.AddComment(iss.ID, "hans", "a note"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "a note"); err != nil {
 		t.Errorf("AddComment: %v", err)
 	}
 	// A duplicate-ID check reports "taken" without materializing the body.

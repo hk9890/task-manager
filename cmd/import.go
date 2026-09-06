@@ -46,6 +46,8 @@ type importEnvelope struct {
 	Status      string            `json:"status,omitempty"`
 	Assignee    string            `json:"assignee,omitempty"`
 	Creator     string            `json:"creator,omitempty"`
+	Agent       string            `json:"agent,omitempty"`
+	Session     string            `json:"session,omitempty"`
 	Labels      []string          `json:"labels,omitempty"`
 	Parent      string            `json:"parent,omitempty"`
 	BlockedBy   []string          `json:"blocked_by,omitempty"`
@@ -59,6 +61,8 @@ type importEnvelope struct {
 
 type commentEnvelope struct {
 	Author    string `json:"author,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Session   string `json:"session,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
 	Body      string `json:"body"`
 }
@@ -114,6 +118,8 @@ func (e importEnvelope) toInput() (tasks.ImportInput, error) {
 		Status:      tasks.Status(e.Status),
 		Assignee:    e.Assignee,
 		Creator:     e.Creator,
+		Agent:       e.Agent,
+		Session:     e.Session,
 		Labels:      e.Labels,
 		Parent:      e.Parent,
 		BlockedBy:   e.BlockedBy,
@@ -130,6 +136,8 @@ func (e importEnvelope) toInput() (tasks.ImportInput, error) {
 		}
 		in.Comments = append(in.Comments, tasks.ImportComment{
 			Author:  c.Author,
+			Agent:   c.Agent,
+			Session: c.Session,
 			Created: cCreated,
 			Body:    c.Body,
 		})

@@ -41,6 +41,8 @@ type frontmatter struct {
 	Priority    int        `yaml:"priority"`
 	Assignee    string     `yaml:"assignee,omitempty"`
 	Creator     string     `yaml:"creator,omitempty"`
+	Agent       string     `yaml:"agent,omitempty"`
+	Session     string     `yaml:"session,omitempty"`
 	Labels      []string   `yaml:"labels,omitempty"`
 	Parent      string     `yaml:"parent,omitempty"`
 	BlockedBy   []string   `yaml:"blocked_by,omitempty"`
@@ -70,6 +72,8 @@ type legacyFrontmatter struct {
 }
 
 // legacyComment is the old inline comment shape stored in frontmatter.
+// It predates agent provenance (TASK-STORAGE-SPEC §4.4 rule 8): a migrated comment
+// carries no agent or session, and none is invented for it.
 type legacyComment struct {
 	Author  string `yaml:"author,omitempty"`
 	Created string `yaml:"created"`
@@ -97,6 +101,8 @@ func Marshal(iss *Issue) ([]byte, error) {
 		Priority:     iss.Priority,
 		Assignee:     iss.Assignee,
 		Creator:      iss.Creator,
+		Agent:        iss.Agent,
+		Session:      iss.Session,
 		Labels:       iss.Labels,
 		Parent:       iss.Parent,
 		BlockedBy:    iss.BlockedBy,
@@ -182,6 +188,8 @@ func unmarshalWithLegacy(data []byte) (*Issue, []legacyComment, error) {
 		Priority:     fm.Priority,
 		Assignee:     fm.Assignee,
 		Creator:      fm.Creator,
+		Agent:        fm.Agent,
+		Session:      fm.Session,
 		Labels:       fm.Labels,
 		Parent:       fm.Parent,
 		BlockedBy:    fm.BlockedBy,

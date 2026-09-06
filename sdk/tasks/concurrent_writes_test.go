@@ -69,7 +69,7 @@ func TestConcurrentWrites_NoRace(t *testing.T) {
 			}
 
 			// Add a comment to seed-2.
-			if _, err := s.AddComment(seed2.ID, "bot", fmt.Sprintf("comment from worker %d", n)); err != nil {
+			if _, err := s.AddComment(seed2.ID, Actor{Name: "bot"}, fmt.Sprintf("comment from worker %d", n)); err != nil {
 				errs <- fmt.Errorf("worker %d AddComment: %w", n, err)
 				return
 			}

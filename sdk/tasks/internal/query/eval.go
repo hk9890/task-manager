@@ -181,7 +181,7 @@ func evalBare(n *BareNode, row Row) bool {
 // Per-field semantics follow QUERY-SPEC.md §2.
 func evalCmp(n *CmpNode, row Row) bool {
 	switch n.Field {
-	case "status", "type", "assignee", "creator", "parent":
+	case "status", "type", "assignee", "creator", "agent", "session", "parent":
 		return evalStringField(n, row)
 	case "label":
 		return evalLabelField(n, row)
@@ -198,7 +198,7 @@ func evalCmp(n *CmpNode, row Row) bool {
 	return true
 }
 
-// evalStringField handles status, type, assignee, parent:
+// evalStringField handles status, type, assignee, creator, agent, session, parent:
 //   - == / != are exact and case-sensitive
 //   - ~ is case-insensitive substring
 func evalStringField(n *CmpNode, row Row) bool {

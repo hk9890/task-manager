@@ -49,13 +49,15 @@ type issueSpec struct {
 	labels   []string
 	title    string
 	creator  string
+	agent    string
+	session  string
 	assignee string
 }
 
 // commentSpec holds the declarative description of one comment to add.
 type commentSpec struct {
 	issueID string
-	author  string
+	by      tasks.Actor
 	body    string
 }
 
@@ -116,6 +118,12 @@ func Creator(name string) Opt {
 	return func(s *issueSpec) { s.creator = name }
 }
 
+// Agent sets the coding agent and session that filed the issue (TASK-STORAGE-SPEC §4.3). Both are
+// set together because a session id without an agent names nothing.
+func Agent(agent, session string) Opt {
+	return func(s *issueSpec) { s.agent, s.session = agent, session }
+}
+
 // Assignee sets the assignee of the issue.
 func Assignee(name string) Opt {
 	return func(s *issueSpec) { s.assignee = name }
@@ -159,10 +167,17 @@ func (b *Builder) Closed(id string, opts ...Opt) *Builder {
 	return b
 }
 
-// Comment registers a comment to be added to the issue with issueID.
+// Comment registers a comment to be added to the issue with issueID, authored
+// by a person directly. Use CommentBy for one an agent wrote.
 func (b *Builder) Comment(issueID, author, body string) *Builder {
 	b.t.Helper()
-	b.comments = append(b.comments, commentSpec{issueID: issueID, author: author, body: body})
+	return b.CommentBy(issueID, tasks.Actor{Name: author}, body)
+}
+
+// CommentBy registers a comment with full provenance: author, agent and session.
+func (b *Builder) CommentBy(issueID string, by tasks.Actor, body string) *Builder {
+	b.t.Helper()
+	b.comments = append(b.comments, commentSpec{issueID: issueID, by: by, body: body})
 	return b
 }
 
@@ -195,6 +210,8 @@ func (b *Builder) materialize(s *tasks.Store) {
 			Priority: &p,
 			Labels:   spec.labels,
 			Creator:  spec.creator,
+			Agent:    spec.agent,
+			Session:  spec.session,
 			Assignee: spec.assignee,
 		}
 		res, err := s.Create(in)
@@ -237,7 +254,7 @@ func (b *Builder) materialize(s *tasks.Store) {
 
 	// Pass 3: add comments (AddComment now returns *Comment, not *Issue).
 	for _, cs := range b.comments {
-		if _, err := s.AddComment(cs.issueID, cs.author, cs.body); err != nil {
+		if _, err := s.AddComment(cs.issueID, cs.by, cs.body); err != nil {
 			b.t.Fatalf("storetest: AddComment(%q): %v", cs.issueID, err)
 		}
 	}
