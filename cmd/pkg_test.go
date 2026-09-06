@@ -30,7 +30,19 @@ import (
 // hooksYAML is the manifest body below `version: 1`.
 func writeCmdPackage(t *testing.T, dir, name, hooksYAML string) string {
 	t.Helper()
-	pkg := filepath.Join(dir, "packages", name)
+	return writeCmdPackageAt(t, filepath.Join(dir, "packages", name), hooksYAML)
+}
+
+// writeCmdHomePackage writes a package into an installed repository under a
+// taskmgr home — <home>/packages/<repo>/<name>, which is where a `name:` entry
+// resolves (HOOK-SPEC §3.5).
+func writeCmdHomePackage(t *testing.T, home, repo, name, hooksYAML string) string {
+	t.Helper()
+	return writeCmdPackageAt(t, filepath.Join(home, "packages", repo, name), hooksYAML)
+}
+
+func writeCmdPackageAt(t *testing.T, pkg, hooksYAML string) string {
+	t.Helper()
 	if err := os.MkdirAll(pkg, 0o755); err != nil {
 		t.Fatalf("mkdir package: %v", err)
 	}
@@ -47,7 +59,7 @@ func storeDataDir(root string) string { return filepath.Join(root, ".tasks") }
 func TestPackageAdd_ByNameAndList(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "doc-policy", `hooks:
+	writeCmdHomePackage(t, home, "repo", "doc-policy", `hooks:
   - id: gate
     event: pre-create
     run: ["/bin/true"]
@@ -106,7 +118,7 @@ func TestPackageAdd_MissingPackageIsWarnedAndListedMissing(t *testing.T) {
 	t.Setenv("TASKMGR_HOME", home)
 	// An installed package listed first, so the warning cannot come from reading
 	// some other entry's status.
-	writeCmdPackage(t, home, "installed", `hooks:
+	writeCmdHomePackage(t, home, "repo", "installed", `hooks:
   - id: gate
     event: pre-create
     run: ["/bin/true"]
@@ -168,7 +180,7 @@ func TestPackageAdd_RefusesADuplicate(t *testing.T) {
 func TestHookList_ShowsTheEffectiveChainInOrder(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "machine", `hooks:
+	writeCmdHomePackage(t, home, "repo", "machine", `hooks:
   - id: g
     event: pre-create
     run: ["/bin/true"]
@@ -232,7 +244,7 @@ func TestHookList_EmptyChainSaysSo(t *testing.T) {
 func TestPackageList_MarksAShadowedEntry(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "shared", `hooks:
+	writeCmdHomePackage(t, home, "repo", "shared", `hooks:
   - id: g
     event: pre-create
     run: ["/bin/true"]
@@ -456,7 +468,7 @@ func TestPackageRm_RemovesAnEntryThatWedgesTheStore(t *testing.T) {
 func TestPackageRm_MatchesAnEntryByWhatItResolvesTo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "doc-policy", `hooks:
+	writeCmdHomePackage(t, home, "repo", "doc-policy", `hooks:
   - id: gate
     event: pre-create
     run: ["/bin/true"]
@@ -487,7 +499,7 @@ func TestPackageRm_MatchesAnEntryByWhatItResolvesTo(t *testing.T) {
 func TestPackageRm_UnknownNameListsWhatTheFileUses(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "doc-policy", `hooks:
+	writeCmdHomePackage(t, home, "repo", "doc-policy", `hooks:
   - id: gate
     event: pre-create
     run: ["/bin/true"]
@@ -510,7 +522,7 @@ func TestPackageRm_UnknownNameListsWhatTheFileUses(t *testing.T) {
 func TestPackageRm_GlobalScope(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "machine", `hooks:
+	writeCmdHomePackage(t, home, "repo", "machine", `hooks:
   - id: g
     event: pre-create
     run: ["/bin/true"]

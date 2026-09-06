@@ -273,10 +273,18 @@ Clear one key, restoring its documented default. A read-only key exits `1`.
 ## 2.3 Hook packages
 
 A hook package is a directory holding a manifest and the scripts its hooks run
-(HOOK-SPEC §3.6). taskmgr never creates, downloads or extracts one: a package has a
-single owner, so authoring it is making a directory and writing a YAML file, with nothing
-for taskmgr to mediate. What these commands manage is the shared, lock-protected `use:`
-list, and the merged chain that no single file shows.
+(HOOK-SPEC §3.6). taskmgr never authors one and never extracts one: a package has a single
+owner, so writing it is making a directory and writing a YAML file, with nothing for
+taskmgr to mediate. What these commands manage is the shared, lock-protected `use:` list,
+the merged chain that no single file shows, and the **package repositories** a machine
+installs packages from (§2.4).
+
+Installing a package repository is the one thing here that reaches a network, and it does
+so by running `git clone`. That is a deliberate exception to "taskmgr never downloads a
+package", taken because distribution was otherwise a README convention that no `--help`
+could teach — and it is scoped so the invariant that matters survives: the network is
+reached at install time and never on the hook path, so resolving a `use:` entry during a
+`create` or a `close` still reads nothing but local directories (HOOK-SPEC §3.5).
 
 `taskmgr package` takes the same `--global` selector as `taskmgr config`, in either
 position, with the same two targets.
@@ -290,9 +298,15 @@ Append one entry to the target file's `use:` list.
 | `--path` | off | Treat the argument as a directory rather than a package name. The path resolves against the directory holding the config file — `.tasks/` for a store, the taskmgr home for `--global` — and must stay inside it; an absolute path exits `1` (HOOK-SPEC §3.5). |
 | `--global` | off | Act on the per-user config instead of the store's. |
 
-Without `--path` the argument is a package name, resolved to
-`<taskmgr home>/packages/<name>`. The two forms are separate because a reference states
-which it is rather than leaving a loader to guess (HOOK-SPEC §3.5).
+Without `--path` the argument is a package name, resolved against the installed package
+repositories: `<taskmgr home>/packages/<repo>/<name>`, for whichever repository provides
+that name (HOOK-SPEC §3.5). The two forms are separate because a reference states which it
+is rather than leaving a loader to guess.
+
+A name **two** installed repositories provide exits `1`, naming both, rather than
+resolving by an ordering rule: effective ids are `pkg:<package>:<hook>`, so two
+directories under one name mint the same ids and a denial could not say which package
+refused.
 
 The package is **loaded and checked before the entry is written**, so one that could
 never run is refused here rather than at the next unrelated mutation. The check resolves
@@ -370,6 +384,86 @@ listed, and `package list` reports what is wrong. Failing instead emptied the li
 the state it exists to explain, hiding every gate still in force behind one broken entry.
 
 - **Output (JSON):** array of `hookDTO` (§6).
+
+---
+
+## 2.4 Package repositories
+
+A **package repository** is a git repository whose top-level directories are hook
+packages. Cloning it into `<taskmgr home>/packages/<repo>` *is* installing it: there is no
+copy step and no archive, so the only thing taskmgr adds over `git clone` is knowing where
+the clone belongs and what it provides.
+
+Installing is separate from using. `package repo add` puts packages on the machine;
+`package add` (§2.3) is the separate decision to gate a store with one of them. The two
+are different states, and keeping them apart is what lets `package rm` disable a package
+whose gate is blocking every write without deleting the files.
+
+These commands take **no `--global`**. A repository is installed for the machine by
+construction, so the selector that chooses between a store and the per-user config has no
+meaning here; passing it exits `1` rather than being ignored.
+
+`git` must be on `PATH`. Its absence is reported as such, and git's own stderr is carried
+into any failure — an unreachable host, a missing key and a diverged branch are all its
+message to give.
+
+### `taskmgr package repo add <url> [--as <name>]`
+
+Clone `url` into `<taskmgr home>/packages/<name>`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--as` | derived | Install under this name instead of the one derived from the URL. |
+
+The derived name is the URL's last `/`- or `:`-separated segment with any `.git` suffix
+removed, so `git@github.com:you/task-manager-packages.git` installs as
+`task-manager-packages`. A name that is not a legal package name (CONFIG-SPEC §3 grammar)
+exits `1` and names `--as`.
+
+A directory already at that path exits `1` rather than being overwritten: it is either
+this repository, which `repo update` refreshes, or another one that took the derived name,
+and clobbering either deletes packages some config still names.
+
+- **Output:** the repository and the packages it provides (`repoDTO` in JSON, §6). A
+  repository whose top-level directories hold no manifest is installed and reported with a
+  warning — it is a clone that succeeded, and what is wrong with it is the reader's to fix
+  upstream.
+
+### `taskmgr package repo list`
+
+List the installed repositories, sorted by name, each with the packages it provides, which
+of those the per-user config already uses, and its `origin` URL.
+
+Only a directory holding `taskmgr-package.yaml` counts as a package, so a repository's
+README, licence and `.git` directory are not listed as broken ones.
+
+This is what is available to `package add <name>`, and therefore where a name two
+repositories provide is visible before it is refused.
+
+- **Output (JSON):** array of `repoDTO` (§6).
+
+### `taskmgr package repo update [name]`
+
+`git pull --ff-only` one installed repository, or every one of them when no name is given.
+
+Every repository is attempted before the first failure is reported: a machine with five
+repositories and one unreachable remote still gets the other four updated, which is what
+the caller asked for. A name that is not installed exits `1`.
+
+Nothing about the `use:` lists changes. A store that uses one of the updated packages is
+gated by the new version at its next write.
+
+### `taskmgr package repo rm <name>`
+
+Delete one installed repository from `<taskmgr home>/packages`.
+
+The `use:` entries naming its packages are left alone — `package rm` is the verb for those
+— and each one that stops resolving is named in the output. Until such an entry is
+removed it reports `missing` and fails every mutation in the store that names it, which is
+the state this warning exists to make visible rather than silent.
+
+- **Output:** the repository that was removed, and the packages a config still uses
+  (`repoDTO` in JSON, §6).
 
 ---
 
@@ -827,6 +921,14 @@ omitted for a `name:` entry, `scope` is `store` | `global`, and `config` is the 
 entry left. It is deliberately not a `packageDTO`: `status`, `hooks` and `guide` describe
 a package a configuration uses, and this one no longer does.
 
+**`repoDTO`** — emitted by `package repo list` (an array) and, as a single object, by
+`package repo add`, `update` and `rm`: `{name, path, url, packages, used, detail}`. `name`
+is the repository's directory name under `<taskmgr home>/packages` and `path` that
+directory; `url` is the clone's `origin` and is omitted when git cannot report one;
+`packages` names what it provides, sorted; `used` names those the per-user config already
+uses, and on `repo rm` those a config still uses after the removal; `detail` explains a
+repository that provides nothing (§2.4).
+
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
 the binary owns and `package` for one a package contributes; `package` and `scope`
@@ -888,6 +990,8 @@ taskmgr config   keys                        # supported keys, both scopes
                  list | get K | set K V | unset K          [--global]
 taskmgr package  add <name> [--path]                       [--global]
                  list                                      [--global]
+                 repo add <url> [--as N]      # clone a package repository
+                 repo list | update [N] | rm N
 taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --label… --parent --blocked-by… --related…]

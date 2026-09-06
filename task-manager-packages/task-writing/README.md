@@ -30,24 +30,26 @@ rules there.
 
 ## Install it
 
-taskmgr never fetches a package: installing one is copying the directory and
-naming it in a config file's `use:` list.
-
-**For one project** — the entry travels in git, so everyone who works in the
-repository gets the same gates:
-
-```bash
-mkdir -p <project>/.tasks/packages
-cp -r task-manager-packages/task-writing <project>/.tasks/packages/
-taskmgr -C <project> package add --path packages/task-writing
-```
+Installing is getting the package onto the machine; using it is naming it in a
+config file's `use:` list. They are separate steps.
 
 **For this machine** — applies to every store you open, and no colleague sees it:
 
 ```bash
-mkdir -p "${TASKMGR_HOME:-$HOME/.taskmgr}/packages"
-cp -r task-manager-packages/task-writing "${TASKMGR_HOME:-$HOME/.taskmgr}/packages/"
+taskmgr package repo add git@github.com:hk9890/task-manager-packages.git
 taskmgr package add task-writing --global
+```
+
+Keep it current with `taskmgr package repo update`.
+
+**For one project** — the entry travels in git, so everyone who works in the
+repository gets the same gates. Put the directory inside the store and name it by
+path:
+
+```bash
+mkdir -p <project>/.tasks/packages
+cp -r task-writing <project>/.tasks/packages/
+taskmgr -C <project> package add --path packages/task-writing
 ```
 
 Check either with `taskmgr package list` and `taskmgr hook list`.

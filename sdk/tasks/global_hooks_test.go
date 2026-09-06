@@ -60,7 +60,7 @@ func globalHookStore(t *testing.T, globalYAML string) (*Store, *exec.Fake) {
 // surfaces when both would deny (HOOK-SPEC §3.5 rule 1).
 func TestPackageChain_GlobalPackagesRunBeforeStorePackages(t *testing.T) {
 	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: machine\n")
-	writePackage(t, s.fs, "/hm", "machine", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "machine", []Hook{
 		{ID: "g1", Event: "pre-create", Run: []string{"g1"}},
 		{ID: "g2", Event: "pre-create", Run: []string{"g2"}},
 	})
@@ -87,7 +87,7 @@ func TestPackageChain_GlobalPackagesRunBeforeStorePackages(t *testing.T) {
 // break every colleague's repository (HOOK-SPEC §3.5).
 func TestPackageChain_SamePackageInBothFilesRunsOnce(t *testing.T) {
 	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: shared\n")
-	writePackage(t, s.fs, "/hm", "shared", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "shared", []Hook{
 		{ID: "gate", Event: "pre-create", Run: []string{"gate"}},
 	})
 	// The store names the very same package.
@@ -119,7 +119,7 @@ func TestPackageChain_SamePackageInBothFilesRunsOnce(t *testing.T) {
 
 func TestStoreHooks_InheritsGlobalPackages(t *testing.T) {
 	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
-	writePackage(t, s.fs, "/hm", "docs", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "docs", []Hook{
 		{ID: "doc-needs-path", Event: "pre-create", When: `type == "doc"`, Run: []string{"/bin/false"}},
 	})
 	fake.Func = func(exec.Spec) exec.Result { return exec.Deny(1, "a doc needs a path label") }
@@ -140,7 +140,7 @@ func TestStoreHooks_InheritsGlobalPackages(t *testing.T) {
 // installed, while the working directory stays the project root (HOOK-SPEC §3.6).
 func TestStoreHooks_PackageArgvResolvesInsideThePackage(t *testing.T) {
 	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
-	writePackage(t, s.fs, "/hm", "docs", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "docs", []Hook{
 		{ID: "gate", Event: "pre-create", Run: []string{"./hooks/check.sh", "--strict"}},
 	})
 	var spec exec.Spec
@@ -149,7 +149,7 @@ func TestStoreHooks_PackageArgvResolvesInsideThePackage(t *testing.T) {
 	if _, err := s.Create(CreateInput{Title: "x"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if spec.Argv[0] != "/hm/packages/docs/hooks/check.sh" {
+	if spec.Argv[0] != "/hm/packages/repo/docs/hooks/check.sh" {
 		t.Errorf("argv[0] = %q, want it resolved inside the package", spec.Argv[0])
 	}
 	if spec.Argv[1] != "--strict" {
@@ -164,7 +164,7 @@ func TestStoreHooks_PackageArgvResolvesInsideThePackage(t *testing.T) {
 // alone, or the documented ["sh", "-c", …] idiom would search the package.
 func TestStoreHooks_PathLookupArgvIsNotRewritten(t *testing.T) {
 	s, fake := globalHookStore(t, "version: 1\nuse:\n    - name: docs\n")
-	writePackage(t, s.fs, "/hm", "docs", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "docs", []Hook{
 		{ID: "gate", Event: "pre-create", Run: []string{"sh", "-c", "true"}},
 	})
 	var spec exec.Spec
@@ -303,7 +303,7 @@ func TestSetConfig_PersistsHookTimeout(t *testing.T) {
 // name — the answer neither config file gives on its own.
 func TestStoreHookChain_ReportsOrderAndScope(t *testing.T) {
 	s, _ := globalHookStore(t, "version: 1\nuse:\n    - name: machine\n")
-	writePackage(t, s.fs, "/hm", "machine", []Hook{
+	writeHomePackage(t, s.fs, "/hm", "repo", "machine", []Hook{
 		{ID: "g", Event: "pre-create", Run: []string{"g"}},
 	})
 	storePackage(t, s, "project", []Hook{

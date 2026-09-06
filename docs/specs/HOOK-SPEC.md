@@ -252,14 +252,37 @@ store's. It applies to **every** store this machine resolves.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `name` | one of | A package name, resolved to `<taskmgr home>/packages/<name>`. Machine-independent, so a store config can carry it into git and every machine finds its own copy. |
+| `name` | one of | A package name, resolved against the installed package repositories: `<taskmgr home>/packages/<repo>/<name>`, for whichever repository provides it. Machine-independent, so a store config can carry it into git and every machine finds its own copy — from whichever repository that machine installed it from. |
 | `path` | one of | A directory, resolved against the directory holding **this** config file — `.tasks/` for a store, the home for the per-user one — and staying **inside** it. A package under `.tasks/` travels with the store, `store move --central` included. An **absolute** path is refused, as a guide fragment's is (§3.7): it names a location only one machine has, so a store config carrying one resolves to nothing on every colleague's clone. A package that lives elsewhere is installed under the taskmgr home and named by `name:`. |
 
 Exactly one of the two is set; an entry with both, or neither, is a config error (§3.4).
 Which is meant is always stated rather than inferred from the string, matching the rule
-CONFIG-SPEC.md applies to naming a store. Nothing about a package's **origin** is
-recorded — no URL, no revision — so resolution never reaches the network and a hook is
-never fetched during a `create` or a `close`.
+CONFIG-SPEC.md applies to naming a store. Nothing about a package's **origin** is recorded
+in a config file — no URL, no revision — so resolution never reaches the network and a
+hook is never fetched during a `create` or a `close`. What a machine installed from is
+recorded by the clone itself, in the repository under `<taskmgr home>/packages`, and read
+only by `taskmgr package repo list` (CLI-SPEC §2.4).
+
+**Resolving a `name:` entry (normative).** The directories under `<taskmgr home>/packages`
+are the installed **package repositories**; each holds packages as its own top-level
+directories. A name is looked up in every one of them:
+
+1. Exactly one repository provides the name → that directory.
+2. None does → the entry is `missing`, and the repair is an install. It is written and
+   reported rather than refused, because a store config travels in git and legitimately
+   names a package the machine reading it does not have.
+3. More than one does → an **error** naming both repositories. Effective ids are
+   `pkg:<package>:<hook>` (rule 2 below), so two directories under one name would mint the
+   same ids and a denial could not say which package refused. An ordering rule would be
+   deterministic and undebuggable; the name is refused instead, which is one command away
+   from a fix that shadowing never reaches.
+
+A directory is enough to provide the name. Whether it holds a usable manifest is a
+separate question with a separate answer — `broken`, not `missing` — because the two point
+at different repairs.
+
+A repository directory is named like a package (§3.6), so anything else under
+`packages/` — a stray file, a dot-directory — is not one and is skipped.
 
 **Merge (normative).**
 
@@ -371,11 +394,17 @@ how the store behaves for anyone who has not named the package.
 cycle detection, no depth limit, and no shared-dependency resolution — a chain is exactly
 the two `use:` lists and the manifests they name.
 
-**A directory, never an archive.** taskmgr never fetches a package and never extracts
-one. A program cannot be executed inside an archive, so supporting one would mean
-taskmgr extracting it — and then owning the execute bit it must preserve and the
-path-traversal safety extraction demands. Installing a package is creating the directory
-and putting the manifest and scripts in it.
+**A directory, never an archive.** taskmgr never extracts a package. A program cannot be
+executed inside an archive, so supporting one would mean taskmgr extracting it — and then
+owning the execute bit it must preserve and the path-traversal safety extraction demands.
+A package arrives as a directory or not at all.
+
+`taskmgr package repo add` is how one arrives on a machine: it clones a git repository of
+packages under `<taskmgr home>/packages` (CLI-SPEC §2.4). The clone is the install — git
+writes a directory tree with its modes intact, which is the one thing an archive could not
+give — and it happens at install time, so nothing on the hook path fetches anything.
+Writing a package is still making a directory and putting the manifest and scripts in it;
+what the command adds is where the result belongs.
 
 ### 3.7 Guide fragments
 

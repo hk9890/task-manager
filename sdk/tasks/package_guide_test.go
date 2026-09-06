@@ -187,7 +187,18 @@ func TestLoadPackage_ABadGuideEntryBreaksThePackage(t *testing.T) {
 // the `overview:` fragment.
 func writeGuidePackage(t *testing.T, fs vfs.FS, dir, name, fragment string, overview ...string) string {
 	t.Helper()
-	pkgDir := filepath.Join(dir, packagesSubdir, name)
+	return writeGuidePackageAt(t, fs, filepath.Join(dir, packagesSubdir, name), fragment, overview...)
+}
+
+// writeHomeGuidePackage writes a guide package into an installed repository
+// under a taskmgr home, where a `name:` reference resolves (HOOK-SPEC §3.5).
+func writeHomeGuidePackage(t *testing.T, fs vfs.FS, home, repo, name, fragment string, overview ...string) string {
+	t.Helper()
+	return writeGuidePackageAt(t, fs, filepath.Join(home, packagesSubdir, repo, name), fragment, overview...)
+}
+
+func writeGuidePackageAt(t *testing.T, fs vfs.FS, pkgDir, fragment string, overview ...string) string {
+	t.Helper()
 	if err := fs.MkdirAll(filepath.Join(pkgDir, "guide"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +424,7 @@ func TestGuideTopics_AnOverviewFragmentTakesTheTighterCap(t *testing.T) {
 // both halves of a package, so prose and gate are read the same way round.
 func TestGuideTopics_GlobalPackagesComeFirst(t *testing.T) {
 	s, fs := chainStore(t)
-	writeGuidePackage(t, fs, "/hm", "machine", "machine-wide\n")
+	writeHomeGuidePackage(t, fs, "/hm", "repo", "machine", "machine-wide\n")
 	writeGuidePackage(t, fs, s.dir, "project", "project\n")
 	if err := saveGlobalConfig(fs, "/hm", GlobalConfig{Version: 1, Use: []PackageRef{{Name: "machine"}}}); err != nil {
 		t.Fatal(err)

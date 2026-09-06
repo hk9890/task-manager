@@ -450,7 +450,7 @@ type GlobalConfig struct {
 
 // PackageRef is one entry of a use: list. Exactly one field is set.
 type PackageRef struct {
-    Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<name>
+    Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<repo>/<name>, in whichever repo provides it
     Path string `yaml:"path,omitempty"` // relative to, and inside, the directory holding the config file
 }
 
@@ -461,6 +461,20 @@ func GlobalConfigPath() (string, error)        // absolute path, whether or not 
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
 func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
 func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) // InspectPackage for this file
+
+// PackageRepo is one installed package repository under <taskmgr home>/packages:
+// the directory a name: entry is resolved against, and the packages it provides.
+type PackageRepo struct {
+    Name     string   // directory name under <home>/packages
+    Path     string   // that directory
+    Packages []string // the packages it provides, sorted
+    Detail   string   // why it provides none
+}
+
+func PackageRepos() ([]PackageRepo, error)      // what is installed, sorted by name
+func PackageReposDir() (string, error)          // <taskmgr home>/packages
+func PackageRepoDir(name string) (string, error) // one repository's directory, installed or not
+func RemovePackageRepo(name string) (string, error) // delete one; returns the directory removed
 ```
 
 The packages named here contribute hooks **before** a store's own on every mutation, and
@@ -474,6 +488,13 @@ resolves. That is the case the guide has to serve: an agent runs it before it kn
 whether it is standing in a project at all. `InspectGlobalPackage` is `Store.InspectPackage`
 for this file and needs no store either; it resolves a candidate entry against this
 file's own list, which is the only one that runs earlier (HOOK-SPEC §3.5 rule 1).
+
+The four repository functions are the SDK's whole share of installing a package: they
+read the directory and remove one, and know nothing of URLs, revisions or networks.
+Cloning is the CLI's (`taskmgr package repo add`, [CLI-SPEC](CLI-SPEC.md) §2.4), so an SDK
+consumer inherits no dependency on git and no network reach on the hook path.
+`RemovePackageRepo` takes a name rather than a path, so nothing outside
+`<taskmgr home>/packages` is reachable through it.
 
 `UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
 home's own lock: the first is a read-modify-write inside it, the second replaces the file
@@ -927,6 +948,7 @@ var (
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
     ErrStoreNotRegistered // a store name has no registry entry (CONFIG-SPEC §4)
     ErrPackageMissing     // a use: entry resolves to a directory that is not there
+    ErrPackageAmbiguous   // a name: entry that two installed repositories provide
 )
 ```
 
@@ -946,6 +968,11 @@ and cannot hit it.
 from one that is there and unusable — "install this" rather than "repair this". It is
 what sets `PackageInfo.Status` to `PackageMissing`, and it wraps the error every
 mutation fails with while the entry stands (HOOK-SPEC §3.4).
+
+`ErrPackageAmbiguous` reports a `name:` entry that more than one installed repository
+provides. Effective ids are `pkg:<package>:<hook>`, so two directories under one name mint
+the same ids and a denial could not say which package refused — the name is refused
+instead of resolved by an ordering rule (HOOK-SPEC §3.5).
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`,
 `RemoveDep`, `AddRelated`, and `RemoveRelated` when the target issue lives in

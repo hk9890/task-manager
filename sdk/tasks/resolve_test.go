@@ -499,7 +499,7 @@ func TestResolve_StoreInheritsTheResolutionEnvironment(t *testing.T) {
 	if err := m.WriteAtomic(filepath.Join(testCentral, globalConfigName), []byte(raw), 0o644); err != nil {
 		t.Fatalf("write global config: %v", err)
 	}
-	writePackage(t, m, testCentral, "machine", []Hook{
+	writeHomePackage(t, m, testCentral, "repo", "machine", []Hook{
 		{ID: "gate", Event: "pre-create", Run: []string{"true"}},
 	})
 
