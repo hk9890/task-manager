@@ -98,28 +98,18 @@ func TestPackageRef_Shape(t *testing.T) {
 	}
 }
 
-// A `name:` reference means <home>/packages/<name> and nothing else. Joining an
-// empty home yielded the *relative* "packages/<name>", which resolves against
-// the process working directory — so taskmgr loaded and ran hooks from a path
-// any local process can plant.
-func TestPackageDir_NameWithNoHomeIsAnError(t *testing.T) {
-	_, _, err := packageDir(PackageRef{Name: "lint"}, "", "/store/.tasks")
-	if err == nil {
-		t.Fatal("a name reference with no taskmgr home must be an error, not a relative path")
-	}
-	if !strings.Contains(err.Error(), "no taskmgr home") {
-		t.Errorf("error %q must say the home could not be located", err)
+func TestRefPathDir_ResolvesAgainstTheConfigDirectory(t *testing.T) {
+	dir, name, err := refPathDir(PackageRef{Path: "packages/p"}, "/store/.tasks")
+	if err != nil || dir != "/store/.tasks/packages/p" || name != "p" {
+		t.Errorf("path ref = (%q, %q, %v)", dir, name, err)
 	}
 }
 
-func TestPackageDir_ResolvesNameAndPath(t *testing.T) {
-	dir, name, err := packageDir(PackageRef{Name: "doc-policy"}, "/hm", "/store/.tasks")
-	if err != nil || dir != "/hm/packages/doc-policy" || name != "doc-policy" {
-		t.Errorf("name ref = (%q, %q, %v)", dir, name, err)
-	}
-	dir, name, err = packageDir(PackageRef{Path: "packages/p"}, "/hm", "/store/.tasks")
-	if err != nil || dir != "/store/.tasks/packages/p" || name != "p" {
-		t.Errorf("path ref = (%q, %q, %v)", dir, name, err)
+// A path entry with nothing to resolve against is an error rather than a
+// relative path, which would resolve against the process working directory.
+func TestRefPathDir_NoConfigDirIsAnError(t *testing.T) {
+	if _, _, err := refPathDir(PackageRef{Path: "packages/p"}, ""); err == nil {
+		t.Fatal("a path reference with no config directory must be an error")
 	}
 }
 
@@ -222,7 +212,7 @@ func chainStore(t *testing.T) (*Store, vfs.FS) {
 // which is the two-step its own README recommends.
 func TestPackageChain_DifferentDirectoriesSharingANameShadow(t *testing.T) {
 	s, fs := chainStore(t)
-	writePackage(t, fs, "/hm", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
+	writeHomePackage(t, fs, "/hm", "repo", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
 	writePackage(t, fs, s.dir, "policy", []Hook{{ID: "s", Event: "pre-create", Run: []string{"s"}}})
 
 	global := GlobalConfig{Use: []PackageRef{{Name: "policy"}}}
@@ -244,7 +234,7 @@ func TestPackageChain_DifferentDirectoriesSharingANameShadow(t *testing.T) {
 	if !infos[1].Shadowed || infos[1].Status != PackageOK {
 		t.Errorf("the store entry must be reported shadowed, got %+v", infos[1])
 	}
-	if !strings.Contains(infos[1].Detail, "/hm/packages/policy") {
+	if !strings.Contains(infos[1].Detail, "/hm/packages/repo/policy") {
 		t.Errorf("detail %q must name the directory that won", infos[1].Detail)
 	}
 }
@@ -381,7 +371,7 @@ func TestLoadPackage_ChecksAProgramThePackageShips(t *testing.T) {
 // reach, so a clash passed the check and detonated at the next mutation.
 func TestInspectPackage_SeesTheEntriesThatAlreadyApply(t *testing.T) {
 	s, fs := chainStore(t)
-	writePackage(t, fs, "/hm", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
+	writeHomePackage(t, fs, "/hm", "repo", "policy", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
 	writePackage(t, fs, s.dir, "policy", []Hook{{ID: "s", Event: "pre-create", Run: []string{"s"}}})
 	if err := fs.WriteAtomic("/hm/config.yaml", []byte("version: 1\nuse:\n    - name: policy\n"), 0o644); err != nil {
 		t.Fatal(err)

@@ -261,6 +261,11 @@ func (b *Builder) Mem() *tasks.Store {
 // deterministic clock.
 func (b *Builder) TempDir(t *testing.T) *tasks.Store {
 	t.Helper()
+	// An L3 fixture writes through the real resolution path, which reads the
+	// per-user config — so without an empty home of its own, every hook the
+	// developer installed machine-wide gates the fixture, and the suite passes
+	// or fails by what is on the machine running it.
+	t.Setenv("TASKMGR_HOME", t.TempDir())
 	root := t.TempDir()
 	s, err := tasks.Init(root, b.prefix, tasks.WithClock(fixedClock()))
 	if err != nil {
