@@ -20,8 +20,6 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 │   ├── internal/query/           the filter-expression engine — pure, imports nothing of tasks
 │   └── internal/storetest/       fixture builder; every test store is built through it
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
-├── task-manager-packages/        packages this repo ships; a source to copy from,
-│                                 never installed from here (HOOK-SPEC §3.6)
 └── docs/
     ├── specs/                    the normative contract — the table below
     ├── implementation/           orientation maps that own nothing; the specs are normative
@@ -91,5 +89,6 @@ command tree. `sdk/tasks/doc.go` is the package's own orientation.
 |---|---|
 | Published SDK reference | https://pkg.go.dev/github.com/hk9890/task-manager/sdk/tasks |
 | Git remote and releases | https://github.com/hk9890/task-manager |
+| The hook packages, and their own tests | https://github.com/hk9890/task-manager-packages — installed with `taskmgr package repo add`, never vendored here |
 | Command framework | [`spf13/cobra`](https://pkg.go.dev/github.com/spf13/cobra) (resolved version: `go.mod`) |
 | YAML encoder — the SDK's only dependency | [`gopkg.in/yaml.v3`](https://pkg.go.dev/gopkg.in/yaml.v3) |
