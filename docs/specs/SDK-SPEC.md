@@ -273,6 +273,8 @@ type Issue struct {
     Priority int
     Assignee string
     Creator  string   // who filed the issue; set at creation, never edited
+    Agent    string   // coding agent that filed it on Creator's behalf, "" for a person
+    Session  string   // that agent's session id; opaque, local to the machine that made it
     Labels   []string
 
     Parent    string   // grouping/epic issue ID
@@ -305,12 +307,31 @@ for such an issue — see §4. Where the body is stored is otherwise not exposed
 an `Issue` whose flag disagrees with its `Description`, and any issue handed back
 by `Get`, `Detail` or `ResolveBody` is safe to pass to `Marshal`.
 
+### `Actor`
+
+Who a write is attributed to, and what made it on their behalf.
+
+```go
+type Actor struct {
+    Name    string // the person; the CLI defaults it to $USER
+    Agent   string // coding-agent slug, "" when a person acted directly
+    Session string // that agent's session id, "" when it publishes none
+}
+```
+
+The SDK **never fills these in from its own environment**. Recognising a harness is
+the front end's job ([CLI-SPEC.md](CLI-SPEC.md) §1.1), so a long-running embedder
+records the provenance it was handed rather than the environment it started in, and
+an import records the provenance of the system it is importing from.
+
 ### `Comment`
 
 ```go
 type Comment struct {
     ID       string    // opaque random token, ^[0-9a-z]{8}$ (self-assigned on append)
     Author   string
+    Agent    string    // provenance of THIS document (TASK-STORAGE-SPEC §4.4 rule 8)
+    Session  string
     Created  time.Time
     Replaces string    // "", or the id of a comment this one supersedes
     Deleted  bool      // true → tombstone retracting Replaces (Body is empty)
@@ -450,7 +471,7 @@ type GlobalConfig struct {
 
 // PackageRef is one entry of a use: list. Exactly one field is set.
 type PackageRef struct {
-    Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<name>
+    Name string `yaml:"name,omitempty"` // <taskmgr home>/packages/<repo>/<name>, in whichever repo provides it
     Path string `yaml:"path,omitempty"` // relative to, and inside, the directory holding the config file
 }
 
@@ -461,6 +482,20 @@ func GlobalConfigPath() (string, error)        // absolute path, whether or not 
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
 func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
 func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) // InspectPackage for this file
+
+// PackageRepo is one installed package repository under <taskmgr home>/packages:
+// the directory a name: entry is resolved against, and the packages it provides.
+type PackageRepo struct {
+    Name     string   // directory name under <home>/packages
+    Path     string   // that directory
+    Packages []string // the packages it provides, sorted
+    Detail   string   // why it provides none
+}
+
+func PackageRepos() ([]PackageRepo, error)      // what is installed, sorted by name
+func PackageReposDir() (string, error)          // <taskmgr home>/packages
+func PackageRepoDir(name string) (string, error) // one repository's directory, installed or not
+func RemovePackageRepo(name string) (string, error) // delete one; returns the directory removed
 ```
 
 The packages named here contribute hooks **before** a store's own on every mutation, and
@@ -474,6 +509,13 @@ resolves. That is the case the guide has to serve: an agent runs it before it kn
 whether it is standing in a project at all. `InspectGlobalPackage` is `Store.InspectPackage`
 for this file and needs no store either; it resolves a candidate entry against this
 file's own list, which is the only one that runs earlier (HOOK-SPEC §3.5 rule 1).
+
+The four repository functions are the SDK's whole share of installing a package: they
+read the directory and remove one, and know nothing of URLs, revisions or networks.
+Cloning is the CLI's (`taskmgr package repo add`, [CLI-SPEC](CLI-SPEC.md) §2.4), so an SDK
+consumer inherits no dependency on git and no network reach on the hook path.
+`RemovePackageRepo` takes a name rather than a path, so nothing outside
+`<taskmgr home>/packages` is reachable through it.
 
 `UpdateGlobalConfig` and `SaveGlobalConfig` are the store pair's counterparts, over the
 home's own lock: the first is a read-modify-write inside it, the second replaces the file
@@ -495,6 +537,8 @@ type CreateInput struct {
     Priority    *int      // nil → PriorityDefault
     Assignee    string
     Creator     string    // who filed the issue (caller-resolved identity); recorded once
+    Agent       string    // coding agent filing on Creator's behalf; recorded once
+    Session     string    // that agent's session id; recorded once
     Labels      []string
     Parent      string
     BlockedBy   []string
@@ -524,6 +568,8 @@ type ImportInput struct {
     Status      Status    // final status (incl. closed); empty → StatusOpen
     Assignee    string
     Creator     string
+    Agent       string
+    Session     string
     Labels      []string
     Parent      string    // edges: taskmgr IDs that must already exist
     BlockedBy   []string
@@ -538,6 +584,8 @@ type ImportInput struct {
 
 type ImportComment struct {
     Author  string
+    Agent   string
+    Session string
     Created time.Time // zero → the issue's Created
     Body    string
 }
@@ -546,12 +594,13 @@ type ImportComment struct {
 `UpdateInput` uses pointers so the zero value means "leave unchanged"; only set
 fields are applied.
 
-`Creator` is intentionally absent from `UpdateInput`: it is provenance — set once
-at creation and never edited afterward. The SDK applies no identity default: an
+`Creator`, `Agent` and `Session` are intentionally absent from `UpdateInput`: they
+are provenance — set once at creation and never edited afterward. The SDK applies no identity default: an
 empty `CreateInput.Creator` is stored as empty (provenance simply unknown). The
 `$USER` fallback is a CLI-layer convenience (`--creator`, [CLI-SPEC.md](CLI-SPEC.md) §4), matching
 `--assignee` and comment `--author`; an embedder that wants attribution sets
-`Creator` itself.
+`Creator` itself. `Agent` and `Session` have no default at any layer: an empty pair
+is the ordinary case (a person acting directly), so there is nothing to fall back to.
 
 ### Filtering
 
@@ -611,6 +660,8 @@ type Criteria struct {
     LabelMatch  LabelMatch
     Assignee    string   // assignee == "..."
     Creator     string   // creator == "..."
+    Agent       string   // agent == "..."
+    Session     string   // session == "..."
     Parent      *string  // parent == "id"; a non-nil "" means "no parent"
     Work        WorkState
     PriorityMin *int     // priority >= n
@@ -653,6 +704,11 @@ group is wrapped in parentheses to protect precedence under the surrounding `&&`
 All user-supplied string, enum, and date values are emitted **quoted** (with
 `"`→`\"` and `\`→`\\` escaping per QUERY-SPEC.md §3); the numeric `priority` is
 emitted bare. This puts the bareword/quoting rule in exactly one audited place.
+`Agent` and `Session` are plain equality clauses, and an empty one adds none — so
+`Criteria` cannot express "filed by no agent". That selection is `agent == ""` passed
+to `List` directly, the same escape a `Parent` of `nil` versus a non-nil `""` avoids
+needing here: `Parent` is a pointer because "no parent" is a common selection, and
+"no agent" is not.
 `LabelMatch` defaults to `LabelMatchAll` (the issue must carry every listed label).
 `TextMatch` defaults to `TextPhrase`: `Text` compiles to a single `text ~ "..."`.
 Under `TextAllWords` the `Text` value is split on whitespace and each word emits its
@@ -803,9 +859,9 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error)   // direct writ
 func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error)
 func (s *Store) Close(id, reason string) (*MutationResult, error)   // idempotent; moves to closed/
 func (s *Store) Reopen(id string) (*MutationResult, error)          // moves back to active
-func (s *Store) AddComment(id, author, body string) (*Comment, error)         // returns the new comment (with its id)
-func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) // appends a revision; returns the new effective comment
-func (s *Store) DeleteComment(id, commentID, author string) error             // appends a tombstone
+func (s *Store) AddComment(id string, by Actor, body string) (*Comment, error)         // returns the new comment (with its id)
+func (s *Store) EditComment(id, commentID string, by Actor, body string) (*Comment, error) // appends a revision; returns the new effective comment
+func (s *Store) DeleteComment(id, commentID string, by Actor) error                    // appends a tombstone
 func (s *Store) AddDep(dependent, blocker string) error    // idempotent; rejects self/cycle
 func (s *Store) RemoveDep(dependent, blocker string) error
 func (s *Store) AddRelated(a, b string) error              // idempotent; rejects self/dangling (no cycle check)
@@ -844,7 +900,7 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   `closed/` via the same git-rename anchor as `Close`). Edge targets must already
   exist (same referential/acyclicity checks as `Create`), so an importing caller
   works in dependency order and translates foreign IDs to taskmgr IDs. It writes the
-  comment sidecar with the supplied authors and timestamps. Because validation is
+  comment sidecar with the supplied provenance and timestamps. Because validation is
   up-front, a rejected record (e.g. a control character in a comment body) leaves
   **nothing** behind. By default `Import` runs with hooks **omitted** — bulk loading should
   not fire a gate per issue; set `ImportInput.RunHooks` to gate/notify each imported
@@ -866,6 +922,8 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   effective comment; **`DeleteComment`** appends a tombstone (`Replaces` set,
   `Deleted: true`, empty body). All three sanitize the body and run under the store
   lock; none rewrites the task file (the sidecar is append-only, storage §4.4).
+  Each takes the `Actor` making **that** write, so a revision or a tombstone records
+  who wrote it rather than who wrote the comment it supersedes (storage §4.4 rule 8).
 - **`Close`** sets the closed timestamp/reason and relocates the file to `closed/`;
   **`Reopen`** moves it back to the hot set, clears the close fields, and sets
   `StatusOpen` (the pre-close status is not persisted). `Reopen` always lands on
@@ -927,6 +985,7 @@ var (
     ErrImmutable          // attempted in-place write to a closed issue (closed/ partition)
     ErrStoreNotRegistered // a store name has no registry entry (CONFIG-SPEC §4)
     ErrPackageMissing     // a use: entry resolves to a directory that is not there
+    ErrPackageAmbiguous   // a name: entry that two installed repositories provide
 )
 ```
 
@@ -946,6 +1005,11 @@ and cannot hit it.
 from one that is there and unusable — "install this" rather than "repair this". It is
 what sets `PackageInfo.Status` to `PackageMissing`, and it wraps the error every
 mutation fails with while the entry stands (HOOK-SPEC §3.4).
+
+`ErrPackageAmbiguous` reports a `name:` entry that more than one installed repository
+provides. Effective ids are `pkg:<package>:<hook>`, so two directories under one name mint
+the same ids and a denial could not say which package refused — the name is refused
+instead of resolved by an ordering rule (HOOK-SPEC §3.5).
 
 `ErrImmutable` is returned by `Update` (ordinary field edits), `AddDep`,
 `RemoveDep`, `AddRelated`, and `RemoveRelated` when the target issue lives in

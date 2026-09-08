@@ -204,7 +204,7 @@ func TestLogIOError_NonTransitionWrites(t *testing.T) {
 		mutate  func(s *Store, target, other *Issue) error
 	}{
 		{"comment add", "comment_add", "Append", sidecar, nil, func(s *Store, target, _ *Issue) error {
-			_, err := s.AddComment(target.ID, "a", "body")
+			_, err := s.AddComment(target.ID, Actor{Name: "a"}, "body")
 			return err
 		}},
 		{"comment edit", "comment_edit", "Append", sidecar, nil, nil}, // mutate set below; needs an existing comment
@@ -240,13 +240,13 @@ func TestLogIOError_NonTransitionWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 			// EditComment needs an existing comment to replace.
-			existing, err := s.AddComment(target.ID, "a", "first")
+			existing, err := s.AddComment(target.ID, Actor{Name: "a"}, "first")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if c.op == "comment_edit" {
 				c.mutate = func(s *Store, target, _ *Issue) error {
-					_, err := s.EditComment(target.ID, existing.ID, "a", "revised")
+					_, err := s.EditComment(target.ID, existing.ID, Actor{Name: "a"}, "revised")
 					return err
 				}
 			}

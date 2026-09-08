@@ -58,6 +58,8 @@ type issueDTO struct {
 	Priority    int        `json:"priority"`
 	Assignee    string     `json:"assignee,omitempty"`
 	Creator     string     `json:"creator,omitempty"`
+	Agent       string     `json:"agent,omitempty"`
+	Session     string     `json:"session,omitempty"`
 	Labels      []string   `json:"labels,omitempty"`
 	Parent      string     `json:"parent,omitempty"`
 	BlockedBy   []string   `json:"blocked_by,omitempty"`
@@ -151,6 +153,8 @@ type hookDeniedDTO struct {
 type commentDTO struct {
 	ID       string    `json:"id"`
 	Author   string    `json:"author,omitempty"`
+	Agent    string    `json:"agent,omitempty"`
+	Session  string    `json:"session,omitempty"`
 	Created  time.Time `json:"created"`
 	Replaces string    `json:"replaces,omitempty"`
 	Body     string    `json:"body,omitempty"`
@@ -178,7 +182,8 @@ type detailDTO struct {
 func toIssueDTO(store string, i *tasks.Issue) issueDTO {
 	d := issueDTO{
 		ID: i.ID, Store: store, Title: i.Title, Status: string(i.Status), Type: string(i.Type),
-		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator, Labels: i.Labels,
+		Priority: i.Priority, Assignee: i.Assignee, Creator: i.Creator,
+		Agent: i.Agent, Session: i.Session, Labels: i.Labels,
 		Parent: i.Parent, BlockedBy: i.BlockedBy, Related: i.Related,
 		Created: i.Created, Updated: i.Updated, CloseReason: i.CloseReason,
 	}
@@ -194,7 +199,10 @@ func toRefDTO(r tasks.Ref) refDTO {
 }
 
 func toCommentDTO(c tasks.Comment) commentDTO {
-	return commentDTO{ID: c.ID, Author: c.Author, Created: c.Created, Replaces: c.Replaces, Body: c.Body}
+	return commentDTO{
+		ID: c.ID, Author: c.Author, Agent: c.Agent, Session: c.Session,
+		Created: c.Created, Replaces: c.Replaces, Body: c.Body,
+	}
 }
 
 func toRefDTOs(rs []tasks.Ref) []refDTO {
@@ -252,6 +260,9 @@ func printDetail(d *tasks.Detail) {
 	if d.Assignee != "" {
 		_, _ = fmt.Fprintf(stdout, "  assignee: %s\n", d.Assignee)
 	}
+	if d.Agent != "" {
+		_, _ = fmt.Fprintf(stdout, "  agent:    %s\n", agentLine(d.Agent, d.Session))
+	}
 	if len(d.Labels) > 0 {
 		_, _ = fmt.Fprintf(stdout, "  labels:   %s\n", strings.Join(d.Labels, ", "))
 	}
@@ -279,9 +290,23 @@ func printDetail(d *tasks.Detail) {
 			if who == "" {
 				who = "?"
 			}
+			if c.Agent != "" {
+				who += " via " + c.Agent
+			}
 			_, _ = fmt.Fprintf(stdout, "  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
 		}
 	}
+}
+
+// agentLine renders the agent provenance of a write for human reading. The
+// session is appended only when there is one: most harnesses publish no session
+// id, and "claude-code ()" would read as a missing value rather than an absent
+// concept.
+func agentLine(agent, session string) string {
+	if session == "" {
+		return agent
+	}
+	return agent + "  session: " + session
 }
 
 // showBodyLimit bounds how much of a body the human renderer prints. Bodies are

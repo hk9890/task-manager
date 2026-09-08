@@ -789,6 +789,8 @@ func buildIssue(id string, in issueFields, status Status, created, updated time.
 		Priority:    PriorityDefault,
 		Assignee:    in.Assignee,
 		Creator:     strings.TrimSpace(in.Creator),
+		Agent:       strings.TrimSpace(in.Agent),
+		Session:     strings.TrimSpace(in.Session),
 		Labels:      dedupe(in.Labels),
 		Parent:      in.Parent,
 		BlockedBy:   dedupe(in.BlockedBy),
@@ -815,6 +817,8 @@ type issueFields struct {
 	Priority    *int
 	Assignee    string
 	Creator     string
+	Agent       string
+	Session     string
 	Labels      []string
 	Parent      string
 	BlockedBy   []string
@@ -882,10 +886,15 @@ type CreateInput struct {
 	Priority    *int
 	Assignee    string
 	Creator     string
-	Labels      []string
-	Parent      string
-	BlockedBy   []string
-	Related     []string
+	// Agent and Session record the coding-agent session filing on the Creator's
+	// behalf; leave both empty when a person is filing directly. The store takes
+	// them verbatim — it never reads its own environment to guess them.
+	Agent     string
+	Session   string
+	Labels    []string
+	Parent    string
+	BlockedBy []string
+	Related   []string
 }
 
 // Create validates and writes a new issue, allocating its ID. It runs the
@@ -912,6 +921,8 @@ func (s *Store) Create(in CreateInput) (*MutationResult, error) {
 			Priority:    in.Priority,
 			Assignee:    in.Assignee,
 			Creator:     in.Creator,
+			Agent:       in.Agent,
+			Session:     in.Session,
 			Labels:      in.Labels,
 			Parent:      in.Parent,
 			BlockedBy:   in.BlockedBy,

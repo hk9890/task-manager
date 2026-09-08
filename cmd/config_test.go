@@ -189,7 +189,7 @@ func TestConfigGlobal_WorksWithoutAStore(t *testing.T) {
 func TestConfigGlobal_PackageAppliesToAStoreThatHasNone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	writeCmdPackage(t, home, "doc-policy", `hooks:
+	writeCmdHomePackage(t, home, "repo", "doc-policy", `hooks:
   - id: doc-needs-path
     event: pre-create
     when: 'type == "doc" && !(label ~ "path:")'

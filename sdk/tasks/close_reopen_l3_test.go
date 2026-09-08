@@ -129,7 +129,7 @@ func TestL3_Close_SidecarStaysInComments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.AddComment(iss.ID, "bob", "pre-close note\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, tasks.Actor{Name: "bob"}, "pre-close note\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	if _, err := s.Close(iss.ID, ""); err != nil {
@@ -159,7 +159,7 @@ func TestL3_Close_CommentOnClosedIssue(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "alice", "post-close note\n")
+	c, err := s.AddComment(iss.ID, tasks.Actor{Name: "alice"}, "post-close note\n")
 	if err != nil {
 		t.Fatalf("AddComment on closed issue: %v", err)
 	}

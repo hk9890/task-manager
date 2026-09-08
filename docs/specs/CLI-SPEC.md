@@ -27,7 +27,50 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|
 | `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
 | `TASKMGR_LOG` | Log level for observability output: `debug`, `info`, `warn`, `error` (default `warn`; an unknown value falls back to `warn`). Records always go to stderr as text. See [MONITORING.md](../MONITORING.md). |
+| `TASKMGR_NO_AGENT` | Turns coding-agent detection off for one run (§1.1). Any value other than empty, `0` or `false` counts as set. |
 | `TASKMGR_DIR` | **Withdrawn — rejected, not ignored.** Any non-empty value fails the command with an error naming it. It once overrode the store directory, as `--store-path` did; that flag now fails as unknown, and an exported variable gets the same treatment rather than silently misfiling every write into whatever store the walk-up finds. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §4. |
+
+### 1.1 Coding-agent detection
+
+Every write that records who made it also records **what** made it: the coding agent
+running `taskmgr`, and that agent's session. The values land in the issue's `agent`
+and `session` fields, or the comment document's (TASK-STORAGE-SPEC §4.3, §4.4), and
+are what `agent ==` and `session ==` filter on (QUERY-SPEC §2).
+
+A harness exports a marker variable into the processes it launches. The CLI reads the
+table below, **first match winning**, and takes the session id from the second column
+when that harness publishes one:
+
+| Marker | `agent` | Session id from |
+|---|---|---|
+| `CLAUDECODE` | `claude-code` | `CLAUDE_CODE_SESSION_ID` |
+| `GEMINI_CLI` | `gemini-cli` | — |
+| `COPILOT_CLI` | `copilot-cli` | — |
+| `CURSOR_AGENT` | `cursor` | — |
+| `OPENCODE` | `opencode` | — |
+| `PI_CODING_AGENT` | `pi` | — |
+| `AGENT_CONTEXT_OUT` | `kiro` | — |
+
+Most harnesses publish no session id, so most rows record the agent alone rather than
+inventing one. A marker set to empty, `0` or `false` reads as unset: a harness saying
+that is saying the opposite of what its presence would otherwise mean.
+
+`--agent` and `--session` override detection wherever a command has them, and an
+explicit `--agent` clears any detected session with it — a session id belongs to the
+harness that published it, so carrying it over to another agent's name would attribute
+the write to a session that never made it. `TASKMGR_NO_AGENT` suppresses detection
+only; an explicit `--agent` still records what it names. Both values are trimmed,
+and a `--session` that ends up with no agent beside it is **refused**: the two are
+one fact, and half of it is a value no reader can act on — the human view names a
+session only under its agent, and `agent == ""` would call the issue hand-filed
+while `session == …` still matched it.
+
+**Detection is inherited.** A marker reaches every descendant process, so a script an
+agent launched is recorded as that agent too. That is the intended reading — the write
+was still made on the agent's behalf — and it is why detection lives in the CLI and
+not in the engine: a long-running service linking the SDK would otherwise stamp its
+own start-up environment onto writes it makes months later
+([SDK-SPEC.md](SDK-SPEC.md) §2).
 
 ### Output modes
 
@@ -273,10 +316,18 @@ Clear one key, restoring its documented default. A read-only key exits `1`.
 ## 2.3 Hook packages
 
 A hook package is a directory holding a manifest and the scripts its hooks run
-(HOOK-SPEC §3.6). taskmgr never creates, downloads or extracts one: a package has a
-single owner, so authoring it is making a directory and writing a YAML file, with nothing
-for taskmgr to mediate. What these commands manage is the shared, lock-protected `use:`
-list, and the merged chain that no single file shows.
+(HOOK-SPEC §3.6). taskmgr never authors one and never extracts one: a package has a single
+owner, so writing it is making a directory and writing a YAML file, with nothing for
+taskmgr to mediate. What these commands manage is the shared, lock-protected `use:` list,
+the merged chain that no single file shows, and the **package repositories** a machine
+installs packages from (§2.4).
+
+Installing a package repository is the one thing here that reaches a network, and it does
+so by running `git clone`. That is a deliberate exception to "taskmgr never downloads a
+package", taken because distribution was otherwise a README convention that no `--help`
+could teach — and it is scoped so the invariant that matters survives: the network is
+reached at install time and never on the hook path, so resolving a `use:` entry during a
+`create` or a `close` still reads nothing but local directories (HOOK-SPEC §3.5).
 
 `taskmgr package` takes the same `--global` selector as `taskmgr config`, in either
 position, with the same two targets.
@@ -290,9 +341,15 @@ Append one entry to the target file's `use:` list.
 | `--path` | off | Treat the argument as a directory rather than a package name. The path resolves against the directory holding the config file — `.tasks/` for a store, the taskmgr home for `--global` — and must stay inside it; an absolute path exits `1` (HOOK-SPEC §3.5). |
 | `--global` | off | Act on the per-user config instead of the store's. |
 
-Without `--path` the argument is a package name, resolved to
-`<taskmgr home>/packages/<name>`. The two forms are separate because a reference states
-which it is rather than leaving a loader to guess (HOOK-SPEC §3.5).
+Without `--path` the argument is a package name, resolved against the installed package
+repositories: `<taskmgr home>/packages/<repo>/<name>`, for whichever repository provides
+that name (HOOK-SPEC §3.5). The two forms are separate because a reference states which it
+is rather than leaving a loader to guess.
+
+A name **two** installed repositories provide exits `1`, naming both, rather than
+resolving by an ordering rule: effective ids are `pkg:<package>:<hook>`, so two
+directories under one name mint the same ids and a denial could not say which package
+refused.
 
 The package is **loaded and checked before the entry is written**, so one that could
 never run is refused here rather than at the next unrelated mutation. The check resolves
@@ -370,6 +427,86 @@ listed, and `package list` reports what is wrong. Failing instead emptied the li
 the state it exists to explain, hiding every gate still in force behind one broken entry.
 
 - **Output (JSON):** array of `hookDTO` (§6).
+
+---
+
+## 2.4 Package repositories
+
+A **package repository** is a git repository whose top-level directories are hook
+packages. Cloning it into `<taskmgr home>/packages/<repo>` *is* installing it: there is no
+copy step and no archive, so the only thing taskmgr adds over `git clone` is knowing where
+the clone belongs and what it provides.
+
+Installing is separate from using. `package repo add` puts packages on the machine;
+`package add` (§2.3) is the separate decision to gate a store with one of them. The two
+are different states, and keeping them apart is what lets `package rm` disable a package
+whose gate is blocking every write without deleting the files.
+
+These commands take **no `--global`**. A repository is installed for the machine by
+construction, so the selector that chooses between a store and the per-user config has no
+meaning here; passing it exits `1` rather than being ignored.
+
+`git` must be on `PATH`. Its absence is reported as such, and git's own stderr is carried
+into any failure — an unreachable host, a missing key and a diverged branch are all its
+message to give.
+
+### `taskmgr package repo add <url> [--as <name>]`
+
+Clone `url` into `<taskmgr home>/packages/<name>`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--as` | derived | Install under this name instead of the one derived from the URL. |
+
+The derived name is the URL's last `/`- or `:`-separated segment with any `.git` suffix
+removed, so `git@github.com:you/task-manager-packages.git` installs as
+`task-manager-packages`. A name that is not a legal package name (CONFIG-SPEC §3 grammar)
+exits `1` and names `--as`.
+
+A directory already at that path exits `1` rather than being overwritten: it is either
+this repository, which `repo update` refreshes, or another one that took the derived name,
+and clobbering either deletes packages some config still names.
+
+- **Output:** the repository and the packages it provides (`repoDTO` in JSON, §6). A
+  repository whose top-level directories hold no manifest is installed and reported with a
+  warning — it is a clone that succeeded, and what is wrong with it is the reader's to fix
+  upstream.
+
+### `taskmgr package repo list`
+
+List the installed repositories, sorted by name, each with the packages it provides, which
+of those the per-user config already uses, and its `origin` URL.
+
+Only a directory holding `taskmgr-package.yaml` counts as a package, so a repository's
+README, licence and `.git` directory are not listed as broken ones.
+
+This is what is available to `package add <name>`, and therefore where a name two
+repositories provide is visible before it is refused.
+
+- **Output (JSON):** array of `repoDTO` (§6).
+
+### `taskmgr package repo update [name]`
+
+`git pull --ff-only` one installed repository, or every one of them when no name is given.
+
+Every repository is attempted before the first failure is reported: a machine with five
+repositories and one unreachable remote still gets the other four updated, which is what
+the caller asked for. A name that is not installed exits `1`.
+
+Nothing about the `use:` lists changes. A store that uses one of the updated packages is
+gated by the new version at its next write.
+
+### `taskmgr package repo rm <name>`
+
+Delete one installed repository from `<taskmgr home>/packages`.
+
+The `use:` entries naming its packages are left alone — `package rm` is the verb for those
+— and each one that stops resolving is named in the output. Until such an entry is
+removed it reports `missing` and fails every mutation in the store that names it, which is
+the state this warning exists to make visible rather than silent.
+
+- **Output:** the repository that was removed, and the packages a config still uses
+  (`repoDTO` in JSON, §6).
 
 ---
 
@@ -494,6 +631,8 @@ Create a new issue and allocate its ID.
 | `--priority <n>` | `2` | `0` (critical) … `4` (trivial). |
 | `--assignee <a>` | empty | Assignee. |
 | `--creator <a>` | `$USER` | Creator — who filed the issue; recorded once at creation. |
+| `--agent <a>` | detected (§1.1) | Coding agent filing the issue; recorded once at creation. |
+| `--session <s>` | detected (§1.1) | That agent's session id; recorded once at creation. |
 | `--label <l>` | — | Label; repeatable. |
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
@@ -527,13 +666,15 @@ The envelope is a JSON object (timestamps RFC3339):
   "title": "…", "type": "bug", "priority": 1,
   "status": "closed",             // any valid status; default open
   "assignee": "…", "creator": "…",
+  "agent": "…", "session": "…",   // optional; recorded verbatim, never detected (§1.1)
   "labels": ["ext:ext-1"],
   "parent": "<id>", "blocked_by": ["<id>"], "related": ["<id>"],
   "created_at": "2025-01-02T10:00:00Z",
   "updated_at": "2025-03-01T09:00:00Z",
   "closed_at": "2025-03-01T09:00:00Z", "close_reason": "fixed",
   "description": "markdown body",
-  "comments": [{"author": "alice", "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
+  "comments": [{"author": "alice", "agent": "…", "session": "…",
+                "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
 }
 ```
 
@@ -626,6 +767,8 @@ argument or `--file`.
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Comment author. |
+| `--agent <a>` | detected (§1.1) | Coding agent writing the comment. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 | `--file <path>` | — | Read the body from a file (`-` = stdin). |
 
 - Empty bodies are rejected. Bodies are sanitized (trailing whitespace stripped,
@@ -642,11 +785,16 @@ stays in the log; readers render the newest revision. Same body source/options a
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Comment author. |
+| `--agent <a>` | detected (§1.1) | Coding agent making the revision. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 | `--file <path>` | — | Read the body from a file (`-` = stdin). |
 
 - **Output (JSON):** `commentDTO` for the new revision comment.
 
-### `taskmgr comment rm <id> <comment-id> [--author <a>]`
+- A revision records **its own** provenance, not the revised comment's
+  (TASK-STORAGE-SPEC §4.4 rule 8).
+
+### `taskmgr comment rm <id> <comment-id> [options]`
 
 Delete a comment: append a tombstone that retracts the target (`replaces` it with
 no body). The original stays in the log as history; the resolved view omits it.
@@ -655,6 +803,8 @@ Idempotent.
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Author of the tombstone record. |
+| `--agent <a>` | detected (§1.1) | Coding agent deleting the comment. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 
 ---
 
@@ -748,7 +898,9 @@ Stable `snake_case` DTOs. Optional fields are omitted when empty.
 ```json
 {
   "id": "proj-0042", "store": "my-project", "title": "…", "status": "open", "type": "bug",
-  "priority": 1, "assignee": "hans", "creator": "hans", "labels": ["area:x"],
+  "priority": 1, "assignee": "hans", "creator": "hans",
+  "agent": "claude-code", "session": "81735307-43f7-458b-a4c5-fe1602ffc6d6",
+  "labels": ["area:x"],
   "parent": "proj-0007", "blocked_by": ["proj-0040"], "related": ["proj-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-04T09:00:00Z",
   "closed": "2026-06-05T08:00:00Z", "close_reason": "fixed"
@@ -764,9 +916,10 @@ reason.
 
 **`refDTO`** — a lightweight reference (no body): `{id, title, type, status, priority}`.
 
-**`commentDTO`** — `{id, author, created, replaces, body}` where `id` is the
-comment's random token (`^[0-9a-z]{8}$`); `author`/`replaces` are omitted when
-empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
+**`commentDTO`** — `{id, author, agent, session, created, replaces, body}` where `id`
+is the comment's random token (`^[0-9a-z]{8}$`); `author`, `agent`, `session` and
+`replaces` are omitted when empty. `agent` and `session` are the coding-agent
+provenance of **this document** (§1.1). The `comments` array (in `detailDTO`) is the **resolved** log: each
 `replaces`-chain collapsed to its newest revision, tombstoned comments omitted.
 
 **`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
@@ -826,6 +979,14 @@ is the package name the removed entry contributed, `path` its `path:` as written
 omitted for a `name:` entry, `scope` is `store` | `global`, and `config` is the file the
 entry left. It is deliberately not a `packageDTO`: `status`, `hooks` and `guide` describe
 a package a configuration uses, and this one no longer does.
+
+**`repoDTO`** — emitted by `package repo list` (an array) and, as a single object, by
+`package repo add`, `update` and `rm`: `{name, path, url, packages, used, detail}`. `name`
+is the repository's directory name under `<taskmgr home>/packages` and `path` that
+directory; `url` is the clone's `origin` and is omitted when git cannot report one;
+`packages` names what it provides, sorted; `used` names those the per-user config already
+uses, and on `repo rm` those a config still uses after the removal; `detail` explains a
+repository that provides nothing (§2.4).
 
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
@@ -888,9 +1049,12 @@ taskmgr config   keys                        # supported keys, both scopes
                  list | get K | set K V | unset K          [--global]
 taskmgr package  add <name> [--path]                       [--global]
                  list                                      [--global]
+                 repo add <url> [--as N]      # clone a package repository
+                 repo list | update [N] | rm N
 taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
-                          --creator --label… --parent --blocked-by… --related…]
+                          --creator --agent --session --label… --parent
+                          --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
 taskmgr show     <id>
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
@@ -904,9 +1068,9 @@ taskmgr close    <id> [--reason]
 taskmgr reopen   <id>
 taskmgr dep      add|rm <dependent> <blocker>
 taskmgr rel      add|rm <a> <b>              # symmetric related link
-taskmgr comment  add  <id> [body] [--author --file]
-taskmgr comment  edit <id> <comment-id> [body] [--author --file]
-taskmgr comment  rm   <id> <comment-id> [--author]
+taskmgr comment  add  <id> [body] [--author --agent --session --file]
+taskmgr comment  edit <id> <comment-id> [body] [--author --agent --session --file]
+taskmgr comment  rm   <id> <comment-id> [--author --agent --session]
 taskmgr labels | statuses | types
 taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)

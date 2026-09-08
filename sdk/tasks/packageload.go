@@ -37,6 +37,14 @@ import (
 // to tell "install this" apart from "repair this".
 var ErrPackageMissing = errors.New("package not installed")
 
+// ErrPackageAmbiguous reports a `name:` entry that more than one installed
+// package repository provides. Effective hook ids are "pkg:<package>:<hook>"
+// (HOOK-SPEC §3.5 rule 2), so two directories under one name would mint the same
+// ids and a denial could not say which package refused. Picking one by an
+// ordering rule would be deterministic and undebuggable; the name is refused
+// instead, saying which repositories to choose between.
+var ErrPackageAmbiguous = errors.New("package name provided by more than one repository")
+
 // Package status values, as reported by `taskmgr package list` (CLI-SPEC §2.3).
 // They mirror the registry's vocabulary (CONFIG-SPEC §3) so a listing and a
 // mutation never disagree about an entry.
@@ -187,6 +195,79 @@ func checkHookProgram(fs vfs.FS, dir string, ph packageHook) error {
 	return nil
 }
 
+// resolveRef resolves one `use:` entry to the directory the package lives in,
+// and to the name it is known by.
+//
+// A `path:` entry is pure resolution and stays in packages.go. A `name:` entry
+// is a search: package repositories are installed under <home>/packages/<repo>,
+// and the name is looked up in each of them (HOOK-SPEC §3.5).
+func resolveRef(fs vfs.FS, ref PackageRef, home, configDir string) (dir, name string, err error) {
+	if err := refShape(ref); err != nil {
+		return "", "", err
+	}
+	n := strings.TrimSpace(ref.Name)
+	if n == "" {
+		return refPathDir(ref, configDir)
+	}
+
+	// With no locatable home there is no packages directory, and joining an
+	// empty home would yield the *relative* "packages/..." — which resolves
+	// against whatever directory the process happens to be in, so taskmgr would
+	// load and run hooks from a path any local process can plant. That is a hard
+	// error, not a fallback.
+	if strings.TrimSpace(home) == "" {
+		return "", "", fmt.Errorf("use entry: package %q is named by name, but no taskmgr home could be located (set $TASKMGR_HOME or $HOME)", n)
+	}
+	dir, err = findPackageInRepos(fs, home, n)
+	if err != nil {
+		return "", "", err
+	}
+	return dir, n, nil
+}
+
+// findPackageInRepos looks name up in every installed package repository and
+// returns the one directory that provides it.
+//
+// A directory is enough to count as providing the name: whether it holds a
+// usable manifest is loadPackage's question, and answering it here would report
+// a package with a broken manifest as "not installed", which points at the wrong
+// repair.
+func findPackageInRepos(fs vfs.FS, home, name string) (string, error) {
+	root := filepath.Join(home, packagesSubdir)
+	entries, err := fs.ReadDir(root)
+	if err != nil {
+		if vfs.IsNotExist(err) {
+			return "", fmt.Errorf("package %q: no package repository is installed under %s: %w", name, root, ErrPackageMissing)
+		}
+		return "", fmt.Errorf("read %s: %w", root, err)
+	}
+
+	var found, repos []string
+	for _, e := range entries {
+		// A repository directory is named like a package, so anything else here
+		// — a stray file, a dot-directory — is not one, and is skipped rather
+		// than reported as a repository that provides nothing.
+		if !e.IsDir() || !validPackageName(e.Name()) {
+			continue
+		}
+		cand := filepath.Join(root, e.Name(), name)
+		if fi, err := fs.Stat(cand); err == nil && fi.IsDir() {
+			found = append(found, cand)
+			repos = append(repos, e.Name())
+		}
+	}
+
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", fmt.Errorf("package %q is in no installed repository under %s: %w", name, root, ErrPackageMissing)
+	default:
+		return "", fmt.Errorf("package %q is provided by more than one installed repository (%s); remove one of them, or vendor the package you want into the store and name it by path: %w",
+			name, strings.Join(repos, ", "), ErrPackageAmbiguous)
+	}
+}
+
 // collectUse resolves one config file's `use:` list into the hooks it
 // contributes, in list order, and reports what each entry resolved to.
 //
@@ -205,7 +286,7 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 		first  error
 	)
 	for _, ref := range refs {
-		dir, name, err := packageDir(ref, home, configDir)
+		dir, name, err := resolveRef(fs, ref, home, configDir)
 		if err != nil {
 			// Name the entry the way the file spells it, so the row points at a
 			// line the reader can find — including an entry that is not a
@@ -217,7 +298,14 @@ func collectUse(fs vfs.FS, refs []PackageRef, home, configDir, scope string, see
 			if label == "" {
 				label = ref.malformed
 			}
-			infos = append(infos, PackageInfo{Name: label, Path: ref.Path, Scope: scope, Status: PackageBroken, Detail: err.Error()})
+			// A name no installed repository provides is `missing`, not
+			// `broken`: the entry is well formed and the repair is an install,
+			// which is the distinction ErrPackageMissing exists to carry.
+			status := PackageBroken
+			if errors.Is(err, ErrPackageMissing) {
+				status = PackageMissing
+			}
+			infos = append(infos, PackageInfo{Name: label, Path: ref.Path, Scope: scope, Status: status, Detail: err.Error()})
 			if first == nil {
 				first = err
 			}

@@ -192,6 +192,8 @@ type: bug
 priority: 1
 assignee: hans
 creator: hans
+agent: claude-code
+session: 81735307-43f7-458b-a4c5-fe1602ffc6d6
 labels: [area:details, triage:fix-as-is]
 parent: proj-8mq04b
 blocked_by: [proj-w1e7hd]
@@ -215,6 +217,8 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `priority` | int | yes | always |
 | `assignee` | string | no | non-empty |
 | `creator` | string | no | non-empty |
+| `agent` | string | no | non-empty |
+| `session` | string | no | non-empty |
 | `labels` | [string] | no | non-empty |
 | `parent` | string | no | non-empty |
 | `blocked_by` | [string] | no | non-empty |
@@ -236,6 +240,8 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `priority` | integer `0`–`4` (0 = critical … 4 = trivial); default `2`. |
 | `assignee` | 0–128 chars; single line; no control characters. |
 | `creator` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
+| `agent` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
+| `session` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
 | `labels` | 0–64 items; each 1–64 chars matching `^[a-z0-9][a-z0-9:._/-]*$`; unique. |
 | `parent` | a valid ID (§3); must reference an existing issue; not self. |
 | `blocked_by` | 0–256 items; each a valid ID; unique; no self; no cycles. |
@@ -258,6 +264,28 @@ Drilling a related issue should navigate fully, not just update the rail.
   Which *kind* of document it is belongs in labels (`kind:design`,
   `kind:session`, `kind:handover`, `kind:review`), not in the type enum, so a new
   kind costs no schema change.
+- **Agent provenance — `agent` and `session`.** `creator` says who the issue is
+  attributed to; these two say what filed it on that person's behalf. `agent` is a
+  slug naming the coding agent (`claude-code`, `gemini-cli`, …) and `session` is
+  that agent's own session identifier. Both are absent when a person filed the
+  issue directly, and both are provenance like `creator`: written once at creation,
+  never editable, so no later write can restate how the issue came to exist.
+
+  They are separate fields rather than a decorated `creator` because `creator` is an
+  **identity** that `creator == "hans"` has to keep matching. Folding an agent name
+  or a session id into it would silently break every filter over the people in a
+  store, which is the field's whole job.
+
+  A `session` is an **opaque handle, local to the machine that produced it**: there
+  it resolves to that agent's transcript, and elsewhere it identifies nothing. It is
+  therefore never a key to anything, and a store carried between machines keeps the
+  value without keeping its meaning. Values are not validated against any harness's
+  format — a session id is whatever its agent publishes.
+
+  The values are recorded, never inferred by the store. What detects a harness is
+  the front end ([CLI-SPEC.md](CLI-SPEC.md) §1.1), so an SDK caller and an import
+  write the provenance they were handed rather than the environment they ran in.
+
 - **No `comments` in frontmatter.** Comments live in the sidecar (§4.4). This keeps
   task files small so the hot scan stays cheap.
 
@@ -273,6 +301,8 @@ Drilling a related issue should navigate fully, not just update the rail.
 ---
 id: k7m2p9qx
 author: hans
+agent: claude-code
+session: 81735307-43f7-458b-a4c5-fe1602ffc6d6
 created: 2026-06-04T15:22:37Z
 body: |
     ## Verified on live tenant
@@ -308,6 +338,8 @@ deleted: true
 |---|---|---|---|
 | `id` | string | yes | A short token, `^[0-9a-z]{8}$`. On an ordinary append it is random and self-assigned **without reading the stream**: the ~36⁸ keyspace makes per-issue collisions negligible, so parallel branches never clash. The legacy-inline migration is the one exception — it derives the id from the comment and reads the stream, so a retry is idempotent (rule 7). Identifies the comment; ordering comes from position, not the id. |
 | `author` | string | no | 0–128 chars; single line; no control characters. |
+| `agent` | string | no | 0–128 chars; single line; no control characters. The coding agent that wrote this document, if any (§4.3). |
+| `session` | string | no | 0–128 chars; single line; no control characters. That agent's session identifier. |
 | `created` | timestamp | yes | `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$` (§6). |
 | `replaces` | string | no | The `id` of an earlier comment (one appearing earlier in the stream) in the same issue that this document supersedes — used for both edits and deletes. |
 | `deleted` | bool | no | When `true`, this document is a tombstone that retracts the comment named by `replaces`; `body` is then omitted. |
@@ -373,6 +405,17 @@ deleted: true
    Deriving the id alone is not enough: a repeated append of the same id would
    resolve to one comment for a reader, but would still grow the sidecar on
    every attempt. Both halves are required.
+
+8. **Provenance is per document, not per comment.** `author`, `agent` and
+   `session` describe the document they appear on, so a revision or a tombstone
+   records whoever wrote *it* — not whoever wrote the comment it replaces. A
+   comment written by a person and deleted by an agent says exactly that, and the
+   original keeps its own attribution in the history either way.
+
+   A comment migrated from the inline format (rule 7) carries neither field: that
+   format had nowhere to record them, and inventing a value would make the
+   migration's output depend on the machine that happened to run it — which would
+   also break the derived id it needs to stay idempotent.
 
 ### 4.5 Lock file — `.lock`
 
@@ -584,6 +627,8 @@ A writer rejects, before anything touches disk:
 - a comment body that would serialize as a double-quoted (escaped) scalar;
 - a comment body over 65536 bytes — comments do not overflow (§4.6 rule 7);
 - a comment with neither a `body` nor `deleted: true`;
+- a comment whose `author`, `agent` or `session` breaks the §4.4 constraint — on a
+  tombstone too, which carries them like any other document;
 - a comment `replaces` that does not name an existing earlier comment in the same
   issue.
 

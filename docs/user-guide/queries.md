@@ -28,6 +28,8 @@ taskmgr list --all -q 'closed > "2026-01-01"'
 | `priority` | `==` `!=` `<` `<=` `>` `>=` | `0`–`4` |
 | `assignee` | `==` `!=` `~` | text |
 | `creator` | `==` `!=` `~` | text |
+| `agent` | `==` `!=` `~` | the coding agent that filed it, or `""` for none |
+| `session` | `==` `!=` `~` | that agent's session id |
 | `parent` | `==` `!=` | an issue ID, or `""` for "no parent" |
 | `label` | `==` `!=` `~` | `==` means the issue carries exactly that label |
 | `text` | `~` | matches the ID, title **and** description together |

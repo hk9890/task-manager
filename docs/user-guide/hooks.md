@@ -34,16 +34,43 @@ hooks:
 Then tell a store to use it:
 
 ```bash
-taskmgr package add doc-policy   # ~/.taskmgr/packages/doc-policy
+taskmgr package add doc-policy   # start using it
 taskmgr package list             # every package that gates this store, and whether it loads
 taskmgr hook list                # every hook that gates this store, in the order it runs
 taskmgr package rm doc-policy    # stop using it; the directory itself is left alone
 ```
 
-`taskmgr` never downloads, unpacks or writes a package. Installing one is putting the
-directory where the reference points — `~/.taskmgr/packages/<name>` for a package you use
-everywhere, or a directory inside `.tasks/` for one that belongs to a single project. Copy
-it, clone it, unzip it: `taskmgr` only ever reads it.
+## Getting packages onto your machine
+
+Packages are distributed in a **package repository**: a git repository whose top-level
+directories are packages. Cloning it is installing it.
+
+```bash
+taskmgr package repo add git@github.com:you/task-manager-packages.git
+taskmgr package repo list        # what is installed, and what each one provides
+taskmgr package add doc-policy   # use one of them
+```
+
+Installing and using are separate on purpose. A repository can provide ten packages while
+you gate your stores with two, and `package rm` stops using one without deleting anything.
+
+Keep them current with one command — every installed repository, or one by name:
+
+```bash
+taskmgr package repo update
+taskmgr package repo rm task-manager-packages   # delete the clone
+```
+
+Two things to know:
+
+- The name comes from the URL's last part, minus `.git`. Use `--as <name>` when two
+  repositories would land on the same one.
+- If two installed repositories provide a package with the same name, `package add <name>`
+  refuses it and tells you which two. Remove one of them, or keep the copy you want inside
+  `.tasks/` and name it by path (below).
+
+A package for one project only does not need a repository at all: put the directory inside
+that project's `.tasks/` and name it by path.
 
 ## A package can teach as well as refuse
 
@@ -148,8 +175,8 @@ taskmgr package add --path packages/repo-policy
 
 The path is relative to `.tasks/`, and has to stay inside it — an absolute path is
 refused, because it names a place only your machine has and would resolve to nothing in
-every clone. For a package that lives elsewhere, put it in `~/.taskmgr/packages/` and name
-it with `taskmgr package add <name>`.
+every clone. A package that comes from a package repository is named with
+`taskmgr package add <name>` instead.
 
 Kept inside, the package is committed alongside the tasks and every clone of the
 repository has it without installing anything.

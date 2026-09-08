@@ -79,7 +79,7 @@ func TestClose_SidecarStaysInComments(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	// Add a comment so the sidecar exists.
-	if _, err := s.AddComment(iss.ID, "alice", "pre-close note\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "alice"}, "pre-close note\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestClose_CommentOnClosedIssue(t *testing.T) {
 	}
 
 	// AddComment on a closed issue must succeed.
-	c, err := s.AddComment(iss.ID, "alice", "post-close note\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "alice"}, "post-close note\n")
 	if err != nil {
 		t.Fatalf("AddComment on closed issue: %v", err)
 	}

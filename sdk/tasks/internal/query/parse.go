@@ -69,6 +69,8 @@ var knownFields = map[string]fieldInfo{
 	"priority": {kind: fieldInt, allowOps: []string{"==", "!=", "<", "<=", ">", ">="}},
 	"assignee": {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
 	"creator":  {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
+	"agent":    {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
+	"session":  {kind: fieldString, allowOps: []string{"==", "!=", "~"}},
 	"parent":   {kind: fieldString, allowOps: []string{"==", "!="}},
 	"label":    {kind: fieldStrSet, allowOps: []string{"==", "!=", "~"}},
 	"text":     {kind: fieldText, allowOps: []string{"~"}},

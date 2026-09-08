@@ -36,7 +36,22 @@ import (
 // short; the effective id is then "pkg:<name>:h<index>".
 func writePackage(t *testing.T, fs vfs.FS, dir, name string, hooks []Hook) string {
 	t.Helper()
-	pkgDir := filepath.Join(dir, packagesSubdir, name)
+	return writePackageAt(t, fs, filepath.Join(dir, packagesSubdir, name), hooks)
+}
+
+// writeHomePackage writes a package into an installed repository under a taskmgr
+// home — <home>/packages/<repo>/<name>, which is where a `name:` reference
+// resolves (HOOK-SPEC §3.5).
+func writeHomePackage(t *testing.T, fs vfs.FS, home, repo, name string, hooks []Hook) string {
+	t.Helper()
+	return writePackageAt(t, fs, filepath.Join(home, packagesSubdir, repo, name), hooks)
+}
+
+// writePackageAt writes the package directory itself, wherever it is: the two
+// layouts differ only in the path, and every rule about a package's contents is
+// the same in both.
+func writePackageAt(t *testing.T, fs vfs.FS, pkgDir string, hooks []Hook) string {
+	t.Helper()
 	if err := fs.MkdirAll(pkgDir, 0o755); err != nil {
 		t.Fatalf("mkdir package %s: %v", pkgDir, err)
 	}

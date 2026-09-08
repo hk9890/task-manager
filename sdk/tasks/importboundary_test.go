@@ -131,12 +131,17 @@ func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 		// packageload.go reads a hook package's manifest; the format itself is
 		// pure and lives in packages.go.
 		"packageload.go": true,
+
+		// packagerepo.go reads and removes the installed package repositories
+		// under the taskmgr home.
+		"packagerepo.go": true,
 	}
 	mayImportEnv := map[string]bool{
 		"store.go":       true, // carries the env seam its resolution used
 		"config.go":      true, // the per-user home (CONFIG-SPEC)
 		"registry.go":    true, // central registry resolution
 		"packageload.go": true, // global package directory under the user home
+		"packagerepo.go": true, // the installed repositories under the user home
 	}
 	mayImportExec := map[string]bool{
 		"store.go":   true, // carries the runner hooks are spawned with

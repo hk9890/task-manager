@@ -34,6 +34,8 @@ var createFlags struct {
 	priority        int
 	assignee        string
 	creator         string
+	agent           string
+	session         string
 	labels          []string
 	parent          string
 	blockedBy       []string
@@ -63,14 +65,19 @@ var createCmd = &cobra.Command{
 			desc = string(b)
 		}
 
-		creator := defaultUser(createFlags.creator)
+		by, err := resolveActor(cmd, createFlags.creator, createFlags.agent, createFlags.session)
+		if err != nil {
+			return err
+		}
 
 		in := tasks.CreateInput{
 			Title:       createFlags.title,
 			Description: desc,
 			Type:        tasks.Type(createFlags.typ),
 			Assignee:    createFlags.assignee,
-			Creator:     creator,
+			Creator:     by.Name,
+			Agent:       by.Agent,
+			Session:     by.Session,
 			Labels:      createFlags.labels,
 			Parent:      createFlags.parent,
 			BlockedBy:   createFlags.blockedBy,
@@ -111,6 +118,7 @@ func init() {
 	f.IntVar(&createFlags.priority, "priority", tasks.PriorityDefault, "priority 0 (critical) .. 4 (trivial)")
 	f.StringVar(&createFlags.assignee, "assignee", "", "assignee")
 	f.StringVar(&createFlags.creator, "creator", "", "creator — who filed the issue; recorded once at creation (default: $USER)")
+	addActorFlags(createCmd, &createFlags.agent, &createFlags.session)
 	f.StringSliceVar(&createFlags.labels, "label", nil, "label (repeatable)")
 	f.StringVar(&createFlags.parent, "parent", "", "parent issue ID")
 	f.StringSliceVar(&createFlags.blockedBy, "blocked-by", nil, "blocker issue ID (repeatable)")

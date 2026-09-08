@@ -37,8 +37,9 @@ const (
 	// PackageManifestName is the file that makes a directory a hook package.
 	PackageManifestName = "taskmgr-package.yaml"
 
-	// packagesSubdir holds machine-wide packages under the taskmgr home, so a
-	// `use: - name:` reference resolves to <home>/packages/<name>.
+	// packagesSubdir holds the installed package repositories under the taskmgr
+	// home, so a `use: - name:` reference resolves to <home>/packages/<repo>/<name>
+	// for whichever installed repository provides that name (HOOK-SPEC §3.5).
 	packagesSubdir = "packages"
 
 	// packageSchemaVersion is the manifest schema this build reads (§3.6).
@@ -422,29 +423,20 @@ type packageHook struct {
 // directory or hide itself.
 func validPackageName(name string) bool { return validStoreName(name) }
 
-// packageDir resolves one `use:` entry to the directory the package lives in,
-// and to the name it is known by.
+// refPathDir resolves one `use: - path:` entry to the directory the package
+// lives in, and to the name it is known by.
 //
-// home is the taskmgr home (for a Name reference) and configDir is the directory
-// holding the config file the entry was read from (for a Path reference): the
-// store's data directory for a store config, the home for the per-user one. A
-// package referenced by path from a store config therefore sits inside the store
-// and survives `store move --central`, which moves the store whole.
-func packageDir(ref PackageRef, home, configDir string) (dir, name string, err error) {
+// configDir is the directory holding the config file the entry was read from:
+// the store's data directory for a store config, the home for the per-user one.
+// A package referenced by path from a store config therefore sits inside the
+// store and survives `store move --central`, which moves the store whole.
+//
+// A `name:` entry is not resolved here. It names a package inside one of the
+// installed package repositories, and finding which one means reading the home
+// — the shell's job, in packageload.go (HOOK-SPEC §3.5).
+func refPathDir(ref PackageRef, configDir string) (dir, name string, err error) {
 	if err := refShape(ref); err != nil {
 		return "", "", err
-	}
-	if n := strings.TrimSpace(ref.Name); n != "" {
-		// A name is only ever <home>/packages/<name>. With no locatable home
-		// there is no such directory, and joining an empty home would yield the
-		// *relative* "packages/<name>" — which resolves against whatever
-		// directory the process happens to be in, so taskmgr would load and run
-		// hooks from a path any local process can plant. That is a hard error,
-		// not a fallback.
-		if strings.TrimSpace(home) == "" {
-			return "", "", fmt.Errorf("use entry: package %q is named by name, but no taskmgr home could be located (set $TASKMGR_HOME or $HOME)", n)
-		}
-		return filepath.Join(home, packagesSubdir, n), n, nil
 	}
 
 	// refShape has already refused an absolute path, so every path that reaches

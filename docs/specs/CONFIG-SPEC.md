@@ -44,7 +44,7 @@ central_root: ~/.taskmgr   # registry + central stores live here; ~ expands
 
 hook_timeout: 2s           # fallback limit for a store that sets none
 use:                       # hook packages applied to every store on this machine
-  - name: doc-policy       # <home>/packages/doc-policy
+  - name: doc-policy       # <home>/packages/<repo>/doc-policy
 ```
 
 | Field | Required | Notes |
@@ -54,9 +54,12 @@ use:                       # hook packages applied to every store on this machin
 | `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
 | `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home and stays inside it. |
 
-Machine-wide packages live at `<home>/packages/<name>`, which is what a `name` entry in
-either config file resolves to. The directory is created by whoever installs a package;
-taskmgr never writes one ([HOOK-SPEC](HOOK-SPEC.md) §3.6).
+`<home>/packages` holds the installed **package repositories**, one directory each, and a
+repository's own top-level directories are the packages it provides. A `name` entry in
+either config file resolves to `<home>/packages/<repo>/<name>` for whichever repository
+provides that name ([HOOK-SPEC](HOOK-SPEC.md) §3.5). `taskmgr package repo add` clones a
+repository into place and `package repo rm` deletes one; taskmgr writes nothing else there
+([CLI-SPEC](CLI-SPEC.md) §2.4).
 
 `config.yaml` always lives in the home, even when `central_root` points elsewhere.
 Unknown keys are ignored; a corrupt (unparseable) file is a hard error. The withdrawn
