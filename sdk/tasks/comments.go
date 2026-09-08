@@ -59,6 +59,9 @@ const (
 	// commentIDLen is the length of a comment id in base36 characters. Every
 	// producer must match TASK-STORAGE-SPEC §4.4's `^[0-9a-z]{8}$`.
 	commentIDLen = 8
+	// maxActorFieldLen bounds a comment's author, agent and session, matching the
+	// issue-level bound on the same three concepts (TASK-STORAGE-SPEC §4.3).
+	maxActorFieldLen = 128
 )
 
 // commentsPath returns the path to the sidecar file for issue id.
@@ -71,6 +74,8 @@ func (s *Store) commentsPath(id string) string {
 type commentOnDisk struct {
 	ID       string `yaml:"id"`
 	Author   string `yaml:"author,omitempty"`
+	Agent    string `yaml:"agent,omitempty"`
+	Session  string `yaml:"session,omitempty"`
 	Created  string `yaml:"created"` // RFC3339 UTC whole seconds
 	Replaces string `yaml:"replaces,omitempty"`
 	Deleted  bool   `yaml:"deleted,omitempty"`
@@ -97,6 +102,12 @@ func marshalCommentDoc(c Comment) []byte {
 	addScalar("id", c.ID)
 	if c.Author != "" {
 		addScalar("author", c.Author)
+	}
+	if c.Agent != "" {
+		addScalar("agent", c.Agent)
+	}
+	if c.Session != "" {
+		addScalar("session", c.Session)
 	}
 	addScalar("created", created)
 	if c.Replaces != "" {
@@ -182,6 +193,8 @@ func parseCommentStream(data []byte) ([]Comment, error) {
 		out = append(out, Comment{
 			ID:       d.ID,
 			Author:   d.Author,
+			Agent:    d.Agent,
+			Session:  d.Session,
 			Created:  created,
 			Replaces: d.Replaces,
 			Deleted:  d.Deleted,
@@ -450,15 +463,48 @@ func validateCommentBody(body string) error {
 	return nil
 }
 
+// validateActorField enforces the shared constraint on a comment's author,
+// agent and session (TASK-STORAGE-SPEC §4.4): at most 128 characters,
+// a single line, no control characters. The issue-level equivalents are in
+// fieldViolations; a comment is not an *Issue, so it cannot reuse them.
+//
+// This is a PURE function.
+func validateActorField(field, value string) error {
+	if len([]rune(value)) > maxActorFieldLen {
+		return invalid(field, "must be at most %d characters, got %d", maxActorFieldLen, len([]rune(value)))
+	}
+	if strings.ContainsRune(value, '\n') {
+		return invalid(field, "must be a single line (no newline characters)")
+	}
+	if hasControlChar(value) {
+		return invalid(field, "must not contain control characters")
+	}
+	return nil
+}
+
 // validateCommentDoc verifies the per-document invariants for a comment that
 // is about to be appended to the sidecar (TASK-STORAGE-SPEC §10):
 //   - a comment must have a non-empty body OR Deleted:true (not neither)
 //   - if the body is non-empty, it must not force a double-quoted scalar
+//   - author, agent and session are single-line and bounded
+//
+// The provenance fields are checked on the tombstone path too: a tombstone
+// carries them like any other document, and an unchecked newline in one would
+// break the document stream the same way.
 //
 // This is a PURE function.
 func validateCommentDoc(c Comment) error {
 	if !c.Deleted && strings.TrimSpace(c.Body) == "" {
 		return invalid("body", "comment must have a non-empty body or deleted:true")
+	}
+	for _, f := range []struct{ name, value string }{
+		{"author", c.Author},
+		{"agent", c.Agent},
+		{"session", c.Session},
+	} {
+		if err := validateActorField(f.name, f.value); err != nil {
+			return err
+		}
 	}
 	if !c.Deleted && c.Body != "" {
 		if err := validateCommentBody(c.Body); err != nil {
@@ -639,7 +685,10 @@ func (s *Store) requireReplaceTarget(sidecarPath, commentID string) error {
 // comment (including its freshly allocated random ID). The issue .md file is
 // NOT rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
 // Comment appends are allowed on closed issues (TASK-STORAGE-SPEC §4.4.6).
-func (s *Store) AddComment(id, author, body string) (*Comment, error) {
+//
+// by carries the author and, when a coding agent is writing on that author's
+// behalf, its slug and session id (§4.4 rule 8). A zero Actor writes none of the three.
+func (s *Store) AddComment(id string, by Actor, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
 		iss, sidecarPath, err := s.prepareCommentMutation(id)
@@ -650,7 +699,9 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 		body = sanitizeCommentBody(body)
 		c := Comment{
 			ID:      newCommentID(),
-			Author:  author,
+			Author:  by.Name,
+			Agent:   by.Agent,
+			Session: by.Session,
 			Created: s.now(),
 			Body:    body,
 		}
@@ -671,7 +722,10 @@ func (s *Store) AddComment(id, author, body string) (*Comment, error) {
 // EditComment appends a revision to the issue sidecar with Replaces set to
 // commentID, and returns the new effective comment. The issue .md file is NOT
 // rewritten (the sidecar is append-only per TASK-STORAGE-SPEC §4.4).
-func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error) {
+//
+// by describes whoever is making this revision, which is not necessarily whoever
+// wrote the comment being revised: the revision records its own provenance (§4.4 rule 8).
+func (s *Store) EditComment(id, commentID string, by Actor, body string) (*Comment, error) {
 	var out *Comment
 	err := s.withLock(func() error {
 		iss, sidecarPath, err := s.prepareCommentMutation(id)
@@ -687,7 +741,9 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 		body = sanitizeCommentBody(body)
 		c := Comment{
 			ID:       newCommentID(),
-			Author:   author,
+			Author:   by.Name,
+			Agent:    by.Agent,
+			Session:  by.Session,
 			Created:  s.now(),
 			Replaces: commentID,
 			Body:     body,
@@ -708,7 +764,9 @@ func (s *Store) EditComment(id, commentID, author, body string) (*Comment, error
 
 // DeleteComment appends a tombstone to the issue sidecar with Replaces set to
 // commentID and Deleted: true. The issue .md file is NOT rewritten.
-func (s *Store) DeleteComment(id, commentID, author string) error {
+//
+// by describes whoever is deleting, recorded on the tombstone (§4.4 rule 8).
+func (s *Store) DeleteComment(id, commentID string, by Actor) error {
 	return s.withLock(func() error {
 		iss, sidecarPath, err := s.prepareCommentMutation(id)
 		if err != nil {
@@ -721,10 +779,15 @@ func (s *Store) DeleteComment(id, commentID, author string) error {
 
 		c := Comment{
 			ID:       newCommentID(),
-			Author:   author,
+			Author:   by.Name,
+			Agent:    by.Agent,
+			Session:  by.Session,
 			Created:  s.now(),
 			Replaces: commentID,
 			Deleted:  true,
+		}
+		if err := validateCommentDoc(c); err != nil {
+			return err
 		}
 
 		if err := appendCommentDoc(s.fs, sidecarPath, c); err != nil {

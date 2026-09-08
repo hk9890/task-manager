@@ -108,6 +108,14 @@ type Criteria struct {
 	// Creator restricts to issues with exactly this creator.
 	Creator string
 
+	// Agent restricts to issues filed by exactly this coding agent. The empty
+	// string adds no constraint; to find issues no agent filed, pass the
+	// expression `agent == ""` to List directly.
+	Agent string
+
+	// Session restricts to issues filed in exactly this agent session.
+	Session string
+
 	// Parent, when non-nil, restricts to issues whose parent equals the pointed-to
 	// string. A non-nil pointer to "" means "no parent" (parent == "").
 	Parent *string
@@ -208,6 +216,16 @@ func (c Criteria) Build() (string, error) {
 	// creator == "..."
 	if c.Creator != "" {
 		parts = append(parts, fmt.Sprintf("creator == %s", quoteVal(c.Creator)))
+	}
+
+	// agent == "..."
+	if c.Agent != "" {
+		parts = append(parts, fmt.Sprintf("agent == %s", quoteVal(c.Agent)))
+	}
+
+	// session == "..."
+	if c.Session != "" {
+		parts = append(parts, fmt.Sprintf("session == %s", quoteVal(c.Session)))
 	}
 
 	// parent == "..."  (non-nil "" → parent == "")

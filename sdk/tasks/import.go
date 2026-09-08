@@ -40,6 +40,8 @@ import (
 // zero.
 type ImportComment struct {
 	Author  string
+	Agent   string
+	Session string
 	Created time.Time
 	Body    string
 }
@@ -65,6 +67,8 @@ type ImportInput struct {
 	Status      Status
 	Assignee    string
 	Creator     string
+	Agent       string
+	Session     string
 	Labels      []string
 	Parent      string
 	BlockedBy   []string
@@ -123,6 +127,8 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 			Priority:    in.Priority,
 			Assignee:    in.Assignee,
 			Creator:     in.Creator,
+			Agent:       in.Agent,
+			Session:     in.Session,
 			Labels:      in.Labels,
 			Parent:      in.Parent,
 			BlockedBy:   in.BlockedBy,
@@ -155,6 +161,8 @@ func (s *Store) Import(in ImportInput) (*MutationResult, error) {
 			doc := Comment{
 				ID:      newCommentID(),
 				Author:  c.Author,
+				Agent:   c.Agent,
+				Session: c.Session,
 				Created: cCreated,
 				Body:    sanitizeCommentBody(c.Body),
 			}

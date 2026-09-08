@@ -96,12 +96,32 @@ const (
 	PriorityDefault = 2
 )
 
+// Actor identifies who performed a write: the person it is attributed to, and
+// the coding-agent session that did it on their behalf. Agent and Session are
+// empty when a person acted directly (TASK-STORAGE-SPEC §4.3).
+//
+// The SDK never fills these in from its own environment — detecting a harness is
+// the caller's job, so a library consumer and an import both record what they
+// were given rather than what machine they happened to run on.
+type Actor struct {
+	// Name is the person the write is attributed to (the CLI defaults it to $USER).
+	Name string
+	// Agent is the coding-agent slug that performed the write, e.g. "claude-code".
+	Agent string
+	// Session is that agent's session identifier. It is an opaque handle, local
+	// to the machine that produced it: it resolves to a transcript there and
+	// means nothing anywhere else.
+	Session string
+}
+
 // Comment is an immutable, append-only note on an issue. It is the durable
 // record of decisions and progress. Each comment is stored as one YAML document
 // in the issue's sidecar file (.tasks/comments/<id>.yml).
 type Comment struct {
 	ID       string    `yaml:"id,omitempty"` // opaque random token, ^[0-9a-z]{8}$
 	Author   string    `yaml:"author,omitempty"`
+	Agent    string    `yaml:"agent,omitempty"`   // coding agent that wrote it, if any
+	Session  string    `yaml:"session,omitempty"` // that agent's session id
 	Created  time.Time `yaml:"created"`
 	Replaces string    `yaml:"replaces,omitempty"` // ID of an earlier comment this supersedes
 	Deleted  bool      `yaml:"deleted,omitempty"`  // true → tombstone (no Body)
@@ -123,7 +143,15 @@ type Issue struct {
 	Priority int
 	Assignee string
 	Creator  string
-	Labels   []string
+
+	// Agent and Session record the coding-agent session that filed the issue on
+	// the Creator's behalf, empty when a person filed it directly. Like Creator
+	// they are provenance: set once at creation and never edited
+	// (TASK-STORAGE-SPEC §4.3).
+	Agent   string
+	Session string
+
+	Labels []string
 
 	Parent    string   // ID of the grouping/epic issue, if any
 	BlockedBy []string // IDs that must close before this is ready

@@ -182,7 +182,7 @@ func TestAddComment_ReturnsSelf(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "hans", "a note\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "a note\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestAddComment_SidecarNotIssueMD(t *testing.T) {
 	}
 
 	// Add a comment.
-	_, err = s.AddComment(iss.ID, "hans", "a note\n")
+	_, err = s.AddComment(iss.ID, Actor{Name: "hans"}, "a note\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestAddComment_SidecarContainsComment(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "hans", "sidecar note\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "sidecar note\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestAddComment_IssueHasNoComments(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = s.AddComment(iss.ID, "hans", "a note\n")
+	_, err = s.AddComment(iss.ID, Actor{Name: "hans"}, "a note\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -312,11 +312,11 @@ func TestComments_AddAndResolve(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c1, err := s.AddComment(iss.ID, "hans", "first note\n")
+	c1, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "first note\n")
 	if err != nil {
 		t.Fatalf("AddComment 1: %v", err)
 	}
-	_, err = s.AddComment(iss.ID, "alice", "second note\n")
+	_, err = s.AddComment(iss.ID, Actor{Name: "alice"}, "second note\n")
 	if err != nil {
 		t.Fatalf("AddComment 2: %v", err)
 	}
@@ -344,12 +344,12 @@ func TestEditComment_ReturnsRevision(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	orig, err := s.AddComment(iss.ID, "hans", "original note\n")
+	orig, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "original note\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	revised, err := s.EditComment(iss.ID, orig.ID, "hans", "revised note\n")
+	revised, err := s.EditComment(iss.ID, orig.ID, Actor{Name: "hans"}, "revised note\n")
 	if err != nil {
 		t.Fatalf("EditComment: %v", err)
 	}
@@ -376,12 +376,12 @@ func TestEditComment_ResolvesToRevision(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	orig, err := s.AddComment(iss.ID, "hans", "original\n")
+	orig, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "original\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	_, err = s.EditComment(iss.ID, orig.ID, "hans", "revised\n")
+	_, err = s.EditComment(iss.ID, orig.ID, Actor{Name: "hans"}, "revised\n")
 	if err != nil {
 		t.Fatalf("EditComment: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestEditComment_NotIssueMD(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	orig, err := s.AddComment(iss.ID, "hans", "original\n")
+	orig, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "original\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestEditComment_NotIssueMD(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	_, err = s.EditComment(iss.ID, orig.ID, "hans", "revised\n")
+	_, err = s.EditComment(iss.ID, orig.ID, Actor{Name: "hans"}, "revised\n")
 	if err != nil {
 		t.Fatalf("EditComment: %v", err)
 	}
@@ -441,7 +441,7 @@ func TestEditComment_RejectsMissingComment(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = s.EditComment(iss.ID, "nonexist", "hans", "body\n")
+	_, err = s.EditComment(iss.ID, "nonexist", Actor{Name: "hans"}, "body\n")
 	if err == nil {
 		t.Error("EditComment with non-existent commentID should fail")
 	}
@@ -466,20 +466,20 @@ func TestEditDeleteComment_RejectEmptyCommentID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.AddComment(iss.ID, "hans", "original\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "original\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
 	var ve *ValidationError
 
-	_, err = s.EditComment(iss.ID, "", "hans", "revision\n")
+	_, err = s.EditComment(iss.ID, "", Actor{Name: "hans"}, "revision\n")
 	if err == nil {
 		t.Error("EditComment with an empty commentID must fail")
 	} else if !errors.As(err, &ve) {
 		t.Errorf("EditComment: expected *ValidationError, got %T: %v", err, err)
 	}
 
-	err = s.DeleteComment(iss.ID, "", "hans")
+	err = s.DeleteComment(iss.ID, "", Actor{Name: "hans"})
 	if err == nil {
 		t.Error("DeleteComment with an empty commentID must fail")
 	} else if !errors.As(err, &ve) {
@@ -507,12 +507,12 @@ func TestDeleteComment_OmittedFromResolved(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "hans", "to be deleted\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "to be deleted\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	if err := s.DeleteComment(iss.ID, c.ID, "hans"); err != nil {
+	if err := s.DeleteComment(iss.ID, c.ID, Actor{Name: "hans"}); err != nil {
 		t.Fatalf("DeleteComment: %v", err)
 	}
 
@@ -534,12 +534,12 @@ func TestDeleteComment_HistoryPreserved(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "hans", "to be deleted\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "to be deleted\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	if err := s.DeleteComment(iss.ID, c.ID, "hans"); err != nil {
+	if err := s.DeleteComment(iss.ID, c.ID, Actor{Name: "hans"}); err != nil {
 		t.Fatalf("DeleteComment: %v", err)
 	}
 
@@ -569,7 +569,7 @@ func TestDeleteComment_NotIssueMD(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c, err := s.AddComment(iss.ID, "hans", "to be deleted\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "to be deleted\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestDeleteComment_NotIssueMD(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 
-	if err := s.DeleteComment(iss.ID, c.ID, "hans"); err != nil {
+	if err := s.DeleteComment(iss.ID, c.ID, Actor{Name: "hans"}); err != nil {
 		t.Fatalf("DeleteComment: %v", err)
 	}
 
@@ -602,7 +602,7 @@ func TestDeleteComment_RejectsMissingComment(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := s.DeleteComment(iss.ID, "nonexist", "hans"); err == nil {
+	if err := s.DeleteComment(iss.ID, "nonexist", Actor{Name: "hans"}); err == nil {
 		t.Error("DeleteComment with non-existent commentID should fail")
 	}
 }
@@ -618,11 +618,11 @@ func TestDetail_CommentsLoaded(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	c1, err := s.AddComment(iss.ID, "hans", "first\n")
+	c1, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "first\n")
 	if err != nil {
 		t.Fatalf("AddComment 1: %v", err)
 	}
-	_, err = s.AddComment(iss.ID, "alice", "second\n")
+	_, err = s.AddComment(iss.ID, Actor{Name: "alice"}, "second\n")
 	if err != nil {
 		t.Fatalf("AddComment 2: %v", err)
 	}
@@ -648,12 +648,12 @@ func TestDetail_CommentsResolved(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	orig, err := s.AddComment(iss.ID, "hans", "original\n")
+	orig, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "original\n")
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	_, err = s.EditComment(iss.ID, orig.ID, "hans", "revised\n")
+	_, err = s.EditComment(iss.ID, orig.ID, Actor{Name: "hans"}, "revised\n")
 	if err != nil {
 		t.Fatalf("EditComment: %v", err)
 	}
@@ -707,7 +707,7 @@ func TestMigration_InlineFrontmatterCommentsMovedToSidecar(t *testing.T) {
 	}
 
 	// Now add a new comment — this should trigger migration.
-	newC, err := s.AddComment(iss.ID, "alice", "new comment\n")
+	newC, err := s.AddComment(iss.ID, Actor{Name: "alice"}, "new comment\n")
 	if err != nil {
 		t.Fatalf("AddComment (migration): %v", err)
 	}
@@ -803,7 +803,7 @@ func TestMigrateInlineComments_InterruptedRetry_NoDuplicates(t *testing.T) {
 	diskFull := errors.New("no space left on device")
 	m.FailOn("WriteAtomic", mdPath, diskFull)
 
-	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); !errors.Is(err, diskFull) {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "bob"}, "new comment\n"); !errors.Is(err, diskFull) {
 		t.Fatalf("AddComment during interrupted migration: got %v, want %v", err, diskFull)
 	}
 
@@ -822,7 +822,7 @@ func TestMigrateInlineComments_InterruptedRetry_NoDuplicates(t *testing.T) {
 	}
 
 	// The fault is consumed once it fires, so this retry reaches the .md.
-	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "bob"}, "new comment\n"); err != nil {
 		t.Fatalf("AddComment after interrupted migration: %v", err)
 	}
 
@@ -885,7 +885,7 @@ func TestMigrateInlineComments_IdenticalComments_BothSurvive(t *testing.T) {
 		t.Fatalf("WriteAtomic: %v", err)
 	}
 
-	if _, err := s.AddComment(iss.ID, "bob", "new comment\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "bob"}, "new comment\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
@@ -941,11 +941,11 @@ func TestAddComment_RejectEmptyBody(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = s.AddComment(iss.ID, "hans", "")
+	_, err = s.AddComment(iss.ID, Actor{Name: "hans"}, "")
 	if err == nil {
 		t.Error("AddComment with empty body should fail")
 	}
-	_, err = s.AddComment(iss.ID, "hans", "   ")
+	_, err = s.AddComment(iss.ID, Actor{Name: "hans"}, "   ")
 	if err == nil {
 		t.Error("AddComment with whitespace-only body should fail")
 	}
@@ -961,7 +961,7 @@ func TestAddComment_RejectControlCharsInBody(t *testing.T) {
 	}
 
 	// A body with a NUL character would force double-quoted YAML scalar.
-	_, err = s.AddComment(iss.ID, "hans", "bad\x00body")
+	_, err = s.AddComment(iss.ID, Actor{Name: "hans"}, "bad\x00body")
 	if err == nil {
 		t.Error("AddComment with control char body should fail")
 	}

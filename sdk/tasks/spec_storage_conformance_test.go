@@ -73,6 +73,8 @@ func TestSpec_Storage_FrontmatterFieldOrder(t *testing.T) {
 		Priority:    1,
 		Assignee:    "hans",
 		Creator:     "alice",
+		Agent:       "claude-code",
+		Session:     "s-1",
 		Labels:      []string{"area:db"},
 		Parent:      "tst-0007",
 		BlockedBy:   []string{"tst-0040"},
@@ -108,7 +110,8 @@ func TestSpec_Storage_FrontmatterFieldOrder(t *testing.T) {
 	// Build the ordered list of field name prefixes from the spec table.
 	wantOrder := []string{
 		"id:", "title:", "status:", "type:", "priority:",
-		"assignee:", "creator:", "labels:", "parent:", "blocked_by:", "related:",
+		"assignee:", "creator:", "agent:", "session:", "labels:", "parent:",
+		"blocked_by:", "related:",
 		"created:", "updated:", "closed:", "close_reason:",
 	}
 
@@ -158,7 +161,7 @@ func TestSpec_Storage_OmitemptyOptionalFields(t *testing.T) {
 	body := string(data)
 
 	// These optional fields must NOT appear when empty.
-	absent := []string{"assignee:", "creator:", "labels:", "parent:", "blocked_by:", "related:", "close_reason:", "closed:"}
+	absent := []string{"assignee:", "creator:", "agent:", "session:", "labels:", "parent:", "blocked_by:", "related:", "close_reason:", "closed:"}
 	for _, field := range absent {
 		if strings.Contains(body, field) {
 			t.Errorf("optional field %q should be absent for a minimal issue, but found in:\n%s", field, body)
@@ -395,7 +398,7 @@ func TestSpec_Storage_SidecarCreatedLazily(t *testing.T) {
 	}
 
 	// Add a comment.
-	if _, err := s.AddComment(iss.ID, "alice", "first note\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "alice"}, "first note\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 
@@ -422,7 +425,7 @@ func TestSpec_Storage_SidecarPathUnchangedAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.AddComment(iss.ID, "alice", "pre-close note\n"); err != nil {
+	if _, err := s.AddComment(iss.ID, Actor{Name: "alice"}, "pre-close note\n"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 

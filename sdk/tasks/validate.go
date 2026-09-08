@@ -29,6 +29,8 @@ const (
 	maxTitleLen    = 200
 	maxAssigneeLen = 128
 	maxCreatorLen  = 128
+	maxAgentLen    = 128
+	maxSessionLen  = 128
 	maxLabelLen    = 64
 	maxLabels      = 64
 	maxBlockedBy   = 256
@@ -147,6 +149,28 @@ func fieldViolations(iss *Issue) []*ValidationError {
 		add("creator", "must not contain control characters")
 	}
 
+	// agent: 0-128 chars; single line; no control characters.
+	if len([]rune(iss.Agent)) > maxAgentLen {
+		add("agent", "must be at most %d characters, got %d", maxAgentLen, len([]rune(iss.Agent)))
+	}
+	if strings.ContainsRune(iss.Agent, '\n') {
+		add("agent", "must be a single line (no newline characters)")
+	}
+	if hasControlChar(iss.Agent) {
+		add("agent", "must not contain control characters")
+	}
+
+	// session: 0-128 chars; single line; no control characters.
+	if len([]rune(iss.Session)) > maxSessionLen {
+		add("session", "must be at most %d characters, got %d", maxSessionLen, len([]rune(iss.Session)))
+	}
+	if strings.ContainsRune(iss.Session, '\n') {
+		add("session", "must be a single line (no newline characters)")
+	}
+	if hasControlChar(iss.Session) {
+		add("session", "must not contain control characters")
+	}
+
 	// labels: 0-64 items; each 1-64 chars matching ^[a-z0-9][a-z0-9:._/-]*$; unique.
 	if len(iss.Labels) > maxLabels {
 		add("labels", "too many labels: %d (max %d)", len(iss.Labels), maxLabels)
@@ -212,6 +236,10 @@ func fieldUnchanged(field string, prev, next *Issue) bool {
 		return prev.Assignee == next.Assignee
 	case "creator":
 		return prev.Creator == next.Creator
+	case "agent":
+		return prev.Agent == next.Agent
+	case "session":
+		return prev.Session == next.Session
 	case "labels":
 		return slices.Equal(prev.Labels, next.Labels)
 	case "blocked_by":

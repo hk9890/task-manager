@@ -27,7 +27,50 @@ taskmgr <command> [subcommand] [args] [flags]
 |---|---|
 | `TASKMGR_HOME` | The taskmgr home holding the global config and (by default) the central store root. Default `~/.taskmgr`. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §1. |
 | `TASKMGR_LOG` | Log level for observability output: `debug`, `info`, `warn`, `error` (default `warn`; an unknown value falls back to `warn`). Records always go to stderr as text. See [MONITORING.md](../MONITORING.md). |
+| `TASKMGR_NO_AGENT` | Turns coding-agent detection off for one run (§1.1). Any value other than empty, `0` or `false` counts as set. |
 | `TASKMGR_DIR` | **Withdrawn — rejected, not ignored.** Any non-empty value fails the command with an error naming it. It once overrode the store directory, as `--store-path` did; that flag now fails as unknown, and an exported variable gets the same treatment rather than silently misfiling every write into whatever store the walk-up finds. See [CONFIG-SPEC.md](CONFIG-SPEC.md) §4. |
+
+### 1.1 Coding-agent detection
+
+Every write that records who made it also records **what** made it: the coding agent
+running `taskmgr`, and that agent's session. The values land in the issue's `agent`
+and `session` fields, or the comment document's (TASK-STORAGE-SPEC §4.3, §4.4), and
+are what `agent ==` and `session ==` filter on (QUERY-SPEC §2).
+
+A harness exports a marker variable into the processes it launches. The CLI reads the
+table below, **first match winning**, and takes the session id from the second column
+when that harness publishes one:
+
+| Marker | `agent` | Session id from |
+|---|---|---|
+| `CLAUDECODE` | `claude-code` | `CLAUDE_CODE_SESSION_ID` |
+| `GEMINI_CLI` | `gemini-cli` | — |
+| `COPILOT_CLI` | `copilot-cli` | — |
+| `CURSOR_AGENT` | `cursor` | — |
+| `OPENCODE` | `opencode` | — |
+| `PI_CODING_AGENT` | `pi` | — |
+| `AGENT_CONTEXT_OUT` | `kiro` | — |
+
+Most harnesses publish no session id, so most rows record the agent alone rather than
+inventing one. A marker set to empty, `0` or `false` reads as unset: a harness saying
+that is saying the opposite of what its presence would otherwise mean.
+
+`--agent` and `--session` override detection wherever a command has them, and an
+explicit `--agent` clears any detected session with it — a session id belongs to the
+harness that published it, so carrying it over to another agent's name would attribute
+the write to a session that never made it. `TASKMGR_NO_AGENT` suppresses detection
+only; an explicit `--agent` still records what it names. Both values are trimmed,
+and a `--session` that ends up with no agent beside it is **refused**: the two are
+one fact, and half of it is a value no reader can act on — the human view names a
+session only under its agent, and `agent == ""` would call the issue hand-filed
+while `session == …` still matched it.
+
+**Detection is inherited.** A marker reaches every descendant process, so a script an
+agent launched is recorded as that agent too. That is the intended reading — the write
+was still made on the agent's behalf — and it is why detection lives in the CLI and
+not in the engine: a long-running service linking the SDK would otherwise stamp its
+own start-up environment onto writes it makes months later
+([SDK-SPEC.md](SDK-SPEC.md) §2).
 
 ### Output modes
 
@@ -588,6 +631,8 @@ Create a new issue and allocate its ID.
 | `--priority <n>` | `2` | `0` (critical) … `4` (trivial). |
 | `--assignee <a>` | empty | Assignee. |
 | `--creator <a>` | `$USER` | Creator — who filed the issue; recorded once at creation. |
+| `--agent <a>` | detected (§1.1) | Coding agent filing the issue; recorded once at creation. |
+| `--session <s>` | detected (§1.1) | That agent's session id; recorded once at creation. |
 | `--label <l>` | — | Label; repeatable. |
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
@@ -621,13 +666,15 @@ The envelope is a JSON object (timestamps RFC3339):
   "title": "…", "type": "bug", "priority": 1,
   "status": "closed",             // any valid status; default open
   "assignee": "…", "creator": "…",
+  "agent": "…", "session": "…",   // optional; recorded verbatim, never detected (§1.1)
   "labels": ["ext:ext-1"],
   "parent": "<id>", "blocked_by": ["<id>"], "related": ["<id>"],
   "created_at": "2025-01-02T10:00:00Z",
   "updated_at": "2025-03-01T09:00:00Z",
   "closed_at": "2025-03-01T09:00:00Z", "close_reason": "fixed",
   "description": "markdown body",
-  "comments": [{"author": "alice", "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
+  "comments": [{"author": "alice", "agent": "…", "session": "…",
+                "created_at": "2025-02-01T12:00:00Z", "body": "…"}]
 }
 ```
 
@@ -720,6 +767,8 @@ argument or `--file`.
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Comment author. |
+| `--agent <a>` | detected (§1.1) | Coding agent writing the comment. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 | `--file <path>` | — | Read the body from a file (`-` = stdin). |
 
 - Empty bodies are rejected. Bodies are sanitized (trailing whitespace stripped,
@@ -736,11 +785,16 @@ stays in the log; readers render the newest revision. Same body source/options a
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Comment author. |
+| `--agent <a>` | detected (§1.1) | Coding agent making the revision. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 | `--file <path>` | — | Read the body from a file (`-` = stdin). |
 
 - **Output (JSON):** `commentDTO` for the new revision comment.
 
-### `taskmgr comment rm <id> <comment-id> [--author <a>]`
+- A revision records **its own** provenance, not the revised comment's
+  (TASK-STORAGE-SPEC §4.4 rule 8).
+
+### `taskmgr comment rm <id> <comment-id> [options]`
 
 Delete a comment: append a tombstone that retracts the target (`replaces` it with
 no body). The original stays in the log as history; the resolved view omits it.
@@ -749,6 +803,8 @@ Idempotent.
 | Option | Default | Meaning |
 |---|---|---|
 | `--author <a>` | `$USER` | Author of the tombstone record. |
+| `--agent <a>` | detected (§1.1) | Coding agent deleting the comment. |
+| `--session <s>` | detected (§1.1) | That agent's session id. |
 
 ---
 
@@ -842,7 +898,9 @@ Stable `snake_case` DTOs. Optional fields are omitted when empty.
 ```json
 {
   "id": "proj-0042", "store": "my-project", "title": "…", "status": "open", "type": "bug",
-  "priority": 1, "assignee": "hans", "creator": "hans", "labels": ["area:x"],
+  "priority": 1, "assignee": "hans", "creator": "hans",
+  "agent": "claude-code", "session": "81735307-43f7-458b-a4c5-fe1602ffc6d6",
+  "labels": ["area:x"],
   "parent": "proj-0007", "blocked_by": ["proj-0040"], "related": ["proj-0012"],
   "created": "2026-06-01T10:00:00Z", "updated": "2026-06-04T09:00:00Z",
   "closed": "2026-06-05T08:00:00Z", "close_reason": "fixed"
@@ -858,9 +916,10 @@ reason.
 
 **`refDTO`** — a lightweight reference (no body): `{id, title, type, status, priority}`.
 
-**`commentDTO`** — `{id, author, created, replaces, body}` where `id` is the
-comment's random token (`^[0-9a-z]{8}$`); `author`/`replaces` are omitted when
-empty. The `comments` array (in `detailDTO`) is the **resolved** log: each
+**`commentDTO`** — `{id, author, agent, session, created, replaces, body}` where `id`
+is the comment's random token (`^[0-9a-z]{8}$`); `author`, `agent`, `session` and
+`replaces` are omitted when empty. `agent` and `session` are the coding-agent
+provenance of **this document** (§1.1). The `comments` array (in `detailDTO`) is the **resolved** log: each
 `replaces`-chain collapsed to its newest revision, tombstoned comments omitted.
 
 **`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
@@ -994,7 +1053,8 @@ taskmgr package  add <name> [--path]                       [--global]
                  repo list | update [N] | rm N
 taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
-                          --creator --label… --parent --blocked-by… --related…]
+                          --creator --agent --session --label… --parent
+                          --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
 taskmgr show     <id>
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
@@ -1008,9 +1068,9 @@ taskmgr close    <id> [--reason]
 taskmgr reopen   <id>
 taskmgr dep      add|rm <dependent> <blocker>
 taskmgr rel      add|rm <a> <b>              # symmetric related link
-taskmgr comment  add  <id> [body] [--author --file]
-taskmgr comment  edit <id> <comment-id> [body] [--author --file]
-taskmgr comment  rm   <id> <comment-id> [--author]
+taskmgr comment  add  <id> [body] [--author --agent --session --file]
+taskmgr comment  edit <id> <comment-id> [body] [--author --agent --session --file]
+taskmgr comment  rm   <id> <comment-id> [--author --agent --session]
 taskmgr labels | statuses | types
 taskmgr version
 taskmgr commands                             # machine catalog (YAML/JSON)

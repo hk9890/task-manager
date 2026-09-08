@@ -288,7 +288,7 @@ func TestSpec_SDK_AddComment_EmptyBodyRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	_, err = s.AddComment(iss.ID, "alice", "")
+	_, err = s.AddComment(iss.ID, tasks.Actor{Name: "alice"}, "")
 	if err == nil {
 		t.Error("AddComment with empty body: expected error, got nil")
 	}

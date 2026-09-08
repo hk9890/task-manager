@@ -173,7 +173,7 @@ func TestAddComment_SanitizesBody(t *testing.T) {
 	iss := mustCreate(t, s, CreateInput{Title: "x"})
 	// sanitizeCommentBody strips trailing whitespace per line, not leading.
 	// "a note\n" is a clean body; use it directly.
-	c, err := s.AddComment(iss.ID, "hans", "a note\n")
+	c, err := s.AddComment(iss.ID, Actor{Name: "hans"}, "a note\n")
 	if err != nil {
 		t.Fatal(err)
 	}

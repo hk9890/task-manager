@@ -48,6 +48,8 @@ type ParseError = query.ParseError
 //   - "priority" → *IntValue(iss.Priority)
 //   - "assignee" → *StringValue(iss.Assignee)
 //   - "creator"  → *StringValue(iss.Creator)
+//   - "agent"    → *StringValue(iss.Agent)
+//   - "session"  → *StringValue(iss.Session)
 //   - "parent"   → *StringValue(iss.Parent)
 //   - "label"    → *StringSetValue{Members: iss.Labels}
 //   - "text"     → *StringValue(lower(id+" "+title+" "+description))
@@ -89,6 +91,10 @@ func (r *issueRow) Field(name string) (query.Value, bool) {
 		return &query.StringValue{S: iss.Assignee}, true
 	case "creator":
 		return &query.StringValue{S: iss.Creator}, true
+	case "agent":
+		return &query.StringValue{S: iss.Agent}, true
+	case "session":
+		return &query.StringValue{S: iss.Session}, true
 	case "parent":
 		return &query.StringValue{S: iss.Parent}, true
 	case "label":
