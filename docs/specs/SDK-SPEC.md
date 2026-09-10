@@ -434,6 +434,7 @@ type GuideEntry struct {
     ID   string `yaml:"id,omitempty"`   // effective topic is "pkg:<package>:<id>"; no ':' in it
     File string `yaml:"file"`           // a path inside the package directory
     Into string `yaml:"into,omitempty"` // a built-in topic it also prints inside; no ':' in it
+    Summary string `yaml:"summary,omitempty"` // one line for the job list; at most MaxGuideSummaryBytes
 }
 
 // GuideTopic is one fragment with its text read.
@@ -441,6 +442,7 @@ type GuideTopic struct {
     ID, Package, Scope string // ID is "pkg:<package>:<id>"; Scope is "global" | "store"
     Overview           bool   // the manifest's overview: fragment, not a guide: entry
     Into               string // the topic it prints inside, verbatim and unresolved
+    Summary            string // the entry's one-line summary:, empty when it declared none
     Path               string // the fragment file on this machine
     Text, Detail       string // the text, or why it could not be read — never both
     Truncated          bool   // cut to its cap, on a line boundary
@@ -448,6 +450,7 @@ type GuideTopic struct {
 
 const PackageManifestName = "taskmgr-package.yaml"
 const MaxGuideFragmentBytes = 8 << 10 // a guide: section's cap (HOOK-SPEC §3.7)
+const MaxGuideSummaryBytes = 96       // a guide: entry's summary: cap (HOOK-SPEC §3.7)
 const MaxGuideOverviewBytes = 1 << 10 // an overview: fragment's cap — every caller gets it
 const GuideOverviewID = "overview"    // the reserved id the overview: key declares
 ```

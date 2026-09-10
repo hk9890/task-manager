@@ -829,7 +829,10 @@ measured case, a second fetch to correct the guess.
 
 **With no argument it prints the job list**: which job maps to which command, the
 topics this store's packages own, and where the rest of the surface is. It carries
-no section text and no description of what the tool is. This is the one part every
+no section text and no description of what the tool is. A package topic's line
+carries the `summary` its manifest declared (HOOK-SPEC.md §3.7), and names the
+package when it declared none — the list is what a caller routes on, so each line
+has to say what the topic is for. This is the one part every
 caller receives on every run whatever it came to do, and it is spent on routing
 because routing is the expensive part — the guide's own prose is a small fraction
 of a caller's context beside what it spends working out which parts it needs.

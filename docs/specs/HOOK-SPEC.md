@@ -421,6 +421,7 @@ guide:
     file: ./guide/filing.md
   - id: types                      # a job this package owns; printed when named
     file: ./guide/types.md
+    summary: which type carries the work, and the six rules a body clears
 hooks:
   - id: body-sections
     event: pre-create
@@ -432,6 +433,7 @@ hooks:
 | `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. `overview` is reserved (below). |
 | `file` | **yes** | The fragment, as a path **inside** the package directory. |
 | `into` | no | One built-in job this fragment also prints inside (CLI-SPEC.md §5.1). It **must not contain `:`**: it names a job, not an effective topic id. Omitted, the fragment is reachable only by its own id. |
+| `summary` | no | One line saying what job the fragment holds, printed on the topic's line in the job list (CLI-SPEC.md §5.1). Capped at **96 bytes** and refused with a line break in it, both when the manifest loads. Omitted, the line says `from package <name>`. |
 
 **Placing a fragment into a job.** A guide topic is one job, and what a job prints
 has to be sufficient — a caller that names one should not need a second. `into` is
@@ -441,6 +443,17 @@ the caller never has to learn that a second topic existed. A fragment stays
 addressable by its own `pkg:<package>:<id>` either way; `into` adds a way to reach
 it and removes none. A package that owns a job outright declares no `into`, and its
 topic is listed alongside the built-in jobs.
+
+**A topic a package owns needs a `summary`.** The job list is the index a caller
+routes on: it reads the line and fetches the topic it needs. A built-in job's line
+says what the job is; a package topic's line, with no `summary`, says only which
+package it came from — and a line that gives no reason to open a topic is one the
+caller does not open. Measured, an agent decomposing a review fetched `types`,
+whose id it could guess, and never `decomposing`, whose id it could not, though that
+was the topic holding the rules for the job it was doing. The cap is one line
+because the line *is* the budget: the list lands in every caller's context on every
+run. A summary that needs more room is the fragment's opening paragraph in the
+wrong place.
 
 **An `into` that names no job is not an error.** Which jobs exist is a property of
 the binary, and this manifest is parsed on the **write path**: a package naming a

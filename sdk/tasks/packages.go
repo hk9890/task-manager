@@ -64,6 +64,12 @@ const (
 	// topic states it, and no room to state it here.
 	MaxGuideOverviewBytes = 1 << 10
 
+	// MaxGuideSummaryBytes caps a guide entry's `summary:` (§3.7). The summary is
+	// the topic's line in the job list, and a line is the whole budget: the list
+	// is what every caller pays for on every run, so a summary that needs a
+	// second line is a fragment's opening paragraph in the wrong place.
+	MaxGuideSummaryBytes = 96
+
 	// GuideOverviewID is the reserved fragment id the `overview:` manifest key
 	// declares. A `guide:` entry may not claim it, so "pkg:<package>:overview"
 	// always names the fragment that reaches the overview.
@@ -305,6 +311,13 @@ type GuideEntry struct {
 	// The guide resolves the target when it prints, and reports one it cannot
 	// place (HOOK-SPEC §3.7).
 	Into string `yaml:"into,omitempty"`
+	// Summary optionally states, in one line, the job this fragment holds. It is
+	// what the job list prints on the topic's line in place of the generated
+	// "from package <name>": the list is an index a caller routes on, and a line
+	// that says only where a topic came from gives no reason to open it. Capped
+	// at MaxGuideSummaryBytes and refused with a line break in it, both when the
+	// manifest loads.
+	Summary string `yaml:"summary,omitempty"`
 }
 
 // packageGuide is one guide fragment read out of a manifest: the effective topic
@@ -320,6 +333,8 @@ type packageGuide struct {
 	// declared none. It is carried verbatim: this package cannot know which
 	// topics the binary defines.
 	into string
+	// summary is the entry's one-line `summary:`, empty when it declared none.
+	summary string
 }
 
 // guideFromManifest turns a parsed manifest into the guide fragments it
@@ -371,11 +386,20 @@ func guideFromManifest(m packageManifest, name, dir string) ([]packageGuide, err
 				name, declared, into, packageIDSep)
 		}
 
+		summary := strings.TrimSpace(g.Summary)
+		if strings.ContainsAny(summary, "\r\n") {
+			return nil, fmt.Errorf("package %s: guide %q: summary must be one line (it is the topic's line in the job list)", name, declared)
+		}
+		if len(summary) > MaxGuideSummaryBytes {
+			return nil, fmt.Errorf("package %s: guide %q: summary is %d bytes, over the %d-byte cap (it is one line of the job list; the fragment is where the rest goes)",
+				name, declared, len(summary), MaxGuideSummaryBytes)
+		}
+
 		path, err := resolveGuideFile(g.File, dir)
 		if err != nil {
 			return nil, fmt.Errorf("package %s: guide %q: %w", name, declared, err)
 		}
-		out = append(out, packageGuide{id: packageGuideID(name, declared), path: path, into: into})
+		out = append(out, packageGuide{id: packageGuideID(name, declared), path: path, into: into, summary: summary})
 	}
 	return out, nil
 }
