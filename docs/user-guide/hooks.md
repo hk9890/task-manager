@@ -93,6 +93,9 @@ guide:
   - id: paths
     into: filing
     file: ./guide/paths.md
+  - id: reviewing
+    file: ./guide/reviewing.md
+    summary: turn a review's findings into issues, one per defect
 hooks:
   - id: doc-needs-path
     event: pre-create
@@ -117,6 +120,13 @@ Name the job you are adding to. If it does not exist in the version someone is r
 your fragment is still reachable by its own id, the guide says so, and — this is the part
 that matters — **your hooks keep running**. A documentation mismatch never becomes a
 refused write.
+
+**A topic your package owns takes a `summary:`.** With no `into:`, the fragment is a
+job of its own, and `taskmgr guide` lists it beside the built-in jobs. The one-line
+`summary:` is that line — it is what a caller reads to decide whether to open the
+topic, so say what the job is. Without one the line only names your package, and a
+topic nobody can tell the purpose of is a topic nobody opens. It is capped at 96
+bytes and must be one line; the rest goes in the fragment.
 
 **`overview:` is for a rule with no job to hang it on**, one that governs every command in
 the store. `taskmgr guide` with no argument prints it to every caller, so it is capped at

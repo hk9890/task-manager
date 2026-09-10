@@ -141,6 +141,51 @@ func TestGuideFromManifest_RejectsADuplicateID(t *testing.T) {
 // A fragment has no PATH-lookup meaning and no reason to name anything outside
 // the package: an absolute path is machine-specific, which is the one thing the
 // package format exists to avoid.
+// A summary is the topic's line in the job list, carried as declared: the line
+// is what a caller routes on, so it is the package's to write.
+func TestGuideFromManifest_CarriesTheSummary(t *testing.T) {
+	m := packageManifest{Guide: []GuideEntry{{ID: "decomposing", File: "g.md", Summary: "  turn a review or a plan into a set of issues  "}}}
+	got, err := guideFromManifest(m, "policy", "/p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "turn a review or a plan into a set of issues"; got[0].summary != want {
+		t.Errorf("summary = %q, want %q", got[0].summary, want)
+	}
+	if got[0].summary != "" && len(got[0].summary) > MaxGuideSummaryBytes {
+		t.Errorf("a summary at %d bytes passed a %d-byte cap", len(got[0].summary), MaxGuideSummaryBytes)
+	}
+}
+
+// The cap is the design: one line of the job list is the whole budget, and the
+// refusal names the entry so the author knows which line to shorten.
+func TestGuideFromManifest_RejectsASummaryOverTheCap(t *testing.T) {
+	long := strings.Repeat("x", MaxGuideSummaryBytes+1)
+	m := packageManifest{Guide: []GuideEntry{{ID: "decomposing", File: "g.md", Summary: long}}}
+	_, err := guideFromManifest(m, "policy", "/p")
+	if err == nil {
+		t.Fatal("a summary over the cap must be refused")
+	}
+	for _, want := range []string{`guide "decomposing"`, "over the", "cap"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want one containing %q", err, want)
+		}
+	}
+	// Exactly at the cap is inside it.
+	m.Guide[0].Summary = long[:MaxGuideSummaryBytes]
+	if _, err := guideFromManifest(m, "policy", "/p"); err != nil {
+		t.Errorf("a summary exactly at the cap must load: %v", err)
+	}
+}
+
+func TestGuideFromManifest_RejectsAMultiLineSummary(t *testing.T) {
+	m := packageManifest{Guide: []GuideEntry{{ID: "decomposing", File: "g.md", Summary: "one line\nand another"}}}
+	_, err := guideFromManifest(m, "policy", "/p")
+	if err == nil || !strings.Contains(err.Error(), "one line") {
+		t.Fatalf("err = %v, want a refusal naming the one-line rule", err)
+	}
+}
+
 func TestGuideFromManifest_RejectsAPathOutsideThePackage(t *testing.T) {
 	cases := []struct {
 		name string
@@ -422,6 +467,47 @@ func TestGuideTopics_AnOverviewFragmentTakesTheTighterCap(t *testing.T) {
 
 // The per-user config's packages come first, as they do for hooks: one order for
 // both halves of a package, so prose and gate are read the same way round.
+// A declared summary rides the topic out to the caller, and an entry without
+// one leaves it empty for the caller's fallback — the manifest format grew a
+// field, and a manifest written before it grew still loads.
+func TestGuideTopics_CarriesTheSummaryWhenDeclared(t *testing.T) {
+	s, fs := chainStore(t)
+	pkgDir := filepath.Join(s.dir, packagesSubdir, "policy")
+	if err := fs.MkdirAll(filepath.Join(pkgDir, "guide"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := packageManifest{Version: 1, Guide: []GuideEntry{
+		{ID: "decomposing", File: "./guide/d.md", Summary: "turn a review into a set of issues"},
+		{ID: "types", File: "./guide/t.md"},
+	}}
+	data, err := yaml.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{PackageManifestName: string(data), "guide/d.md": "d\n", "guide/t.md": "t\n"} {
+		if err := fs.WriteAtomic(filepath.Join(pkgDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetConfig(Config{Prefix: "tst", Use: []PackageRef{{Path: "packages/policy"}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, err := s.GuideTopics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(topics) != 2 {
+		t.Fatalf("want two topics, got %+v", topics)
+	}
+	if want := "turn a review into a set of issues"; topics[0].Summary != want {
+		t.Errorf("summary = %q, want %q", topics[0].Summary, want)
+	}
+	if topics[1].Summary != "" {
+		t.Errorf("an entry without summary: must carry none, got %q", topics[1].Summary)
+	}
+}
+
 func TestGuideTopics_GlobalPackagesComeFirst(t *testing.T) {
 	s, fs := chainStore(t)
 	writeHomeGuidePackage(t, fs, "/hm", "repo", "machine", "machine-wide\n")

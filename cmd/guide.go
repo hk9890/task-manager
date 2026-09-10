@@ -370,9 +370,18 @@ func renderGuideOverview(topics []tasks.GuideTopic) string {
 }
 
 // guidePackageSummary is the roster line for a topic a package owns outright.
+//
+// A declared `summary:` is the line: the list is an index the caller routes on,
+// and a topic whose line says only where it came from is one the caller has no
+// reason to open — measured, an agent driving a decomposition fetched `types`,
+// whose id it could guess, and never `decomposing`, whose id it could not. The
+// package's name stays the fallback, so a manifest without one still lists.
 func guidePackageSummary(t tasks.GuideTopic) string {
 	if t.Detail != "" {
 		return fmt.Sprintf("from package %s (unreadable: %s)", t.Package, t.Detail)
+	}
+	if t.Summary != "" {
+		return t.Summary
 	}
 	return fmt.Sprintf("from package %s", t.Package)
 }
@@ -649,6 +658,9 @@ func runGuideList(topics []tasks.GuideTopic) error {
 	for _, t := range topics {
 		row := guideTopicDTO{ID: t.ID, Kind: "package", Package: t.Package, Scope: t.Scope, Into: t.Into, Detail: t.Detail}
 		row.Summary = fmt.Sprintf("contributed by package %s", t.Package)
+		if t.Summary != "" {
+			row.Summary = t.Summary
+		}
 		if t.Overview {
 			// Say that this one arrives on its own: a caller that already has the
 			// overview has already read it, and does not need to spend a command.
