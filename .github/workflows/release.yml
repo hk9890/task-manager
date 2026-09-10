@@ -99,21 +99,31 @@ jobs:
       - name: Install syft (SBOM generator)
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
-      # GoReleaser must never resolve the tag itself here. Releases carry a
+      # GoReleaser must never resolve either tag itself here. Releases carry a
       # parallel `sdk/vX.Y.Z` tag on the same history — usually one commit behind
       # the CLI tag, since the SDK has to be published before the CLI can pin it —
       # so a bare `git describe` can land on `sdk/v0.7.0`, which is not semver and
       # is not this artifact. A tag push knows its own tag; a dry run takes the
       # newest CLI tag, `--match` keeping the sdk tags out.
-      - name: Resolve the tag GoReleaser builds against
+      #
+      # The previous tag needs the same care, and got it late. GoReleaser's own
+      # walk back from the current tag stops at the first tag it meets, which is
+      # always the sdk tag one commit behind — so the changelog range held exactly
+      # the `chore(cli): pin the SDK` commit, the exclude filter dropped it, and
+      # every release since v0.8.0 opened with an empty changelog (at-ce3nj5).
+      # Naming the previous CLI tag explicitly gives the changelog the whole span.
+      - name: Resolve the tags GoReleaser builds against
         run: |
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            echo "GORELEASER_CURRENT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            tag="${GITHUB_REF_NAME}"
           else
             tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
-            echo "GORELEASER_CURRENT_TAG=${tag}" >> "$GITHUB_ENV"
             echo "Dry run: building a snapshot off ${tag}"
           fi
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${tag}^")"
+          echo "GORELEASER_CURRENT_TAG=${tag}" >> "$GITHUB_ENV"
+          echo "GORELEASER_PREVIOUS_TAG=${previous}" >> "$GITHUB_ENV"
+          echo "Changelog range: ${previous}..${tag}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
@@ -125,7 +135,8 @@ jobs:
           args: release --clean ${{ github.event_name != 'push' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # GORELEASER_CURRENT_TAG comes from the step above, via $GITHUB_ENV.
+          # GORELEASER_CURRENT_TAG and GORELEASER_PREVIOUS_TAG come from the
+          # step above, via $GITHUB_ENV.
 
   # PR touching the release config -> snapshot build only (no publish, read-only
   # token). Catches a broken .goreleaser.yaml before any tag is ever cut.
