@@ -165,6 +165,7 @@ func TestCreateFrom_EdgeToAnExistingIssue_IsAccepted(t *testing.T) {
 func TestCreateFrom_RefusedEntry_WritesNothingAndNamesIt(t *testing.T) {
 	cases := map[string]struct{ file, want string }{
 		"unknown edge": {"- title: ok\n- ref: b\n  title: dangling\n  blocked_by: [nope]\n", `entry 2 (ref "b")`},
+		"path edge":    {"- title: a\n  blocked_by: [../tst-1]\n", "not a valid issue ID"},
 		"cycle":        {"- ref: a\n  title: a\n  blocked_by: [b]\n- ref: b\n  title: b\n  blocked_by: [a]\n", "dependency cycle"},
 		"no title":     {"- title: ok\n- type: bug\n", "entry 2"},
 		"empty file":   {"", "the set is empty"},

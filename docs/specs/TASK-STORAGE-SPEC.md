@@ -622,6 +622,9 @@ A writer rejects, before anything touches disk:
 - any field violating its §4 constraint (length, pattern, enum, range);
 - empty `title`; a closed issue without a `closed` timestamp;
 - self-parent, self-block, duplicate IDs in `blocked_by` / `related`;
+- a `parent`, `blocked_by` or `related` value that is not a valid ID (§3). Such a value
+  is never resolved to a file: joined onto `closed/`, `../<id>` would name the file of
+  an open issue and pass as an existing reference;
 - references (`parent`, `blocked_by`, `related`) to IDs that exist in neither the
   hot directory nor `closed/`;
 - dependency cycles;

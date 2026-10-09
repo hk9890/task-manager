@@ -1643,7 +1643,16 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 
 	// refExists reports whether an ID is resolvable: either in the hot index
 	// or in the closed/ partition (via cheap Stat, no parse).
+	//
+	// A value outside the ID grammar is never looked up: joined onto closed/, a
+	// "../<id>" would resolve to a file outside the partition and pass. Refusing
+	// it is the work of validateWrite, which every write runs and which lets
+	// through only a value the stored issue already carried — so it is passed
+	// over here rather than refused a second time without that tolerance.
 	refExists := func(id string) bool {
+		if !validIssueID(id) {
+			return true
+		}
 		if _, ok := idx[id]; ok {
 			return true
 		}
