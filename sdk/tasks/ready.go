@@ -94,6 +94,15 @@ type BlockedIssue struct {
 	BlockedBy []Ref
 }
 
+// GraphNode is an issue of the hot set with its place in the dependency graph.
+// BlockedBy holds the open blockers of a blocked issue.
+type GraphNode struct {
+	Issue     *Issue
+	Ready     bool
+	Blocked   bool
+	BlockedBy []Ref
+}
+
 // findParentCycle returns the parent chain that leads from start back to start,
 // or "" when start is not among its own ancestors.
 func findParentCycle(idx map[string]*Issue, start string) string {

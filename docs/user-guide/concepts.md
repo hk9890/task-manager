@@ -61,7 +61,7 @@ notes belong.
 
 | Link | Meaning |
 |---|---|
-| `parent` | Grouping. One parent per issue; an epic is just an issue others name as their parent. |
+| `parent` | Grouping. One parent per issue; an epic is just an issue others name as their parent. Cycles are rejected. |
 | `blocked_by` | A hard dependency. The dependent is not workable until every blocker is closed. Cycles are rejected. |
 | `related` | A soft, non-blocking reference. Symmetric: set it from one side and it shows on both. |
 

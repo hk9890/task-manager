@@ -700,6 +700,16 @@ const (
 // Status or Type, or a negative priority bound — is reported as a *ValidationError
 // (§6), naming the offending field.
 func (c Criteria) Build() (string, error)
+
+// QuoteQueryValue returns s as a string literal of the expression language
+// (QUERY-SPEC.md §3). Build quotes with it; a caller that writes an expression
+// by hand uses it for every value it did not type itself.
+func QuoteQueryValue(s string) string
+
+// QueryFields returns the comparison fields of the expression language
+// (QUERY-SPEC.md §2), sorted. A front end that names fields of its own checks
+// its list against this one.
+func QueryFields() []string
 ```
 
 Compilation: every non-empty group is AND-ed at the top level, and each multi-value
@@ -762,7 +772,9 @@ func (s *Store) List(f Filter) ([]*Issue, error)      // select by expression + 
 func (s *Store) ListPage(f Filter) (Page, error)      // List window + total match count (paging)
 func (s *Store) Ready() ([]*Issue, error)             // open work, no open blockers (never docs)
 func (s *Store) Blocked() ([]BlockedIssue, error)     // non-closed work with an open blocker (never docs)
+func (s *Store) Graph() ([]GraphNode, error)          // every hot issue with its ready/blocked marks, work order
 func (s *Store) Detail(id string) (*Detail, error)    // issue + resolved + derived edges + comments
+func (s *Store) Details(ids ...string) ([]*Detail, error) // Detail per ID, in order, over one read of the hot set
 func (s *Store) Labels() ([]string, error)            // distinct labels, sorted
 func (s *Store) Comments(id string) ([]Comment, error)// the issue's comment log
 func (s *Store) ResolveBody(iss *Issue) error         // fill in an overflowed body; no-op otherwise
@@ -799,6 +811,22 @@ type BlockedIssue struct {
     BlockedBy []Ref
 }
 
+// GraphNode is an issue of the hot set with its place in the dependency graph.
+// BlockedBy holds the open blockers of a blocked issue.
+type GraphNode struct {
+    Issue     *Issue
+    Ready     bool
+    Blocked   bool
+    BlockedBy []Ref
+}
+```
+
+`Ready` and `Blocked` are each a selection of `Graph`. A caller that needs both
+marks calls `Graph`: two separate reads can disagree when a write lands between
+them. `Details` fails as a whole on the first ID that fails, so a caller never
+holds a partial answer.
+
+```go
 // Page is a windowed List result plus the total number of matches in scope
 // (before Offset/Limit) — the value a viewer needs to size a scrollbar.
 type Page struct {
@@ -911,18 +939,21 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   or the ID of an existing issue; a value that is no `Ref` of the set is treated as
   an ID. Entries may reference each other in any order. A `Ref` must be unique in
   the set and must not carry the store prefix, so it can never equal an issue ID.
+  A `Ref` and an edge are compared trimmed, as an edge is stored.
 
   Under **one** lock the engine allocates every ID, validates every entry against
   the store *as it will be once the whole set exists* — so a forward reference
   resolves — and runs every entry's `pre-create` hooks, all before the first write
-  (HOOK-SPEC §4). Two checks exist only because a set can name issues that do not
-  exist yet: a `blocked_by` cycle and a **parent cycle** through several entries are
-  both refused, and so is an entry `related` to itself. The first entry that is
+  (HOOK-SPEC §4). A `blocked_by` cycle and a parent cycle through several entries are
+  refused as on any write, and so is an entry `related` to itself. A validation
+  message names an entry by its `Ref`, not by the ID allocated to it: the caller
+  wrote the `Ref`, and the ID names an issue that was never written. The first entry that is
   refused aborts the set: nothing is written and the error is a `*BatchEntryError`
   (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
   before it, since no result will. An empty set is a `*ValidationError`, and so is a
   set of more than **256** entries: the lock is held across the hooks of every entry
-  (HOOK-SPEC §8), so the bound is what caps that hold. The results
+  (HOOK-SPEC §8), so the bound is what caps that hold. A failure no entry owns, such
+  as a store that cannot be listed, is returned unwrapped. The results
   are in entry order; every issue of a set shares one `Created` instant.
 
   `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,

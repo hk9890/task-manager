@@ -219,6 +219,29 @@ func TestCreateFrom_WithAPerIssueFlag_IsMisuse(t *testing.T) {
 	}
 }
 
+func TestCreate_NeitherTitleNorFrom_IsMisuseThatNamesBoth(t *testing.T) {
+	root := newStore(t)
+	out, errOut, code := run(t, "--dir", root, "create")
+	if code != 1 || out != "" {
+		t.Fatalf("exit %d, stdout %q; want 1 and empty", code, out)
+	}
+	for _, want := range []string{"missing required flag --title", "--from", "usage:"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+}
+
+// A runtime failure of a set is not misuse: no flag is missing, so the error
+// stays the terse one-liner.
+func TestCreateFrom_UnreadableFile_IsARuntimeError(t *testing.T) {
+	root := newStore(t)
+	_, errOut, code := run(t, "--dir", root, "create", "--from", filepath.Join(t.TempDir(), "absent.yaml"))
+	if code != 1 || strings.Contains(errOut, "usage:") || strings.Contains(errOut, "missing required flag") {
+		t.Errorf("exit %d, stderr:\n%s", code, errOut)
+	}
+}
+
 // An empty --from is what `--from "$f"` gives with $f unset. It must not fall
 // through to the single-issue form and file whatever --title says.
 func TestCreateFrom_EmptyPath_IsMisuseAndFilesNothing(t *testing.T) {

@@ -69,11 +69,15 @@ type createFromEntry struct {
 var createFromSetFlags = []string{"from", "creator", "agent", "session"}
 
 var createCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new issue, or a set of issues from a file",
-	Args:  cobra.NoArgs,
+	Use:     "create",
+	Short:   "Create a new issue, or a set of issues from a file",
+	Example: "taskmgr create --title <title>",
+	Args:    cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("from") {
+			if !cmd.Flags().Changed("title") {
+				return &usageError{cmd: cmd, msg: "missing required flag --title, or --from <file> for a set of issues"}
+			}
 			return nil
 		}
 		if createFlags.from == "" {
@@ -88,9 +92,6 @@ var createCmd = &cobra.Command{
 		if len(perIssue) > 0 {
 			return &usageError{cmd: cmd, msg: "--from takes every issue from the file; it excludes " + strings.Join(perIssue, ", ")}
 		}
-		// --title is the one cobra-required flag, checked after PreRunE. The file
-		// carries the titles, so it counts as given.
-		cmd.Flags().Lookup("title").Changed = true
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -257,7 +258,6 @@ func init() {
 	f.StringVar(&createFlags.parent, "parent", "", "parent issue ID")
 	f.StringSliceVar(&createFlags.blockedBy, "blocked-by", nil, "blocker issue ID (repeatable)")
 	f.StringSliceVar(&createFlags.related, "related", nil, "related issue ID (repeatable)")
-	_ = createCmd.MarkFlagRequired("title")
 	f.StringVar(&createFlags.from, "from", "", `create a set of issues from a YAML file ("-" for stdin), all or nothing; replaces the per-issue flags`)
 	rootCmd.AddCommand(createCmd)
 }

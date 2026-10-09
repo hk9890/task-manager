@@ -788,24 +788,26 @@ func (s *Store) resolveID(raw string) (string, error) {
 // allocateIDs returns one ID per entry of a set: the entry's own when it supplies
 // one, a fresh one otherwise, none repeated inside the set. The store is listed
 // once for the whole set, and only when an entry needs a fresh ID. On a refusal,
-// failed is the index of the entry at fault. Caller holds the lock.
+// failed is the index of the entry at fault, or -1 when the store could not be
+// listed. Caller holds the lock.
 func (s *Store) allocateIDs(entries []BatchEntry) (ids []string, failed int, err error) {
 	ids = make([]string, len(entries))
-	var stored []string
+	var taken map[string]struct{}
 	for i, e := range entries {
 		id := strings.TrimSpace(e.ID)
 		switch {
 		case id == "":
-			if stored == nil {
-				if stored, err = s.issueFileNames(); err != nil {
-					return nil, i, err
+			if taken == nil {
+				names, err := s.issueFileNames()
+				if err != nil {
+					return nil, -1, err
+				}
+				taken = idsOfNames(s.cfg.Prefix, names)
+				for _, earlier := range ids[:i] {
+					taken[earlier] = struct{}{}
 				}
 			}
-			taken := stored
-			for _, earlier := range ids[:i] {
-				taken = append(taken, earlier+FileExt)
-			}
-			id = newIDFromNames(s.cfg.Prefix, taken)
+			id = newID(s.cfg.Prefix, taken)
 		case slices.Contains(ids[:i], id):
 			return nil, i, fmt.Errorf("%w: %s", ErrAlreadyExists, id)
 		default:
@@ -813,9 +815,12 @@ func (s *Store) allocateIDs(entries []BatchEntry) (ids []string, failed int, err
 				return nil, i, err
 			}
 		}
+		if taken != nil {
+			taken[id] = struct{}{}
+		}
 		ids[i] = id
 	}
-	return ids, 0, nil
+	return ids, -1, nil
 }
 
 // buildIssue assembles an *Issue from the shared fields common to Create and
@@ -1038,11 +1043,7 @@ func (s *Store) createSet(entries []BatchEntry) (results []*MutationResult, fail
 		for i, iss := range issues {
 			if err := s.checkRefsWith(iss, idx); err != nil {
 				failed = i
-				return err
-			}
-			if cycle := findParentCycle(idx, iss.ID); cycle != "" {
-				failed = i
-				return invalid("parent", "parent cycle: %s", cycle)
+				return namedByRef(err, entries, ids)
 			}
 		}
 		var allowedHints []string
@@ -1617,8 +1618,8 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 	})
 }
 
-// checkRefs verifies that every referenced ID exists and that adding the
-// issue's blockers does not create a dependency cycle. Caller holds the lock.
+// checkRefs verifies that every referenced ID exists and that the issue's
+// blockers and its parent create no cycle. Caller holds the lock.
 //
 // A reference is valid if the target ID is found in the hot (active) index OR
 // in the closed/ partition (checked via a cheap vfs.Stat — no parse needed).
@@ -1653,6 +1654,9 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	if iss.Parent != "" {
 		if !refExists(iss.Parent) {
 			return invalid("parent", "referenced issue %q does not exist", iss.Parent)
+		}
+		if cycle := findParentCycle(idx, iss.ID); cycle != "" {
+			return invalid("parent", "parent cycle: %s", cycle)
 		}
 	}
 	for _, id := range iss.BlockedBy {

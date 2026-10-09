@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -167,8 +168,8 @@ func requiredFlagsMsg(missing []string) string {
 // filterFieldOps is the filter fields (QUERY-SPEC §2) that get a hint when guessed
 // as a flag, each with the operator the caller most likely meant. A date gets ">="
 // because "==" compares one instant, which is never what "--created 2026-01-01"
-// asks for. The map is a hand copy: cmd/ cannot import the engine's field table,
-// and TestFilterFieldOps_MatchesTheEngineFields fails when the two differ.
+// asks for. TestFilterFieldOps_MatchesTheEngineFields fails when a field of
+// tasks.QueryFields has no operator here.
 var filterFieldOps = map[string]string{
 	"status":   "==",
 	"type":     "==",
@@ -228,7 +229,7 @@ func queryInvocation(flags *pflag.FlagSet, args []string) string {
 		_, isField := filterFieldOps[name]
 		guessed := flag == nil && isField
 		takesNext := guessed || flag != nil && flag.NoOptDefVal == ""
-		if takesNext && !hasValue && i+1 < len(args) && (!guessed || !endsGuessedValue(flags, args[i+1])) {
+		if takesNext && !hasValue && i+1 < len(args) && (!guessed || !endsGuessedValue(flags, name, args[i+1])) {
 			i++
 			value, hasValue = args[i], true
 		}
@@ -300,14 +301,28 @@ func shorthandWithValue(flags *pflag.FlagSet, group string) (flag *pflag.Flag, s
 // the value of a flag it knows; for a flag it does not know, only something the
 // caller clearly meant as a flag ends it — "--", a flag of the command, or another
 // filter field — so a value that merely starts with a dash ("--label -wontfix") is
-// still read as the value.
-func endsGuessedValue(flags *pflag.FlagSet, arg string) bool {
+// still read as the value. "--closed" alone asks for the closed issues, so only a
+// date is its value: any other word stays the positional argument it was.
+func endsGuessedValue(flags *pflag.FlagSet, field, arg string) bool {
+	if field == "closed" && !isFilterDate(arg) {
+		return true
+	}
 	if long, isLong := strings.CutPrefix(arg, "--"); isLong {
 		name, _, _ := strings.Cut(long, "=")
 		_, isField := filterFieldOps[name]
 		return name == "" || isField || flags.Lookup(name) != nil
 	}
 	return len(arg) > 1 && arg[0] == '-' && flags.ShorthandLookup(arg[1:2]) != nil
+}
+
+// isFilterDate reports whether value has one of the two date forms of QUERY-SPEC §3.
+func isFilterDate(value string) bool {
+	for _, layout := range []string{time.RFC3339, time.DateOnly} {
+		if _, err := time.Parse(layout, value); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // filterTerm is the predicate for one guessed "--field value". A field without a
@@ -338,7 +353,10 @@ func filterTerm(field, value string, given bool) (term string, closedStatus bool
 	if expr, err := fieldCriteria(field, value).Build(); err == nil && expr != "" {
 		return expr, false
 	}
-	return field + " " + filterFieldOps[field] + " " + quoteFilterValue(value), false
+	// Criteria.Build declines a date, an empty value, and a status or type the
+	// engine does not know, which is printed as typed so that running it returns
+	// the engine's own error.
+	return field + " " + filterFieldOps[field] + " " + tasks.QuoteQueryValue(value), false
 }
 
 // fieldCriteria is the Criteria that selects on one field, for the fields
@@ -367,14 +385,6 @@ func fieldCriteria(field, value string) tasks.Criteria {
 		return tasks.Criteria{Text: value}
 	}
 	return tasks.Criteria{}
-}
-
-// quoteFilterValue quotes a value as a QUERY-SPEC §3 string, for the predicates
-// Criteria.Build declines: a date, an empty value, and a status or type the engine
-// does not know, which is printed as typed so that running it returns the engine's
-// own error.
-func quoteFilterValue(value string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 }
 
 // shellQuote returns arg as one POSIX shell word, quoted only when it needs it.

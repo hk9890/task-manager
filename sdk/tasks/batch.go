@@ -20,6 +20,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -65,21 +66,25 @@ func (e *BatchEntryError) Unwrap() error { return e.Err }
 //
 // A ref may not carry the store prefix: it could then equal the ID of an existing
 // issue, and an edge naming it would silently bind to the wrong one.
+//
+// Refs and edges are compared trimmed, as the edges of an issue are stored.
 func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs []CreateInput, failed int, err error) {
 	idOf := make(map[string]string, len(entries))
 	for i, e := range entries {
-		if e.Ref == "" {
+		ref := strings.TrimSpace(e.Ref)
+		if ref == "" {
 			continue
 		}
-		if strings.HasPrefix(e.Ref, prefix+"-") {
-			return nil, i, invalid("ref", "%q carries the store prefix %q, which is reserved for issue IDs", e.Ref, prefix)
+		if strings.HasPrefix(ref, prefix+"-") {
+			return nil, i, invalid("ref", "%q carries the store prefix %q, which is reserved for issue IDs", ref, prefix)
 		}
-		if _, dup := idOf[e.Ref]; dup {
-			return nil, i, invalid("ref", "%q is already used by an earlier entry", e.Ref)
+		if _, dup := idOf[ref]; dup {
+			return nil, i, invalid("ref", "%q is already used by an earlier entry", ref)
 		}
-		idOf[e.Ref] = ids[i]
+		idOf[ref] = ids[i]
 	}
 	resolve := func(edge string) string {
+		edge = strings.TrimSpace(edge)
 		if id, ok := idOf[edge]; ok {
 			return id
 		}
@@ -95,6 +100,23 @@ func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs
 		inputs[i] = in
 	}
 	return inputs, 0, nil
+}
+
+// namedByRef returns a validation error of a set with each allocated ID replaced
+// by the ref its entry carries: the caller wrote the refs, and the IDs name
+// issues that were never written.
+func namedByRef(err error, entries []BatchEntry, ids []string) error {
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		return err
+	}
+	var refOf []string
+	for i, e := range entries {
+		if ref := strings.TrimSpace(e.Ref); ref != "" {
+			refOf = append(refOf, ids[i], ref)
+		}
+	}
+	return invalid(ve.Field, "%s", strings.NewReplacer(refOf...).Replace(ve.Message))
 }
 
 func mapStrings(in []string, f func(string) string) []string {

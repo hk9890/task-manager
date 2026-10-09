@@ -25,8 +25,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 var showFlags struct {
@@ -47,11 +45,9 @@ var showCmd = &cobra.Command{
 			return err
 		}
 		// Every ID resolves before anything prints, so a missing one leaves stdout empty.
-		details := make([]*tasks.Detail, len(args))
-		for i, id := range args {
-			if details[i], err = s.Detail(id); err != nil {
-				return err
-			}
+		details, err := s.Details(args...)
+		if err != nil {
+			return err
 		}
 		if !flagJSON {
 			for i, d := range details {

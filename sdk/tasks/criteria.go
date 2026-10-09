@@ -203,34 +203,34 @@ func (c Criteria) Build() (string, error) {
 		} else {
 			// LabelMatchAll (default): AND-group — each label must be present
 			for _, l := range c.Labels {
-				parts = append(parts, fmt.Sprintf("label == %s", quoteVal(l)))
+				parts = append(parts, fmt.Sprintf("label == %s", QuoteQueryValue(l)))
 			}
 		}
 	}
 
 	// assignee == "..."
 	if c.Assignee != "" {
-		parts = append(parts, fmt.Sprintf("assignee == %s", quoteVal(c.Assignee)))
+		parts = append(parts, fmt.Sprintf("assignee == %s", QuoteQueryValue(c.Assignee)))
 	}
 
 	// creator == "..."
 	if c.Creator != "" {
-		parts = append(parts, fmt.Sprintf("creator == %s", quoteVal(c.Creator)))
+		parts = append(parts, fmt.Sprintf("creator == %s", QuoteQueryValue(c.Creator)))
 	}
 
 	// agent == "..."
 	if c.Agent != "" {
-		parts = append(parts, fmt.Sprintf("agent == %s", quoteVal(c.Agent)))
+		parts = append(parts, fmt.Sprintf("agent == %s", QuoteQueryValue(c.Agent)))
 	}
 
 	// session == "..."
 	if c.Session != "" {
-		parts = append(parts, fmt.Sprintf("session == %s", quoteVal(c.Session)))
+		parts = append(parts, fmt.Sprintf("session == %s", QuoteQueryValue(c.Session)))
 	}
 
 	// parent == "..."  (non-nil "" → parent == "")
 	if c.Parent != nil {
-		parts = append(parts, fmt.Sprintf("parent == %s", quoteVal(*c.Parent)))
+		parts = append(parts, fmt.Sprintf("parent == %s", QuoteQueryValue(*c.Parent)))
 	}
 
 	// Work: bare predicates
@@ -251,31 +251,32 @@ func (c Criteria) Build() (string, error) {
 
 	// Date bounds — HALF-OPEN: *From → field >= "From" (inclusive), *To → field < "To" (exclusive).
 	if c.CreatedFrom != nil {
-		parts = append(parts, fmt.Sprintf("created >= %s", quoteVal(formatTimestamp(*c.CreatedFrom))))
+		parts = append(parts, fmt.Sprintf("created >= %s", QuoteQueryValue(formatTimestamp(*c.CreatedFrom))))
 	}
 	if c.CreatedTo != nil {
-		parts = append(parts, fmt.Sprintf("created < %s", quoteVal(formatTimestamp(*c.CreatedTo))))
+		parts = append(parts, fmt.Sprintf("created < %s", QuoteQueryValue(formatTimestamp(*c.CreatedTo))))
 	}
 	if c.UpdatedFrom != nil {
-		parts = append(parts, fmt.Sprintf("updated >= %s", quoteVal(formatTimestamp(*c.UpdatedFrom))))
+		parts = append(parts, fmt.Sprintf("updated >= %s", QuoteQueryValue(formatTimestamp(*c.UpdatedFrom))))
 	}
 	if c.UpdatedTo != nil {
-		parts = append(parts, fmt.Sprintf("updated < %s", quoteVal(formatTimestamp(*c.UpdatedTo))))
+		parts = append(parts, fmt.Sprintf("updated < %s", QuoteQueryValue(formatTimestamp(*c.UpdatedTo))))
 	}
 	if c.ClosedFrom != nil {
-		parts = append(parts, fmt.Sprintf("closed >= %s", quoteVal(formatTimestamp(*c.ClosedFrom))))
+		parts = append(parts, fmt.Sprintf("closed >= %s", QuoteQueryValue(formatTimestamp(*c.ClosedFrom))))
 	}
 	if c.ClosedTo != nil {
-		parts = append(parts, fmt.Sprintf("closed < %s", quoteVal(formatTimestamp(*c.ClosedTo))))
+		parts = append(parts, fmt.Sprintf("closed < %s", QuoteQueryValue(formatTimestamp(*c.ClosedTo))))
 	}
 
 	return strings.Join(parts, " && "), nil
 }
 
-// quoteVal wraps a string value in double-quotes, escaping `\` → `\\` and
-// `"` → `\"` as required by QUERY-SPEC.md §3. This is the ONLY place in the
-// SDK that applies value quoting, keeping the rule in one audited location.
-func quoteVal(s string) string {
+// QuoteQueryValue returns s as a string literal of the filter-expression
+// language: in double-quotes, escaping `\` → `\\` and `"` → `\"` as required by
+// QUERY-SPEC.md §3. This is the ONLY place that applies value quoting, keeping
+// the rule in one audited location.
+func QuoteQueryValue(s string) string {
 	// Escape backslashes first, then double-quotes.
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
@@ -303,7 +304,7 @@ func eqOrGroup(field string, vals []string) string {
 	}
 	sub := make([]string, len(vals))
 	for i, v := range vals {
-		sub[i] = fmt.Sprintf("%s == %s", field, quoteVal(v))
+		sub[i] = fmt.Sprintf("%s == %s", field, QuoteQueryValue(v))
 	}
 	if len(sub) == 1 {
 		return sub[0]
@@ -315,7 +316,7 @@ func eqOrGroup(field string, vals []string) string {
 // mode. TextPhrase emits a single `text ~ "<text>"`. TextAllWords splits the text
 // on whitespace and AND-joins one `text ~ "<word>"` per word, so every word must
 // appear (order-independent). Empty or whitespace-only text yields "" (no
-// constraint). Quoting is delegated to quoteVal, keeping the bareword/quoting rule
+// constraint). Quoting is delegated to QuoteQueryValue, keeping the bareword/quoting rule
 // in the one audited place.
 func buildTextExpr(text string, mode TextMatch) string {
 	if mode == TextAllWords {
@@ -325,7 +326,7 @@ func buildTextExpr(text string, mode TextMatch) string {
 		}
 		frags := make([]string, len(words))
 		for i, w := range words {
-			frags[i] = fmt.Sprintf("text ~ %s", quoteVal(w))
+			frags[i] = fmt.Sprintf("text ~ %s", QuoteQueryValue(w))
 		}
 		return strings.Join(frags, " && ")
 	}
@@ -333,5 +334,5 @@ func buildTextExpr(text string, mode TextMatch) string {
 	if text == "" {
 		return ""
 	}
-	return fmt.Sprintf("text ~ %s", quoteVal(text))
+	return fmt.Sprintf("text ~ %s", QuoteQueryValue(text))
 }

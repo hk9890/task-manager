@@ -19,6 +19,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -172,14 +174,34 @@ func TestTree_ClosedParent(t *testing.T) {
 	}
 }
 
-// The engine accepts a parent cycle longer than one issue. Neither member has a
-// root above it, and each must still print exactly once.
-func TestTree_ParentCycle_PrintsEachIssueOnce(t *testing.T) {
-	root, s := treeStore(t)
-	parent := "tst-0002"
-	if _, err := s.Update("tst-0001", tasks.UpdateInput{Parent: &parent}); err != nil {
-		t.Fatalf("Update: %v", err)
+// setParentByHand rewrites the parent of an issue in its file. The engine refuses
+// a parent cycle, so a store that holds one got it from an edit like this.
+func setParentByHand(t *testing.T, root, id, parent string) {
+	t.Helper()
+	path := filepath.Join(root, ".tasks", id+tasks.FileExt)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	var lines []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "parent:") {
+			lines = append(lines, line)
+		}
+		if i == 0 {
+			lines = append(lines, "parent: "+parent)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Neither member of a parent cycle has a root above it, and each must still print
+// exactly once.
+func TestTree_ParentCycle_PrintsEachIssueOnce(t *testing.T) {
+	root, _ := treeStore(t)
+	setParentByHand(t, root, "tst-0001", "tst-0002")
 
 	out := tree(t, root)
 	for _, id := range []string{"tst-0001", "tst-0002", "tst-0003", "tst-0004"} {
@@ -192,16 +214,10 @@ func TestTree_ParentCycle_PrintsEachIssueOnce(t *testing.T) {
 // An issue below a parent cycle is not on it. Here it sorts before both members
 // of the cycle, and must still print under its parent.
 func TestTree_ParentCycle_KeepsAnIssueBelowItUnderItsParent(t *testing.T) {
-	root, s := treeStore(t)
-	for _, edge := range [][2]string{
-		{"tst-0002", "tst-0003"},
-		{"tst-0003", "tst-0002"},
-		{"tst-0001", "tst-0003"},
-	} {
-		if _, err := s.Update(edge[0], tasks.UpdateInput{Parent: &edge[1]}); err != nil {
-			t.Fatalf("Update %s: %v", edge[0], err)
-		}
-	}
+	root, _ := treeStore(t)
+	setParentByHand(t, root, "tst-0002", "tst-0003")
+	setParentByHand(t, root, "tst-0003", "tst-0002")
+	setParentByHand(t, root, "tst-0001", "tst-0003")
 
 	want := `tst-0004  open  P3  task  Outside blocker  [ready]
 tst-0003  open  P2  task  Wire up export  [blocked by tst-0002, tst-0004]

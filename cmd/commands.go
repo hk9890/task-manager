@@ -108,7 +108,7 @@ func selectCommands(all []commandDoc, names []string) (selected []commandDoc, mi
 		misuse = fmt.Sprintf("unknown command %q", name)
 		var near []string
 		for _, c := range all {
-			if slices.Contains(strings.Fields(c.Name), name) || strings.HasPrefix(c.Name, name) {
+			if name != "" && (slices.Contains(strings.Fields(c.Name), name) || strings.HasPrefix(c.Name, name)) {
 				near = append(near, fmt.Sprintf("%q", c.Name))
 			}
 		}
@@ -163,8 +163,12 @@ func docFor(c *cobra.Command) commandDoc {
 }
 
 // exampleFor synthesises a concrete usage example from the command's own
-// metadata: positional args declared in Use, plus any required flags.
+// metadata: positional args declared in Use, plus any required flags. A command
+// whose required flag depends on another flag states its own Example instead.
 func exampleFor(c *cobra.Command) string {
+	if c.Example != "" {
+		return c.Example
+	}
 	// Group commands (subcommands, no positional args of their own) are invoked via
 	// a subcommand. Detect this structurally rather than by Runnable(): the misuse-
 	// help layer attaches a dispatcher RunE to groups at startup, which would

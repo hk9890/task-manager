@@ -750,7 +750,7 @@ Create a new issue and allocate its ID.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--title <t>` | — | **Required.** Issue title. |
+| `--title <t>` | — | **Required** unless `--from` is given. Issue title. |
 | `--description <md>` | empty | Description (markdown body). |
 | `--description-file <path>` | — | Read the description from a file (`-` = stdin). |
 | `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore` \| `doc`. `doc` carries a document rather than work: it is an ordinary issue but never appears in `ready` / `blocked` (TASK-STORAGE-SPEC §9). Use `--description-file` to load a page from disk; a large body is stored in the content sidecar automatically (§4.6). |
@@ -800,7 +800,8 @@ above under their JSON names, plus `ref`:
   word, and each one is an issue or an edge the caller believes was filed.
 - **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
   any order. A `ref` must be unique and must not carry the store prefix. A parent
-  cycle or a `blocked_by` cycle between entries is refused.
+  cycle or a `blocked_by` cycle between entries is refused, and the message names
+  the cycle by `ref`.
 - **An empty path** (`--from ""`, what an unset shell variable gives) is misuse. It
   never falls back to the single-issue form.
 - **All or nothing.** Every entry is validated and passes its `pre-create` hooks

@@ -111,16 +111,13 @@ func TestCommands_YAMLCatalog(t *testing.T) {
 		}
 	}
 
-	// Derived accuracy: create marks --title required; show takes a positional id.
+	// Derived accuracy: --from replaces --title, so create marks neither required;
+	// show takes a positional id.
 	if create, ok := byName["create"]; ok {
-		var titleRequired bool
 		for _, f := range create.Flags {
-			if f.Name == "title" && f.Required {
-				titleRequired = true
+			if f.Required {
+				t.Errorf("create catalog marks --%s required, but --title and --from replace each other", f.Name)
 			}
-		}
-		if !titleRequired {
-			t.Errorf("create catalog should mark --title required; flags=%+v", create.Flags)
 		}
 		if !strings.Contains(create.Example, "--title") {
 			t.Errorf("create example should include --title, got %q", create.Example)
@@ -200,5 +197,15 @@ func TestCommands_UnknownName_IsMisuseThatSuggestsNames(t *testing.T) {
 				t.Errorf("%q: stderr does not contain %q:\n%s", name, want, stderr)
 			}
 		}
+	}
+}
+
+func TestCommands_EmptyName_SuggestsNothing(t *testing.T) {
+	_, stderr, code := run(t, "commands", "")
+	if code != 1 || !strings.Contains(stderr, `unknown command ""`) {
+		t.Errorf("exit = %d, stderr:\n%s", code, stderr)
+	}
+	if strings.Contains(stderr, "did you mean") {
+		t.Errorf("an empty name starts every command, and must suggest none:\n%s", stderr)
 	}
 }
