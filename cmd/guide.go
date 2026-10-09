@@ -140,6 +140,8 @@ Two views are derived from the dependency graph, not from the status field:
 
   taskmgr ready     open issues with no open blockers — what you can start now
   taskmgr blocked   non-closed issues waiting on at least one open blocker
+  taskmgr tree [id] open issues nested under their parents, each marked ready
+                    or blocked by <ids>; --format mermaid prints it as a graph
   taskmgr show <id> full detail: fields, edges, description, comments
 
 blocked is not the same as status == "blocked". An issue can be open and yet
@@ -604,6 +606,7 @@ var guideAliases = map[string]string{
 	"file":    "filing",
 	"ready":   "finding",
 	"blocked": "finding",
+	"tree":    "finding",
 	"list":    "finding",
 	"search":  "finding",
 	"update":  "progress",
