@@ -243,7 +243,7 @@ Drilling a related issue should navigate fully, not just update the rail.
 | `agent` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
 | `session` | 0–128 chars; single line; no control characters. Set at creation; not editable afterward. |
 | `labels` | 0–64 items; each 1–64 chars matching `^[a-z0-9][a-z0-9:._/-]*$`; unique. |
-| `parent` | a valid ID (§3); must reference an existing issue; not self. |
+| `parent` | a valid ID (§3); must reference an existing issue; not self; no cycles. |
 | `blocked_by` | 0–256 items; each a valid ID; unique; no self; no cycles. |
 | `related` | 0–256 items; each a valid ID; unique; no self. |
 | `created` / `updated` / `closed` | `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$` (§6). |
@@ -602,7 +602,9 @@ There is no same-type constraint: any issue may parent or block any other.
   `blocked` query predicates (QUERY-SPEC §3) give the same answer as the
   corresponding read methods. Documents are excluded from these two views only —
   they remain fully visible to `list`, `search`, and every filter expression.
-- **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection).
+- **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection), and
+  so is a cycle in the `parent` chain. A file edited by hand can still hold a parent
+  cycle; a reader must end its walk on one.
 
 Ready/blocked are **derived from the dependency graph, not from the `status`
 field**. The `blocked` *status value* is a manual label: the engine never sets or

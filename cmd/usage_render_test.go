@@ -174,6 +174,8 @@ func TestQueryInvocation_RewritesTheCallersOwnCommand(t *testing.T) {
 		{[]string{"list", "--updated="}, `To filter by updated: taskmgr list -q 'updated >= "<YYYY-MM-DD>"'`},
 		{[]string{"list", "--closed"}, `To filter by closed: taskmgr list --all -q 'status == "closed"'`},
 		{[]string{"list", "--all", "--closed", "--type", "bug"}, `To filter by closed and type: taskmgr list --all -q 'status == "closed" && type == "bug"'`},
+		{[]string{"search", "login", "--closed", "bug"}, `To filter by closed: taskmgr search login --all -q 'status == "closed"' bug`},
+		{[]string{"search", "login", "--closed", "2026-01-01"}, `To filter by closed: taskmgr search login -q 'closed >= "2026-01-01"'`},
 
 		// The two escapes of the expression, inside the one of the shell.
 		{[]string{"list", "--text", `it's "x"`}, `To filter by text: taskmgr list -q 'text ~ "it'\''s \"x\""'`},

@@ -80,8 +80,8 @@ func buildTree(s *tasks.Store, rootID *string) ([]*treeNode, error) {
 		}
 	}
 
-	// The engine rejects an issue that is its own parent but not a longer parent
-	// cycle, so seen is what ends the walk on one.
+	// The engine refuses a parent cycle on a write, but a file edited by hand, or
+	// written before the engine checked, can hold one: seen ends the walk on it.
 	seen := make(map[string]bool, len(open))
 	var attach func(n *treeNode)
 	attach = func(n *treeNode) {

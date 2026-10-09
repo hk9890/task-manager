@@ -95,12 +95,22 @@ func randToken(n int) string {
 // never collide within a single store. names are file-system entry names (as
 // from vfs.ReadDir); non-matching names are ignored. It performs no I/O.
 func newIDFromNames(prefix string, names []string) string {
+	return newID(prefix, idsOfNames(prefix, names))
+}
+
+// idsOfNames returns the issue IDs among file-system entry names.
+func idsOfNames(prefix string, names []string) map[string]struct{} {
 	existing := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		if stem, ok := idStem(prefix, n); ok {
 			existing[stem] = struct{}{}
 		}
 	}
+	return existing
+}
+
+// newID returns a fresh issue ID for prefix that is not in existing.
+func newID(prefix string, existing map[string]struct{}) string {
 	// Grow the token length only under (astronomically unlikely) repeated
 	// collisions; this guarantees termination without an unbounded loop at a
 	// single length.

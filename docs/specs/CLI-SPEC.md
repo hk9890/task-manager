@@ -800,7 +800,8 @@ above under their JSON names, plus `ref`:
   word, and each one is an issue or an edge the caller believes was filed.
 - **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
   any order. A `ref` must be unique and must not carry the store prefix. A parent
-  cycle or a `blocked_by` cycle between entries is refused.
+  cycle or a `blocked_by` cycle between entries is refused, and the message names
+  the cycle by `ref`.
 - **An empty path** (`--from ""`, what an unset shell variable gives) is misuse. It
   never falls back to the single-issue form.
 - **All or nothing.** Every entry is validated and passes its `pre-create` hooks

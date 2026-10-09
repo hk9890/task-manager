@@ -202,3 +202,13 @@ func TestCommands_UnknownName_IsMisuseThatSuggestsNames(t *testing.T) {
 		}
 	}
 }
+
+func TestCommands_EmptyName_SuggestsNothing(t *testing.T) {
+	_, stderr, code := run(t, "commands", "")
+	if code != 1 || !strings.Contains(stderr, `unknown command ""`) {
+		t.Errorf("exit = %d, stderr:\n%s", code, stderr)
+	}
+	if strings.Contains(stderr, "did you mean") {
+		t.Errorf("an empty name starts every command, and must suggest none:\n%s", stderr)
+	}
+}

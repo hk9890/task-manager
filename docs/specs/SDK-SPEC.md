@@ -911,18 +911,21 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   or the ID of an existing issue; a value that is no `Ref` of the set is treated as
   an ID. Entries may reference each other in any order. A `Ref` must be unique in
   the set and must not carry the store prefix, so it can never equal an issue ID.
+  A `Ref` and an edge are compared trimmed, as an edge is stored.
 
   Under **one** lock the engine allocates every ID, validates every entry against
   the store *as it will be once the whole set exists* — so a forward reference
   resolves — and runs every entry's `pre-create` hooks, all before the first write
-  (HOOK-SPEC §4). Two checks exist only because a set can name issues that do not
-  exist yet: a `blocked_by` cycle and a **parent cycle** through several entries are
-  both refused, and so is an entry `related` to itself. The first entry that is
+  (HOOK-SPEC §4). A `blocked_by` cycle and a parent cycle through several entries are
+  refused as on any write, and so is an entry `related` to itself. A validation
+  message names an entry by its `Ref`, not by the ID allocated to it: the caller
+  wrote the `Ref`, and the ID names an issue that was never written. The first entry that is
   refused aborts the set: nothing is written and the error is a `*BatchEntryError`
   (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
   before it, since no result will. An empty set is a `*ValidationError`, and so is a
   set of more than **256** entries: the lock is held across the hooks of every entry
-  (HOOK-SPEC §8), so the bound is what caps that hold. The results
+  (HOOK-SPEC §8), so the bound is what caps that hold. A failure no entry owns, such
+  as a store that cannot be listed, is returned unwrapped. The results
   are in entry order; every issue of a set shares one `Created` instant.
 
   `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,

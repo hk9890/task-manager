@@ -108,7 +108,7 @@ func selectCommands(all []commandDoc, names []string) (selected []commandDoc, mi
 		misuse = fmt.Sprintf("unknown command %q", name)
 		var near []string
 		for _, c := range all {
-			if slices.Contains(strings.Fields(c.Name), name) || strings.HasPrefix(c.Name, name) {
+			if name != "" && (slices.Contains(strings.Fields(c.Name), name) || strings.HasPrefix(c.Name, name)) {
 				near = append(near, fmt.Sprintf("%q", c.Name))
 			}
 		}

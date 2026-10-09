@@ -307,6 +307,10 @@ A denial reaches the caller as a message and exit code `1`, and as a structured 
   "issue_id": "proj-3k9f2x", "exit": 1, "reason": "epic still has 2 open children" }
 ```
 
+A set refused by `taskmgr create --from` never had an issue, so its error carries
+`entry` (the position in the file, from 1) and `ref` (when the entry has one) in place
+of `issue_id`.
+
 Hooks run in the order they are listed. The first pre-hook to deny stops the chain and
 nothing is written; hints from the ones that already ran are still passed along.
 

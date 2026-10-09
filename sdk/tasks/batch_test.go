@@ -189,6 +189,92 @@ func TestCreateBatch_ParentCycleAcrossEntries_WritesNothing(t *testing.T) {
 	assertStoreEmpty(t, s)
 }
 
+func TestCreateBatch_Cycle_NamesTheRefsNotTheAllocatedIDs(t *testing.T) {
+	for field, edge := range map[string]func(string) CreateInput{
+		"blocked_by": func(to string) CreateInput { return CreateInput{Title: "t", BlockedBy: []string{to}} },
+		"parent":     func(to string) CreateInput { return CreateInput{Title: "t", Parent: to} },
+	} {
+		s, _ := batchStore(t)
+		_, err := s.CreateBatch([]BatchEntry{
+			{Ref: "a", CreateInput: edge("b")},
+			{Ref: "b", CreateInput: edge("a")},
+		})
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != field {
+			t.Fatalf("%s: want the cycle validation error, got %v", field, err)
+		}
+		if !strings.Contains(ve.Message, "a -> b -> a") || strings.Contains(ve.Message, "x-") {
+			t.Errorf("%s: message = %q, want the cycle in refs and no allocated ID", field, ve.Message)
+		}
+	}
+}
+
+func TestCreateBatch_PaddedRefAndEdge_ResolveAsTrimmed(t *testing.T) {
+	s, _ := batchStore(t)
+	res, err := s.CreateBatch([]BatchEntry{
+		{Ref: " a", CreateInput: CreateInput{Title: "a"}},
+		{CreateInput: CreateInput{Title: "b", Parent: "a ", BlockedBy: []string{"a "}, Related: []string{" a"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := res[0].Issue.ID, res[1].Issue
+	if b.Parent != a || !reflect.DeepEqual(b.BlockedBy, []string{a}) || !reflect.DeepEqual(b.Related, []string{a}) {
+		t.Errorf("edges = parent %q blocked_by %v related %v, want all %q", b.Parent, b.BlockedBy, b.Related, a)
+	}
+}
+
+func TestCreateBatch_StoreCannotBeListed_BlamesNoEntry(t *testing.T) {
+	s, m := batchStore(t)
+	ioErr := errors.New("simulated EIO")
+	m.FailOn("ReadDir", s.dir, ioErr)
+
+	_, err := s.CreateBatch([]BatchEntry{{CreateInput: CreateInput{Title: "a"}}})
+	var be *BatchEntryError
+	if !errors.Is(err, ioErr) || errors.As(err, &be) {
+		t.Fatalf("want the bare I/O error, got %v", err)
+	}
+}
+
+func TestCreateBatch_AllocatedIDs_AreDistinct(t *testing.T) {
+	s, _ := batchStore(t)
+	entries := make([]BatchEntry, maxBatchEntries)
+	for i := range entries {
+		entries[i].Title = "t"
+	}
+	entries[0].ID = "x-aaaaaa"
+	res, err := s.CreateBatch(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range res {
+		if seen[r.Issue.ID] {
+			t.Fatalf("ID %s allocated twice", r.Issue.ID)
+		}
+		seen[r.Issue.ID] = true
+	}
+}
+
+func TestUpdate_ParentCycle_IsRefused(t *testing.T) {
+	s, _ := batchStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID})
+	c := mustCreate(t, s, CreateInput{Title: "c", Parent: b.ID})
+
+	_, err := s.Update(a.ID, UpdateInput{Parent: &c.ID})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "parent" || !strings.Contains(ve.Message, "parent cycle") {
+		t.Fatalf("want the parent-cycle validation error, got %v", err)
+	}
+	if got, err := s.Get(a.ID); err != nil || got.Parent != "" {
+		t.Errorf("a.Parent = %q (err %v), want it unchanged", got.Parent, err)
+	}
+	if _, err := s.Update(a.ID, UpdateInput{Parent: &a.ID}); !errors.As(err, &ve) || ve.Field != "parent" {
+		t.Errorf("an issue as its own parent must be refused, got %v", err)
+	}
+}
+
 func TestCreateBatch_EntryRelatedToItself_WritesNothing(t *testing.T) {
 	s, _ := batchStore(t)
 	_, err := s.CreateBatch([]BatchEntry{{Ref: "a", CreateInput: CreateInput{Title: "a", Related: []string{"a"}}}})

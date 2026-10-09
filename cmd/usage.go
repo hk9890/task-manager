@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -228,7 +229,7 @@ func queryInvocation(flags *pflag.FlagSet, args []string) string {
 		_, isField := filterFieldOps[name]
 		guessed := flag == nil && isField
 		takesNext := guessed || flag != nil && flag.NoOptDefVal == ""
-		if takesNext && !hasValue && i+1 < len(args) && (!guessed || !endsGuessedValue(flags, args[i+1])) {
+		if takesNext && !hasValue && i+1 < len(args) && (!guessed || !endsGuessedValue(flags, name, args[i+1])) {
 			i++
 			value, hasValue = args[i], true
 		}
@@ -300,14 +301,28 @@ func shorthandWithValue(flags *pflag.FlagSet, group string) (flag *pflag.Flag, s
 // the value of a flag it knows; for a flag it does not know, only something the
 // caller clearly meant as a flag ends it — "--", a flag of the command, or another
 // filter field — so a value that merely starts with a dash ("--label -wontfix") is
-// still read as the value.
-func endsGuessedValue(flags *pflag.FlagSet, arg string) bool {
+// still read as the value. "--closed" alone asks for the closed issues, so only a
+// date is its value: any other word stays the positional argument it was.
+func endsGuessedValue(flags *pflag.FlagSet, field, arg string) bool {
+	if field == "closed" && !isFilterDate(arg) {
+		return true
+	}
 	if long, isLong := strings.CutPrefix(arg, "--"); isLong {
 		name, _, _ := strings.Cut(long, "=")
 		_, isField := filterFieldOps[name]
 		return name == "" || isField || flags.Lookup(name) != nil
 	}
 	return len(arg) > 1 && arg[0] == '-' && flags.ShorthandLookup(arg[1:2]) != nil
+}
+
+// isFilterDate reports whether value has one of the two date forms of QUERY-SPEC §3.
+func isFilterDate(value string) bool {
+	for _, layout := range []string{time.RFC3339, time.DateOnly} {
+		if _, err := time.Parse(layout, value); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // filterTerm is the predicate for one guessed "--field value". A field without a
