@@ -38,11 +38,9 @@ var showCmd = &cobra.Command{
 	Short: "Show full detail for one or more issues",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		known := detailFieldNames()
-		for _, f := range showFlags.fields {
-			if !slices.Contains(known, f) {
-				return &usageError{cmd: cmd, msg: fmt.Sprintf("unknown field %q for --fields (want: %s)", f, strings.Join(known, ", "))}
-			}
+		selected, err := selectedDetailFields(cmd)
+		if err != nil {
+			return err
 		}
 		s, err := openStore()
 		if err != nil {
@@ -60,7 +58,7 @@ var showCmd = &cobra.Command{
 				if i > 0 {
 					_, _ = fmt.Fprintln(stdout)
 				}
-				printDetail(d, showFlags.fields)
+				printDetail(d, selected)
 			}
 			return nil
 		}
@@ -68,8 +66,8 @@ var showCmd = &cobra.Command{
 		for i, d := range details {
 			dto := toDetailDTO(s.Name(), d)
 			dtos[i] = dto
-			if len(showFlags.fields) > 0 {
-				if dtos[i], err = selectFields(dto, append([]string{"id"}, showFlags.fields...)); err != nil {
+			if selected != nil {
+				if dtos[i], err = selectFields(dto, selected); err != nil {
 					return err
 				}
 			}
@@ -79,6 +77,39 @@ var showCmd = &cobra.Command{
 		}
 		return printJSON(dtos)
 	},
+}
+
+// selectedDetailFields returns the detailDTO keys --fields selects, nil when the
+// flag is absent. A name selects its whole detailSection, so `--fields related`
+// means the same in both output modes: the line a person reads, and every key
+// that line is rendered from.
+func selectedDetailFields(cmd *cobra.Command) ([]string, error) {
+	if !cmd.Flags().Changed("fields") {
+		return nil, nil
+	}
+	known := detailFieldNames()
+	var selected []string
+	for _, name := range showFlags.fields {
+		name = strings.TrimSpace(name)
+		switch {
+		case name == "":
+			continue
+		case !slices.Contains(known, name):
+			return nil, &usageError{cmd: cmd, msg: fmt.Sprintf("unknown field %q for --fields (want: %s)", name, strings.Join(known, ", "))}
+		case !flagJSON && slices.Contains(jsonOnlyDetailFields, name):
+			return nil, &usageError{cmd: cmd, msg: fmt.Sprintf("field %q has no line in human output; add --json", name)}
+		}
+		selected = append(selected, name)
+		for _, sec := range detailSections {
+			if slices.Contains(sec.fields, name) {
+				selected = append(selected, sec.fields...)
+			}
+		}
+	}
+	if selected == nil {
+		return nil, &usageError{cmd: cmd, msg: "--fields needs at least one field name"}
+	}
+	return selected, nil
 }
 
 // detailFieldNames lists the top-level JSON keys of detailDTO in the order show
@@ -110,19 +141,30 @@ func (sel fieldSelection) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		fmt.Fprintf(&b, "%q:%s", f.key, f.value)
+		key, err := json.Marshal(f.key)
+		if err != nil {
+			return nil, err
+		}
+		b.Write(key)
+		b.WriteByte(':')
+		b.Write(f.value)
 	}
 	b.WriteByte('}')
 	return b.Bytes(), nil
 }
 
-// selectFields keeps the named keys of dto that are present in its JSON form; an
-// empty optional field stays omitted, as it is in the full object.
-func selectFields(dto detailDTO, keep []string) (fieldSelection, error) {
+// selectFields keeps `id` and the selected keys of dto that are present in its
+// JSON form; an empty optional field stays omitted, as it is in the full object.
+func selectFields(dto detailDTO, selected []string) (fieldSelection, error) {
+	// The two unbounded fields are dropped before the encode, not after it.
+	if !slices.Contains(selected, "description") {
+		dto.Description = ""
+	}
+	if !slices.Contains(selected, "comments") {
+		dto.Comments = nil
+	}
 	var raw bytes.Buffer
-	enc := json.NewEncoder(&raw)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(dto); err != nil {
+	if err := newJSONEncoder(&raw).Encode(dto); err != nil {
 		return nil, err
 	}
 	var values map[string]json.RawMessage
@@ -131,7 +173,7 @@ func selectFields(dto detailDTO, keep []string) (fieldSelection, error) {
 	}
 	var sel fieldSelection
 	for _, name := range detailFieldNames() {
-		if v, ok := values[name]; ok && slices.Contains(keep, name) {
+		if v, ok := values[name]; ok && (name == "id" || slices.Contains(selected, name)) {
 			sel = append(sel, selectedField{name, v})
 		}
 	}

@@ -111,8 +111,8 @@ func TestShow_Fields_JSONKeepsIDAndNamedKeysInDTOOrder(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("parse: %v\n%s", err, out)
 	}
-	if len(got) != 3 || got["id"] == nil || got["status"] == nil || got["blocked_by"] == nil {
-		t.Errorf("want exactly id, status, blocked_by; got:\n%s", out)
+	if len(got) != 4 || got["id"] == nil || got["status"] == nil || got["blocked_by"] == nil || got["blocked_by_refs"] == nil {
+		t.Errorf("want exactly id, status, and the two keys of the blocked-by line; got:\n%s", out)
 	}
 	if id, status, blocked := strings.Index(out, `"id"`), strings.Index(out, `"status"`), strings.Index(out, `"blocked_by"`); id >= status || status >= blocked {
 		t.Errorf("keys must keep the order of the full object (id, status, blocked_by); got:\n%s", out)
@@ -211,12 +211,98 @@ func TestShow_Fields_UnknownName_IsMisuseListingTheNames(t *testing.T) {
 	}
 }
 
+// `related` is stored on one side and derived on the other. Naming it must show
+// the link from the side that stores nothing, in both output modes.
+func TestShow_Fields_Related_ShowsADerivedLinkInBothModes(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+	b := createIssue(t, root, "--related", a)
+
+	human, _, code := run(t, "--dir", root, "show", a, "--fields", "related")
+	if code != 0 || !strings.Contains(human, b) {
+		t.Errorf("human output of the derived side lacks %s (exit %d):\n%s", b, code, human)
+	}
+	jsonOut, _, code := run(t, "--dir", root, "--json", "show", a, "--fields", "related")
+	if code != 0 || !strings.Contains(jsonOut, b) {
+		t.Errorf("JSON output of the derived side lacks %s (exit %d):\n%s", b, code, jsonOut)
+	}
+}
+
+func TestShow_Fields_OneKeyOfASharedLine_PrintsTheLine(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--priority", "1")
+
+	out, _, code := run(t, "--dir", root, "show", a, "--fields", "priority")
+	if code != 0 || !strings.Contains(out, "priority: P1") || strings.Contains(out, "status:") {
+		t.Errorf("want the type/priority line and no other (exit %d):\n%s", code, out)
+	}
+}
+
+func TestShow_Fields_NamesAreTrimmedAndEmptyOnesDropped(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+
+	out, errOut, code := run(t, "--dir", root, "show", a, "--fields", "status, created,")
+	if code != 0 || !strings.Contains(out, "status:") || !strings.Contains(out, "created:") {
+		t.Errorf("exit %d, stderr %q, stdout:\n%s", code, errOut, out)
+	}
+}
+
+// An empty value is what `--fields "$F"` gives with $F unset. Printing everything
+// would be the opposite of what the caller asked for.
+func TestShow_Fields_Empty_IsMisuse(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+
+	for _, value := range []string{"", " , "} {
+		out, errOut, code := run(t, "--dir", root, "--json", "show", a, "--fields", value)
+		if code != 1 || out != "" || !strings.Contains(errOut, "--fields needs at least one field name") {
+			t.Errorf("--fields %q: exit %d, stdout %q, stderr %q", value, code, out, errOut)
+		}
+	}
+}
+
+func TestShow_Fields_KeyWithNoHumanLine_IsRefusedWithoutJSON(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--description", strings.Repeat("a", 10000))
+
+	for _, name := range jsonOnlyDetailFields {
+		out, errOut, code := run(t, "--dir", root, "show", a, "--fields", name)
+		if code != 1 || out != "" || !strings.Contains(errOut, "add --json") {
+			t.Errorf("--fields %s: exit %d, stdout %d bytes, stderr %q", name, code, len(out), errOut)
+		}
+		if _, _, code := run(t, "--dir", root, "--json", "show", a, "--fields", name); code != 0 {
+			t.Errorf("--json --fields %s: exit %d, want 0", name, code)
+		}
+	}
+}
+
+func TestShow_Fields_BodyExternal_DoesNotCarryTheBody(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--description", "the-body")
+
+	out, _, code := run(t, "--dir", root, "--json", "show", a, "--fields", "body_external")
+	if code != 0 || strings.Contains(out, "the-body") {
+		t.Errorf("exit %d; body_external must not select the description:\n%s", code, out)
+	}
+}
+
+func TestShow_TruncationNotice_NamesFieldsDescription(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--description", strings.Repeat("a", showBodyLimit+1))
+
+	out, _, _ := run(t, "--dir", root, "show", a)
+	if !strings.Contains(out, "--fields description") {
+		t.Errorf("the notice must say how to get the full body:\n%.300s", out[max(0, len(out)-300):])
+	}
+}
+
 // A detailDTO field no section renders would be accepted by --fields and print
 // nothing in human output, with no test noticing.
 func TestDetailSections_RenderEveryDetailField(t *testing.T) {
-	rendered := map[string]bool{
-		"id": true, "title": true, // the header line
-		"store": true, "creator": true, // --json only: the human block has never shown them
+	rendered := map[string]bool{"id": true, "title": true} // the header line
+	for _, f := range jsonOnlyDetailFields {
+		rendered[f] = true
 	}
 	for _, sec := range detailSections {
 		for _, f := range sec.fields {

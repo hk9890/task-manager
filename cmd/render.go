@@ -42,10 +42,16 @@ var (
 
 // printJSON writes v as indented JSON to the command's stdout.
 func printJSON(v any) error {
-	enc := json.NewEncoder(stdout)
+	return newJSONEncoder(stdout).Encode(v)
+}
+
+// newJSONEncoder is the one place the CLI's JSON form is set (CLI-SPEC §1):
+// indented, HTML left unescaped.
+func newJSONEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
-	return enc.Encode(v)
+	return enc
 }
 
 // --- JSON DTOs: stable, snake_case shapes for agents ---
@@ -260,6 +266,11 @@ type detailSection struct {
 	print  func(d *tasks.Detail, full bool)
 }
 
+// jsonOnlyDetailFields are the detailDTO keys the human block has no line for.
+// `show --fields` refuses them without --json: a header with nothing under it
+// reads as "this issue has no creator".
+var jsonOnlyDetailFields = []string{"store", "creator", "body_external"}
+
 var detailSections = []detailSection{
 	{[]string{"status"}, func(d *tasks.Detail, _ bool) {
 		_, _ = fmt.Fprintf(stdout, "  status:   %s\n", d.Status)
@@ -307,7 +318,7 @@ var detailSections = []detailSection{
 		}
 		_, _ = fmt.Fprintln(stdout)
 	}},
-	{[]string{"description", "body_external"}, printBody},
+	{[]string{"description"}, printBody},
 	{[]string{"comments"}, func(d *tasks.Detail, _ bool) { printComments(d.Comments) }},
 }
 

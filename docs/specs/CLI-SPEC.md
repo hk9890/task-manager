@@ -528,12 +528,20 @@ a partial result.
 |---|---|
 | `--fields <name,...>` | Print only the named fields. A name is a top-level key of `detailDTO` (§6); an unknown one is misuse, and the message lists the valid names. |
 
-With `--fields`, the JSON object carries `id` and the named keys, in `detailDTO`
-order; a named key that is empty stays omitted, as in the full object. Human output
-prints the header line (ID and title) and the lines that render a named field. Two
-keys that share a line select it together — `type` and `priority`, `agent` and
-`session`, `closed` and `close_reason`, an edge and its `_refs` twin. `store` and
-`creator` have no human line.
+A name selects a **line of the human block**, and with it every key that line is
+rendered from: `type` and `priority`, `agent` and `session`, `closed` and
+`close_reason`, and an edge with its `_refs` twin (`parent`, `blocked_by`, `related`).
+Human output prints the header line (ID and title) and the selected lines. JSON
+carries `id` and the selected keys, in `detailDTO` order; a key that is empty stays
+omitted, as in the full object. Selecting by line is what makes one name mean the
+same in both modes: `related` is stored on one side of a link only, so the bare key
+is absent on the other side while the line — and `related_refs` — shows the link.
+
+`store`, `creator` and `body_external` have no human line. Each selects only itself,
+and naming one without `--json` is misuse — a header with nothing under it would read
+as "this issue has none". Names are trimmed and empty ones dropped (`status, created`
+works); a `--fields` value that names nothing is misuse and never falls back to the
+full output.
 
 A body larger than 4096 bytes is **truncated in human output**, followed by a
 notice giving its full size and, when the body lives in the content sidecar
