@@ -17,26 +17,45 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 var showCmd = &cobra.Command{
-	Use:   "show <id>",
-	Short: "Show full detail for an issue",
-	Args:  cobra.ExactArgs(1),
+	Use:   "show <id> [more ids...]",
+	Short: "Show full detail for one or more issues",
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := openStore()
 		if err != nil {
 			return err
 		}
-		d, err := s.Detail(args[0])
-		if err != nil {
-			return err
+		// Every ID resolves before anything prints, so a missing one leaves stdout empty.
+		details := make([]*tasks.Detail, len(args))
+		for i, id := range args {
+			if details[i], err = s.Detail(id); err != nil {
+				return err
+			}
 		}
 		if flagJSON {
-			return printJSON(toDetailDTO(s.Name(), d))
+			if len(details) == 1 {
+				return printJSON(toDetailDTO(s.Name(), details[0]))
+			}
+			dtos := make([]detailDTO, len(details))
+			for i, d := range details {
+				dtos[i] = toDetailDTO(s.Name(), d)
+			}
+			return printJSON(dtos)
 		}
-		printDetail(d)
+		for i, d := range details {
+			if i > 0 {
+				_, _ = fmt.Fprintln(stdout)
+			}
+			printDetail(d)
+		}
 		return nil
 	},
 }

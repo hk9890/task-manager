@@ -249,7 +249,7 @@ func TestExampleFor_GroupCommandsShowASubcommand(t *testing.T) {
 }
 
 func TestExampleFor_IncludesPositionalsAndRequiredFlags(t *testing.T) {
-	if got, want := exampleFor(findCommand(t, "show")), "taskmgr show <id>"; got != want {
+	if got, want := exampleFor(findCommand(t, "show")), "taskmgr show <id> [more ids...]"; got != want {
 		t.Errorf("exampleFor(show) = %q, want %q", got, want)
 	}
 	if got := exampleFor(findCommand(t, "create")); !strings.Contains(got, "--title") {
