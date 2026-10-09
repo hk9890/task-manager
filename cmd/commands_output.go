@@ -69,7 +69,7 @@ var jsonOutputs = map[string]jsonOutput{
 	"package list":        {prints: []packageDTO{}},
 	"package repo add":    {prints: repoAddedDTO{}},
 	"package repo list":   {prints: []repoDTO{}},
-	"package repo rm":     {prints: repoAddedDTO{}},
+	"package repo rm":     {prints: repoRemovedDTO{}},
 	"package repo update": {prints: []repoAddedDTO{}},
 	"package rm":          {prints: packageRemovedDTO{}},
 	"ready":               {prints: []issueDTO{}},

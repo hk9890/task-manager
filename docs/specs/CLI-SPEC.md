@@ -552,7 +552,7 @@ removed it reports `missing` and fails every mutation in the store that names it
 the state this warning exists to make visible rather than silent.
 
 - **Output:** the repository that was removed, and the packages a config still uses
-  (`repoAddedDTO` in JSON, §6).
+  (`repoRemovedDTO` in JSON, §6).
 
 ---
 
@@ -1233,11 +1233,16 @@ and is omitted when git cannot report one; `packages` names what it provides, so
 is always present; `used` names those the per-user config already uses; `detail` explains
 a repository that provides nothing (§2.4).
 
-**`repoAddedDTO`** — emitted by `package repo add` and `rm` (one object) and `update` (an
-array): `{name, path, url, packages}`, with `name`, `path` and `url` as in `repoDTO`.
-`packages` is omitted when empty, and its meaning follows the command: on `add` what the
-repository provides, on `rm` the packages of the removed repository that the per-user
-config still uses, and `update` never carries it. `rm` carries no `url`.
+**`repoAddedDTO`** — emitted by `package repo add` (one object) and `update` (an array):
+`{name, path, url, packages}`, with `name`, `path` and `url` as in `repoDTO`. `packages`
+names what the repository provides and is omitted when empty; `update` never carries it.
+
+**`repoRemovedDTO`** — emitted by `package repo rm`: `{name, path, still_used}`, with
+`name` and `path` as in `repoDTO`. `still_used` names the packages of the removed
+repository that the per-user config still uses, and is omitted when there are none. Each
+one is a `use:` entry that no longer resolves (§2.4), so the key is deliberately not
+`packages`: a caller reading that key as "what was removed" would take the broken
+references for cleaned-up ones.
 
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
