@@ -16,7 +16,7 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   query · criteria · search  (query surface)
   hooks · hookrun · hookpayload  (lifecycle gates)
   packages · packageload         (hook packages: the format, and reading one)
-  log · doc
+  log · watch · doc
   internal/query/           pure filter-expression engine: lex · parse · ast · eval · errors
   internal/vfs/             the disk seam: FS interface · osFS (prod) · Mem (test + faults)
   internal/exec/            the process seam: Runner interface · OS runner · Fake
@@ -41,8 +41,8 @@ cmd/                        taskmgr CLI (cobra); calls Store, never the FS
   hook processes, user environment) and the only SDK packages that call
   `os`/`syscall`. Each has a real implementation and a test double. `vfs.FS` is
   `ReadDir`, `ReadFile`, `Stat`, `WriteAtomic`, `Append`, `Rename`, `MkdirAll`,
-  `Remove`, `Lock`; `osFS` encapsulates temp+fsync+rename and flock, `Mem` adds
-  fault injection.
+  `Remove`, `Lock`, `Watch`; `osFS` encapsulates temp+fsync+rename, flock and
+  the `fsnotify` watcher, `Mem` adds fault injection.
 - **`internal/storetest`** — builds a populated store from a declarative spec into
   *either* `vfs.Mem` or a real `t.TempDir()`. A normal (non-`_test.go`) package so
   any package's tests can import it; because only test files import it, it never

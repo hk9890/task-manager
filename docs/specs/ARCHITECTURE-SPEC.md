@@ -108,7 +108,7 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback) + `Mem` (in-memory, for tests). |
+| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback, `Watch` over `fsnotify`) + `Mem` (in-memory, for tests). |
 | `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
 | `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec, plus `RawFixture` for raw on-disk bytes. Reaches disk through the `vfs` seam, and is held to the seam rule like any other package. |
@@ -156,6 +156,7 @@ already on both.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
+| `watch.go` | `Watch`: turns the changed paths the vfs seam reports into merged change signals (SDK-SPEC §4). Reaches the seam through the store's `FS` alone, so it is on no import list. |
 | `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)
@@ -327,10 +328,18 @@ system would provide is left to that system.
 
 ## 10. Dependencies & philosophy
 
-The engine depends on essentially nothing beyond YAML encoding; the CLI adds a
-command framework. The guiding principle is subtractive: prefer the smallest design
+The engine has two dependencies: `gopkg.in/yaml.v3` for YAML encoding, and
+`github.com/fsnotify/fsnotify` for the file notifications behind `Store.Watch`
+(SDK-SPEC §4), which brings in `golang.org/x/sys`. The CLI adds a command
+framework. The guiding principle is subtractive: prefer the smallest design
 that does the job, keep every artifact human-readable, and centralize writes so
 correctness is enforced in exactly one place.
+
+`fsnotify` is imported by `internal/vfs` alone. The alternative with no
+dependency was to poll file modification times: its idle cost grows with
+`closed/`, which has no bound, and its latency is the poll interval. A watcher
+written here against each operating system's own interface would be the same
+code as `fsnotify`, maintained in this repository.
 
 A feature in the **core must earn its place**: if a behaviour can be expressed as a hook
 ([HOOK-SPEC.md](HOOK-SPEC.md)) rather than engine code, it is a hook. The core carries only

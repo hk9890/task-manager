@@ -159,6 +159,7 @@ func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 		"import.go":   true, // bulk import
 		"hookrun.go":  true, // hook execution against the exec seam
 		"log.go":      true, // observability records emitted from the write path
+		"watch.go":    true, // Watch over the vfs seam's change notifications
 	}
 
 	const seamRoot = "github.com/hk9890/task-manager/sdk/tasks/internal/"
