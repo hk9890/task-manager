@@ -816,8 +816,8 @@ block until it returns. The worst case is `hook_timeout` + the 2-second SIGKILL 
 close, you serialize all writes for that duration.** A set (`CreateBatch`, §4) holds
 the lock across the `pre-create` chains of all its entries — the same total as filing
 them one by one, but in one stretch, which is what makes the set all-or-nothing. Its
-worst case is therefore the single-write ceiling **times the number of entries**, and a
-set has no size limit.
+worst case is therefore the single-write ceiling **times the number of entries**, which a
+set caps at 256.
 Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
 wall-clock duration is logged (§4, [MONITORING.md](../MONITORING.md)), so a
 project can see exactly how long its gates hold the lock and decide whether to raise

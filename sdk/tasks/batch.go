@@ -24,6 +24,11 @@ import (
 	"strings"
 )
 
+// maxBatchEntries bounds a CreateBatch set. The store lock is held across the
+// pre-create hooks of every entry, so the bound is what caps that hold; 256 is
+// the bound the edge lists already use.
+const maxBatchEntries = 256
+
 // BatchEntry is one issue of a CreateBatch set.
 type BatchEntry struct {
 	// Ref names this entry inside the set, so another entry's Parent, BlockedBy

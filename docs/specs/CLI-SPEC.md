@@ -719,8 +719,8 @@ above under their JSON names, plus `ref`:
 
 - **Keys:** `ref`, `title`, `type`, `priority`, `assignee`, `labels`, `description`,
   `parent`, `blocked_by`, `related`.
-- **The file is read strictly.** It holds exactly one YAML document, a list, with no
-  empty item. An unknown key, a second document after `---`, an empty list item and
+- **The file is read strictly.** It holds exactly one YAML document, a list of 1 to
+  256 entries, with no empty item. An unknown key, a second document after `---`, an empty list item and
   a top-level mapping are each an error. A lenient reader skips all four without a
   word, and each one is an issue or an edge the caller believes was filed.
 - **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in

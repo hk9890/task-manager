@@ -920,7 +920,9 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   both refused, and so is an entry `related` to itself. The first entry that is
   refused aborts the set: nothing is written and the error is a `*BatchEntryError`
   (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
-  before it, since no result will. An empty set is a `*ValidationError`. The results
+  before it, since no result will. An empty set is a `*ValidationError`, and so is a
+  set of more than **256** entries: the lock is held across the hooks of every entry
+  (HOOK-SPEC §8), so the bound is what caps that hold. The results
   are in entry order; every issue of a set shares one `Created` instant.
 
   `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,

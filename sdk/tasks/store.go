@@ -986,6 +986,9 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 	if len(entries) == 0 {
 		return nil, invalid("entries", "the set is empty")
 	}
+	if len(entries) > maxBatchEntries {
+		return nil, invalid("entries", "too many entries: %d (max %d)", len(entries), maxBatchEntries)
+	}
 	results, failed, err := s.createSet(entries)
 	if failed >= 0 {
 		return nil, &BatchEntryError{Index: failed, Ref: entries[failed].Ref, Err: err}

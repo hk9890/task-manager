@@ -253,6 +253,22 @@ func TestCreateBatch_InvalidField_WritesNothing(t *testing.T) {
 	assertStoreEmpty(t, s)
 }
 
+func TestCreateBatch_OneEntryOverTheBound_WritesNothing(t *testing.T) {
+	s, _ := batchStore(t)
+	entries := make([]BatchEntry, maxBatchEntries+1)
+	for i := range entries {
+		entries[i].Title = "t"
+	}
+	var ve *ValidationError
+	if _, err := s.CreateBatch(entries); !errors.As(err, &ve) || ve.Field != "entries" {
+		t.Fatalf("want an entries validation error, got %v", err)
+	}
+	assertStoreEmpty(t, s)
+	if _, err := s.CreateBatch(entries[:maxBatchEntries]); err != nil {
+		t.Errorf("a set of exactly %d entries must be accepted: %v", maxBatchEntries, err)
+	}
+}
+
 func TestCreateBatch_EmptySet_IsRefused(t *testing.T) {
 	s, _ := batchStore(t)
 	var ve *ValidationError
