@@ -142,7 +142,8 @@ Two views are derived from the dependency graph, not from the status field:
   taskmgr blocked   non-closed issues waiting on at least one open blocker
   taskmgr tree [id] open issues nested under their parents, each marked ready
                     or blocked by <ids>; --format mermaid prints it as a graph
-  taskmgr show <id> full detail: fields, edges, description, comments
+  taskmgr show <id> full detail: fields, edges, description, comments; takes
+                    several ids in one call, and --json is then an array
 
 blocked is not the same as status == "blocked". An issue can be open and yet
 blocked, or carry the blocked status with no open blocker at all — the status is
