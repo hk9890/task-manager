@@ -111,6 +111,7 @@ func TestDetectAgent_EveryMarkerResolves(t *testing.T) {
 func showJSON(t *testing.T, root, id string) map[string]any {
 	t.Helper()
 	out, errOut, code := run(t, "--dir", root, "--json", "show", id)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show %s: exit %d, stderr %q", id, code, errOut)
 	}

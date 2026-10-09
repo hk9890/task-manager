@@ -434,6 +434,7 @@ type GuideEntry struct {
     ID   string `yaml:"id,omitempty"`   // effective topic is "pkg:<package>:<id>"; no ':' in it
     File string `yaml:"file"`           // a path inside the package directory
     Into string `yaml:"into,omitempty"` // a built-in topic it also prints inside; no ':' in it
+    Summary string `yaml:"summary,omitempty"` // one line for the job list; at most MaxGuideSummaryBytes
 }
 
 // GuideTopic is one fragment with its text read.
@@ -441,6 +442,7 @@ type GuideTopic struct {
     ID, Package, Scope string // ID is "pkg:<package>:<id>"; Scope is "global" | "store"
     Overview           bool   // the manifest's overview: fragment, not a guide: entry
     Into               string // the topic it prints inside, verbatim and unresolved
+    Summary            string // the entry's one-line summary:, empty when it declared none
     Path               string // the fragment file on this machine
     Text, Detail       string // the text, or why it could not be read — never both
     Truncated          bool   // cut to its cap, on a line boundary
@@ -448,6 +450,7 @@ type GuideTopic struct {
 
 const PackageManifestName = "taskmgr-package.yaml"
 const MaxGuideFragmentBytes = 8 << 10 // a guide: section's cap (HOOK-SPEC §3.7)
+const MaxGuideSummaryBytes = 96       // a guide: entry's summary: cap (HOOK-SPEC §3.7)
 const MaxGuideOverviewBytes = 1 << 10 // an overview: fragment's cap — every caller gets it
 const GuideOverviewID = "overview"    // the reserved id the overview: key declares
 ```
@@ -855,6 +858,7 @@ type Page struct {
 
 ```go
 func (s *Store) Create(in CreateInput) (*MutationResult, error)
+func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) // a set with local refs, all or nothing
 func (s *Store) Import(in ImportInput) (*MutationResult, error)   // direct write of a complete end-state
 func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error)
 func (s *Store) Close(id, reason string) (*MutationResult, error)   // idempotent; moves to closed/
@@ -872,7 +876,8 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   the project lock. Configured lifecycle hooks ([HOOK-SPEC.md](HOOK-SPEC.md)) run on the
   transition: pre-hooks gate the write under the lock, post-hooks notify after it. A
   pre-hook denial returns `*HookDeniedError` (§6) and writes nothing.
-- **All five writes (`Create`/`Update`/`Close`/`Reopen`/`Import`) return a `*MutationResult`** —
+- **All five writes (`Create`/`Update`/`Close`/`Reopen`/`Import`) return a `*MutationResult`**,
+  and `CreateBatch` one per entry —
   the resulting `Issue` plus the advisory hook output (HOOK-SPEC §6.2): `Hints`, aggregated
   from every pre- and post-hook that allowed, and `Warnings`, the post-hook failures (which
   never fail the write). Both are nil when no hooks ran or none had anything to say. A no-op
@@ -891,6 +896,47 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
   `CreateInput.ID` is honoured verbatim instead (import/migration) when it is
   well-formed, carries the store prefix, and is not already in use.
+- **`CreateBatch`** creates a set of issues that reference each other, **all or
+  nothing**. Each entry is a `CreateInput` plus an optional `Ref`, a name local to
+  the set that is never stored:
+
+  ```go
+  type BatchEntry struct {
+      Ref string
+      CreateInput
+  }
+  ```
+
+  `Parent`, `BlockedBy` and `Related` of an entry accept the `Ref` of another entry
+  or the ID of an existing issue; a value that is no `Ref` of the set is treated as
+  an ID. Entries may reference each other in any order. A `Ref` must be unique in
+  the set and must not carry the store prefix, so it can never equal an issue ID.
+
+  Under **one** lock the engine allocates every ID, validates every entry against
+  the store *as it will be once the whole set exists* — so a forward reference
+  resolves — and runs every entry's `pre-create` hooks, all before the first write
+  (HOOK-SPEC §4). Two checks exist only because a set can name issues that do not
+  exist yet: a `blocked_by` cycle and a **parent cycle** through several entries are
+  both refused, and so is an entry `related` to itself. The first entry that is
+  refused aborts the set: nothing is written and the error is a `*BatchEntryError`
+  (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
+  before it, since no result will. An empty set is a `*ValidationError`, and so is a
+  set of more than **256** entries: the lock is held across the hooks of every entry
+  (HOOK-SPEC §8), so the bound is what caps that hold. The results
+  are in entry order; every issue of a set shares one `Created` instant.
+
+  `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,
+  so the two cannot diverge.
+
+  The guarantee covers **refusal, not a crash**. Each file lands atomically (§7),
+  but there is no multi-file transaction. The set is written **referenced-first** —
+  an issue after every issue of the set its edges name — so whatever a cut-short set
+  leaves on disk has edges that resolve: a write that fails midway removes the
+  issues already written and reports any it could not remove, and a process killed
+  between two writes leaves the earlier issues filed. Two entries `related` to each
+  other have no such order; a kill between exactly those two writes leaves one with
+  a dangling `related`. A journal that closed the gap was rejected — it would be the
+  store's only recovery path, exercised almost never.
 - **`Import`** is a direct write of a complete issue **end-state** from an external
   system — not a `Create`→`Update`→`Close` replay. Unlike `Create` it takes the
   final `Status` (including `closed`) and the original `Created`/`Updated`/`Closed`
@@ -949,6 +995,62 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   results and produced a git diff for a command that changed nothing, while the
   identical `rel rm` did not.
 
+### Watch (change notification)
+
+```go
+func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error)
+```
+
+For a long-running consumer that shows the store and must read it again when it
+changes.
+
+- **A value means "read again".** It says the store changed since the last
+  receive, and carries nothing else: no issue ID, no kind of change. A consumer
+  that shows a list reads the list again in any case, and a payload would make the
+  file layout part of this contract.
+- **Every writer is reported.** A write through this handle, through another
+  handle or another process, an edit by hand and a version-control checkout all
+  signal. The watch covers the store directory, `closed/`, `comments/` and
+  `content/` (TASK-STORAGE-SPEC §2), and so the configuration file too. It does
+  not cover the per-user home, and it does not cover the hook packages a store
+  holds under `packages/`: a change there gives no signal.
+- **Signals are merged.** `Watch` collects changes for 100 ms after the first one
+  and then signals once, because one write touches up to three files and a signal
+  for each would make the consumer read during the write. The 100 ms count from
+  the first change and do not start again with each later one, so a continuous
+  series of writes cannot hold the signal back. A write that takes longer than
+  100 ms gives a second signal when it ends. The channel holds one signal: a
+  signal that is not received yet absorbs the next, so a slow consumer does not
+  fall behind.
+- **A signal can be redundant.** It reports that files changed, not that any
+  query now answers differently. A consumer must tolerate a read that returns
+  what it already has.
+- **A write that changes nothing gives no signal**, although it takes the lock:
+  the lock file is not reported.
+- **The channel closes** when `ctx` is done, or when the store directory is
+  removed or renamed. A consumer follows a moved store by resolving it again and
+  calling `Watch` on the new handle. A rename of a directory above the store —
+  the project directory of a local `.tasks/` — is not reported: the channel stays
+  open and a read through the handle fails, so a consumer treats a failed read
+  as the end of the watch.
+- **`Watch` returns an error** when the operating system refuses the watch, for
+  example when the per-user limit of watches is reached. When it refuses the
+  watch on `closed/`, `comments/` or `content/` after the start, because that
+  directory appeared later, the channel closes.
+- **The cost depends on the operating system.** Linux and Windows use one watch
+  for each of the four directories. macOS and the BSDs use one open file
+  descriptor for each file in them, so the cost grows with the store, `closed/`
+  included, and `Watch` returns an error at the descriptor limit of the process.
+
+`Watch` relies on the operating system's file notifications. Where a filesystem
+delivers none (some network mounts), the channel stays silent and no error
+shows it, so a consumer that must not miss a change keeps a slow periodic read
+beside the watch.
+
+A hook is not a substitute. Post-hooks (HOOK-SPEC §2) fire for transitions
+alone — a comment fires none, and neither does an edit by hand — and each store
+would have to install the hook package.
+
 ---
 
 ## 5. Serialization
@@ -997,9 +1099,23 @@ returns `ErrNoStore` when there is no local store to promote. A corrupt
 `config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
 is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
-`ErrAlreadyExists` is returned by `Create` and `Import` when the caller supplies an
-explicit `ID` the store already holds; allocated IDs retry against the existing set
-and cannot hit it.
+`ErrAlreadyExists` is returned by `Create`, `CreateBatch` and `Import` when the caller
+supplies an explicit `ID` the store already holds, and by `CreateBatch` when two entries
+of one set supply the same `ID`; allocated IDs retry against the existing set and cannot
+hit it.
+
+`CreateBatch` wraps the error of the entry at fault, whatever its kind, so the caller
+learns which entry to repair:
+
+```go
+type BatchEntryError struct {
+    Index int    // zero-based position of the entry in the set
+    Ref   string // the entry's Ref, empty when it has none
+    Err   error  // what a single Create of that entry returns
+}
+func (e *BatchEntryError) Error() string // "entry 3 (ref \"schema\"): …"
+func (e *BatchEntryError) Unwrap() error
+```
 
 `ErrPackageMissing` distinguishes a `use:` entry whose directory is simply not there
 from one that is there and unusable — "install this" rather than "repair this". It is

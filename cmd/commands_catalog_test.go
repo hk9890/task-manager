@@ -24,10 +24,13 @@
 //   - Every user-facing command is present, each with a purpose and an example.
 //   - Derived metadata is accurate (required flags, positional placeholders).
 //   - --json emits the same catalog as valid JSON.
+//   - Named commands select their entries; an unknown name is a misuse that
+//     names the entries it could have meant.
 package cmd
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,7 +72,7 @@ var allUserFacingCommands = []string{
 	"dep", "dep add", "dep rm",
 	"rel", "rel add", "rel rm",
 	"comment", "comment add", "comment edit", "comment rm",
-	"list", "search", "ready", "blocked", "labels", "statuses", "types",
+	"list", "search", "ready", "blocked", "tree", "labels", "statuses", "types",
 	"version", "commands", "guide",
 }
 
@@ -154,5 +157,48 @@ func TestCommands_JSON(t *testing.T) {
 	}
 	if len(cat.Commands) < len(allUserFacingCommands) {
 		t.Errorf("json catalog has %d commands, want >= %d", len(cat.Commands), len(allUserFacingCommands))
+	}
+}
+
+func TestCommands_Named_PrintsOnlyThoseEntries(t *testing.T) {
+	stdout, stderr, code := run(t, "commands", "show", "comment add")
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr)
+	}
+	var cat catalog
+	if err := yaml.Unmarshal([]byte(stdout), &cat); err != nil {
+		t.Fatalf("output is not valid YAML: %v\n---\n%s", err, stdout)
+	}
+	var got []string
+	for _, c := range cat.Commands {
+		got = append(got, c.Name)
+	}
+	if want := []string{"comment add", "show"}; !slices.Equal(got, want) {
+		t.Errorf("commands = %v, want %v", got, want)
+	}
+	if cat.Binary != "taskmgr" {
+		t.Errorf("binary = %q: a selection keeps the shape of the full catalog", cat.Binary)
+	}
+}
+
+func TestCommands_UnknownName_IsMisuseThatSuggestsNames(t *testing.T) {
+	cases := map[string][]string{
+		"add":  {`"comment add"`, `"dep add"`, `"rel add"`},
+		"sho":  {`"show"`},
+		"zzzz": {"Run taskmgr commands for every name"},
+	}
+	for name, wants := range cases {
+		stdout, stderr, code := run(t, "commands", "show", name)
+		if code != 1 {
+			t.Errorf("%q: exit = %d, want 1", name, code)
+		}
+		if stdout != "" {
+			t.Errorf("%q: stdout = %q, want nothing beside the error", name, stdout)
+		}
+		for _, want := range append(wants, "unknown command", "usage:") {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("%q: stderr does not contain %q:\n%s", name, want, stderr)
+			}
+		}
 	}
 }

@@ -58,7 +58,8 @@ filtering, hooks, and keeping the tracker outside the repository.
 ## Use as a Go library
 
 The storage engine is an importable, dependency-light module
-(`github.com/hk9890/task-manager/sdk/tasks` — only depends on `gopkg.in/yaml.v3`):
+(`github.com/hk9890/task-manager/sdk/tasks` — it depends on `gopkg.in/yaml.v3` and
+`github.com/fsnotify/fsnotify`):
 
 ```bash
 go get github.com/hk9890/task-manager/sdk@latest

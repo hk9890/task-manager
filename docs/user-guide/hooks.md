@@ -93,6 +93,9 @@ guide:
   - id: paths
     into: filing
     file: ./guide/paths.md
+  - id: reviewing
+    file: ./guide/reviewing.md
+    summary: turn a review's findings into issues, one per defect
 hooks:
   - id: doc-needs-path
     event: pre-create
@@ -117,6 +120,13 @@ Name the job you are adding to. If it does not exist in the version someone is r
 your fragment is still reachable by its own id, the guide says so, and — this is the part
 that matters — **your hooks keep running**. A documentation mismatch never becomes a
 refused write.
+
+**A topic your package owns takes a `summary:`.** With no `into:`, the fragment is a
+job of its own, and `taskmgr guide` lists it beside the built-in jobs. The one-line
+`summary:` is that line — it is what a caller reads to decide whether to open the
+topic, so say what the job is. Without one the line only names your package, and a
+topic nobody can tell the purpose of is a topic nobody opens. It is capped at 96
+bytes and must be one line; the rest goes in the fragment.
 
 **`overview:` is for a rule with no job to hang it on**, one that governs every command in
 the store. `taskmgr guide` with no argument prints it to every caller, so it is capped at
@@ -306,7 +316,14 @@ nothing is written; hints from the ones that already ran are still passed along.
   that writes to this store waits. `hook_timeout` (default `2s`) bounds that wait — plus a
   fixed 2-second grace for a hook that ignores the first signal, so the real ceiling is
   ~4s at the default. Raising it to run a test suite on close serializes all writes for
-  that long; a slow check is usually better as a post-hook, or left to CI.
+  that long; a slow check is usually better as a post-hook, or left to CI. A set filed
+  with `taskmgr create --from` holds the lock for the `pre-create` hooks of all its
+  issues in one stretch, so its ceiling is that figure times the number of issues.
+- **In a set, a `pre-create` hook sees issues that do not exist yet.** `create --from`
+  runs every gate before it writes anything, so the `parent` or `blocked_by` of the
+  issue in the payload can name another issue of the same set. `taskmgr show` on that
+  ID answers *not found*. A gate that looks a referenced issue up must allow when it is
+  not there, or it denies every set.
 - **Pre-hooks fail closed.** A missing script, a bad command, a timeout — all deny. This is
   the point: a gate you can skip is not a gate, and **there is no bypass flag**. To relax
   one, edit the package, or `taskmgr package rm` it.

@@ -17,11 +17,13 @@
 package tasks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -719,25 +721,34 @@ func (s *Store) allClosed() ([]*Issue, error) {
 // existing names as defence in depth so an ID never collides within one store.
 // If closed/ does not yet exist, it is treated as empty (TASK-STORAGE-SPEC §3).
 func (s *Store) nextID() (string, error) {
-	hotEntries, err := s.fs.ReadDir(s.dir)
+	names, err := s.issueFileNames()
 	if err != nil {
 		return "", err
+	}
+	return newIDFromNames(s.cfg.Prefix, names), nil
+}
+
+// issueFileNames lists the entry names of the hot directory and of closed/: the
+// names a fresh ID must not repeat.
+func (s *Store) issueFileNames() ([]string, error) {
+	hotEntries, err := s.fs.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
 	}
 	names := make([]string, 0, len(hotEntries))
 	for _, e := range hotEntries {
 		names = append(names, e.Name())
 	}
 
-	// Also scan closed/ for the high-water mark. Absent dir → treat as empty.
+	// Absent dir → treat as empty.
 	closedEntries, err := s.fs.ReadDir(s.closedDir())
 	if err != nil && !vfs.IsNotExist(err) {
-		return "", fmt.Errorf("scan closed dir: %w", err)
+		return nil, fmt.Errorf("scan closed dir: %w", err)
 	}
 	for _, e := range closedEntries {
 		names = append(names, e.Name())
 	}
-
-	return newIDFromNames(s.cfg.Prefix, names), nil
+	return names, nil
 }
 
 // validateNewID checks a caller-supplied issue ID (CreateInput.ID): it must
@@ -772,6 +783,39 @@ func (s *Store) resolveID(raw string) (string, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+// allocateIDs returns one ID per entry of a set: the entry's own when it supplies
+// one, a fresh one otherwise, none repeated inside the set. The store is listed
+// once for the whole set, and only when an entry needs a fresh ID. On a refusal,
+// failed is the index of the entry at fault. Caller holds the lock.
+func (s *Store) allocateIDs(entries []BatchEntry) (ids []string, failed int, err error) {
+	ids = make([]string, len(entries))
+	var stored []string
+	for i, e := range entries {
+		id := strings.TrimSpace(e.ID)
+		switch {
+		case id == "":
+			if stored == nil {
+				if stored, err = s.issueFileNames(); err != nil {
+					return nil, i, err
+				}
+			}
+			taken := stored
+			for _, earlier := range ids[:i] {
+				taken = append(taken, earlier+FileExt)
+			}
+			id = newIDFromNames(s.cfg.Prefix, taken)
+		case slices.Contains(ids[:i], id):
+			return nil, i, fmt.Errorf("%w: %s", ErrAlreadyExists, id)
+		default:
+			if err := s.validateNewID(id); err != nil {
+				return nil, i, err
+			}
+		}
+		ids[i] = id
+	}
+	return ids, 0, nil
 }
 
 // buildIssue assembles an *Issue from the shared fields common to Create and
@@ -902,47 +946,162 @@ type CreateInput struct {
 // (returning *HookDeniedError, nothing written); post-create hooks notify after
 // it commits. Hints and post-hook warnings are returned in the MutationResult.
 func (s *Store) Create(in CreateInput) (*MutationResult, error) {
-	hs, err := s.hooks()
+	results, _, err := s.createSet([]BatchEntry{{CreateInput: in}})
 	if err != nil {
 		return nil, err
 	}
-	var created *Issue
-	var preHints []string
+	return results[0], nil
+}
+
+func (in CreateInput) fields() issueFields {
+	return issueFields{
+		Title:       in.Title,
+		Description: in.Description,
+		Type:        in.Type,
+		Priority:    in.Priority,
+		Assignee:    in.Assignee,
+		Creator:     in.Creator,
+		Agent:       in.Agent,
+		Session:     in.Session,
+		Labels:      in.Labels,
+		Parent:      in.Parent,
+		BlockedBy:   in.BlockedBy,
+		Related:     in.Related,
+	}
+}
+
+// CreateBatch creates a set of issues that may reference each other, all or
+// nothing. An entry's Parent, BlockedBy and Related accept the Ref of another
+// entry as well as the ID of an existing issue, in any order.
+//
+// Under one lock it allocates every ID, validates every entry against the store
+// as it will be once the whole set exists, and runs every entry's pre-create
+// hooks — all before the first write. A refusal of any entry returns a
+// *BatchEntryError and writes nothing. Post-create hooks run after the set is on
+// disk, one issue at a time, in entry order. The results are in entry order.
+//
+// The guarantee covers refusal, not a crash: each file lands atomically, but a
+// process killed between two of them leaves the earlier issues filed.
+func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
+	if len(entries) == 0 {
+		return nil, invalid("entries", "the set is empty")
+	}
+	if len(entries) > maxBatchEntries {
+		return nil, invalid("entries", "too many entries: %d (max %d)", len(entries), maxBatchEntries)
+	}
+	results, failed, err := s.createSet(entries)
+	if failed >= 0 {
+		return nil, &BatchEntryError{Index: failed, Ref: entries[failed].Ref, Err: err}
+	}
+	return results, err
+}
+
+// createSet is the one create path: Create runs it with a single entry. When an
+// entry is at fault, failed is its index and err the error for that entry alone;
+// failed is -1 on success and for a failure no entry owns.
+func (s *Store) createSet(entries []BatchEntry) (results []*MutationResult, failed int, err error) {
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, -1, err
+	}
+	issues := make([]*Issue, len(entries))
+	preHints := make([][]string, len(entries))
+	failed = -1
 	err = s.withLock(func() error {
-		id, err := s.resolveID(in.ID)
+		ids, i, err := s.allocateIDs(entries)
 		if err != nil {
+			failed = i
+			return err
+		}
+		inputs, i, err := resolveBatchRefs(s.cfg.Prefix, entries, ids)
+		if err != nil {
+			failed = i
 			return err
 		}
 		now := s.now()
-		iss := buildIssue(id, issueFields{
-			Title:       in.Title,
-			Description: in.Description,
-			Type:        in.Type,
-			Priority:    in.Priority,
-			Assignee:    in.Assignee,
-			Creator:     in.Creator,
-			Agent:       in.Agent,
-			Session:     in.Session,
-			Labels:      in.Labels,
-			Parent:      in.Parent,
-			BlockedBy:   in.BlockedBy,
-			Related:     in.Related,
-		}, StatusOpen, now, now)
-		idx, err := s.validateAndIndex(iss)
+		for i, in := range inputs {
+			issues[i] = buildIssue(in.ID, in.fields(), StatusOpen, now, now)
+			if err := s.validateWrite(issues[i]); err != nil {
+				failed = i
+				return err
+			}
+		}
+		idx, _, err := s.index()
 		if err != nil {
 			return err
 		}
-		preHints, err = s.gateWrite(hs, transCreate, nil, iss, idx, func() error { return s.writeIssue(iss) })
-		if err != nil {
-			return err
+		for _, iss := range issues {
+			idx[iss.ID] = iss
 		}
-		created = iss
+		// The index holds the whole set, so an edge to a later entry resolves and
+		// a cycle that runs through several entries is found.
+		for i, iss := range issues {
+			if err := s.checkRefsWith(iss, idx); err != nil {
+				failed = i
+				return err
+			}
+			if cycle := findParentCycle(idx, iss.ID); cycle != "" {
+				failed = i
+				return invalid("parent", "parent cycle: %s", cycle)
+			}
+		}
+		var allowedHints []string
+		for i, iss := range issues {
+			hints, denial, err := s.runPre(hs, transCreate.preEvent(), nil, iss, idx)
+			if denial != nil {
+				// The hints of the entries that passed would otherwise be lost
+				// with the set.
+				denial.Hints = append(allowedHints, denial.Hints...)
+				err = denial
+			}
+			if err != nil {
+				failed = i
+				return err
+			}
+			preHints[i] = hints
+			allowedHints = append(allowedHints, hints...)
+		}
+		order := batchWriteOrder(issues)
+		for n, i := range order {
+			if err := s.writeIssue(issues[i]); err != nil {
+				s.logIOError(string(transCreate), issues[i].ID, err)
+				failed = i
+				return errors.Join(err, s.removeCreated(issues, order[:n+1]))
+			}
+		}
+		for _, iss := range issues {
+			s.logWrite(transCreate, iss.ID)
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, failed, err
 	}
-	return s.postFinish(hs, true, transCreate, nil, created, preHints), nil
+	results = make([]*MutationResult, len(issues))
+	for i, iss := range issues {
+		results[i] = s.postFinish(hs, true, transCreate, nil, iss, preHints[i])
+	}
+	return results, -1, nil
+}
+
+// removeCreated deletes the files of the issues a failed set already wrote —
+// those at the given indexes, the last of which may be half-written (a sidecar
+// without its .md). It returns what it could not remove, so the caller's error
+// names every issue left behind.
+func (s *Store) removeCreated(all []*Issue, written []int) error {
+	issues := make([]*Issue, len(written))
+	for n, i := range written {
+		issues[n] = all[i]
+	}
+	var left []error
+	for _, iss := range issues {
+		for _, path := range []string{s.filePath(iss.ID), s.contentPath(iss.ID)} {
+			if err := s.fs.Remove(path); err != nil && !vfs.IsNotExist(err) {
+				left = append(left, fmt.Errorf("%s was written and could not be removed: %w", iss.ID, err))
+			}
+		}
+	}
+	return errors.Join(left...)
 }
 
 // UpdateInput holds partial changes. Nil pointer fields are left unchanged.
@@ -1530,6 +1689,28 @@ func (s *Store) Labels() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// Watch signals each change to the store, from any process and from this
+// handle alike: an issue, a comment, a body sidecar or the configuration that
+// is written, moved or removed, by the engine or by hand.
+//
+// A value on the channel says "the store changed since your last receive, read
+// it again". It carries nothing else. Changes that arrive close together give
+// one signal, and a signal that is not received yet absorbs the next one, so a
+// slow consumer never falls behind. A signal can be redundant: it reports that
+// files changed, not that any query now answers differently.
+//
+// The channel closes when ctx is done, or when the store directory is removed
+// or renamed. Call Watch again on a new handle to follow a moved store. A
+// rename of a directory above the store is not reported: the channel stays
+// open, and a read through this handle fails.
+func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error) {
+	changes, err := s.fs.Watch(ctx, s.dir, []string{closedDirName, commentsDirName, contentDirName})
+	if err != nil {
+		return nil, fmt.Errorf("watch store: %w", err)
+	}
+	return mergeChanges(changes), nil
 }
 
 func dedupe(in []string) []string {

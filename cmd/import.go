@@ -208,7 +208,7 @@ emitted per record.`,
 // that at least one record failed.
 func runImportBatch(s *tasks.Store, data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
-	var results []importResult
+	results := []importResult{}
 	failures := 0
 	for dec.More() {
 		var e importEnvelope

@@ -421,6 +421,7 @@ guide:
     file: ./guide/filing.md
   - id: types                      # a job this package owns; printed when named
     file: ./guide/types.md
+    summary: which type carries the work, and the six rules a body clears
 hooks:
   - id: body-sections
     event: pre-create
@@ -432,6 +433,7 @@ hooks:
 | `id` | **yes** | The fragment's label within its package. The **effective topic** is `pkg:<package>:<id>`, and a declared `id` **must not contain `:`** — the hook id's rule (§3.2), so a denial reason and a guide topic spell the same package the same way. `overview` is reserved (below). |
 | `file` | **yes** | The fragment, as a path **inside** the package directory. |
 | `into` | no | One built-in job this fragment also prints inside (CLI-SPEC.md §5.1). It **must not contain `:`**: it names a job, not an effective topic id. Omitted, the fragment is reachable only by its own id. |
+| `summary` | no | One line saying what job the fragment holds, printed on the topic's line in the job list (CLI-SPEC.md §5.1). Capped at **96 bytes** and refused with a line break in it, both when the manifest loads. Omitted, the line says `from package <name>`. |
 
 **Placing a fragment into a job.** A guide topic is one job, and what a job prints
 has to be sufficient — a caller that names one should not need a second. `into` is
@@ -441,6 +443,17 @@ the caller never has to learn that a second topic existed. A fragment stays
 addressable by its own `pkg:<package>:<id>` either way; `into` adds a way to reach
 it and removes none. A package that owns a job outright declares no `into`, and its
 topic is listed alongside the built-in jobs.
+
+**A topic a package owns needs a `summary`.** The job list is the index a caller
+routes on: it reads the line and fetches the topic it needs. A built-in job's line
+says what the job is; a package topic's line, with no `summary`, says only which
+package it came from — and a line that gives no reason to open a topic is one the
+caller does not open. Measured, an agent decomposing a review fetched `types`,
+whose id it could guess, and never `decomposing`, whose id it could not, though that
+was the topic holding the rules for the job it was doing. The cap is one line
+because the line *is* the budget: the list lands in every caller's context on every
+run. A summary that needs more room is the fragment's opening paragraph in the
+wrong place.
 
 **An `into` that names no job is not an error.** Which jobs exist is a property of
 the binary, and this manifest is parsed on the **write path**: a package naming a
@@ -554,6 +567,21 @@ Notes:
   deny). Advisory hints from every hook that ran are gathered and surfaced together.
 - **No partial state.** A denied transition (step 4) leaves the store byte-for-byte
   unchanged.
+- **A set is gated as a whole.** `CreateBatch` (SDK-SPEC §4; `create --from` in the
+  CLI) runs steps 2–4 for **every** entry before step 5 for any: each entry is a
+  `pre-create` with its own payload, in entry order, and the first deny aborts the
+  set with nothing written. `new` carries the entry's allocated `id` and its edges
+  as resolved IDs, which may name issues of the same set that are not on disk yet;
+  `when` evaluates against the set as if all of it existed. The `post-create`
+  hooks then run per issue, in entry order, after the whole set is written.
+
+  This is the one case where a `pre-create` payload names an issue the store does
+  not hold: a hook that looks up `new.parent` or a blocker (`taskmgr show <id>`)
+  gets *not found* for a member of the set, and by failing closed it denies the
+  whole set. Running the gates after an ordered write instead was rejected: a
+  denial would then have to delete issues other processes had already read. A gate
+  that must inspect a referenced issue treats *not found* as "being created in the
+  same set" and allows.
 - **"Fire-and-forget" = non-vetoing, not asynchronous.** Post-hooks run synchronously
   after the write so their hints and warnings can be surfaced; they simply cannot change
   the outcome. With the 2-second default the added wait is small.
@@ -785,7 +813,11 @@ model.
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
 block until it returns. The worst case is `hook_timeout` + the 2-second SIGKILL grace
 (§3.1, §7.1) — ~4s at the default. **If you raise `hook_timeout` to run a test suite on
-close, you serialize all writes for that duration.**
+close, you serialize all writes for that duration.** A set (`CreateBatch`, §4) holds
+the lock across the `pre-create` chains of all its entries — the same total as filing
+them one by one, but in one stretch, which is what makes the set all-or-nothing. Its
+worst case is therefore the single-write ceiling **times the number of entries**, which a
+set caps at 256.
 Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
 wall-clock duration is logged (§4, [MONITORING.md](../MONITORING.md)), so a
 project can see exactly how long its gates hold the lock and decide whether to raise

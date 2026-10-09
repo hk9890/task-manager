@@ -246,6 +246,72 @@ func initStoreWithPlacedFragment(t *testing.T, into, fragment string) string {
 	return root
 }
 
+// initStoreWithSummarisedTopics creates a store whose package owns two topics,
+// one with a `summary:` and one without, and returns the project root.
+func initStoreWithSummarisedTopics(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if _, err := tasks.Init(root, "sm"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	pkg := filepath.Join(root, ".tasks", "packages", "policy")
+	if err := os.MkdirAll(filepath.Join(pkg, "guide"), 0o755); err != nil {
+		t.Fatalf("mkdir package: %v", err)
+	}
+	manifest := "version: 1\nguide:\n    - id: decomposing\n      file: ./guide/d.md\n      summary: turn a review or a plan into a set of issues\n    - id: types\n      file: ./guide/t.md\n"
+	for name, body := range map[string]string{tasks.PackageManifestName: manifest, "guide/d.md": "d\n", "guide/t.md": "t\n"} {
+		if err := os.WriteFile(filepath.Join(pkg, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	cfg := filepath.Join(root, ".tasks", "config.yaml")
+	if err := os.WriteFile(cfg, []byte("prefix: sm\nuse:\n    - path: packages/policy\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return root
+}
+
+// The job list is the index a caller routes on. A topic's line carries the
+// summary its package declared, so the caller has a reason to open it; a topic
+// without one still lists, under the package's name.
+func TestL4_Guide_ATopicLineCarriesItsSummaryOrThePackageName(t *testing.T) {
+	root := initStoreWithSummarisedTopics(t)
+
+	overview, stderr, code := taskmgr(t, root, "guide")
+	if code != 0 {
+		t.Fatalf("guide: exit %d\nstderr: %s", code, stderr)
+	}
+	for _, line := range []string{
+		"taskmgr guide pkg:policy:decomposing  turn a review or a plan into a set of issues",
+		"taskmgr guide pkg:policy:types        from package policy",
+	} {
+		if !strings.Contains(overview, line) {
+			t.Errorf("the job list must carry %q:\n%s", line, overview)
+		}
+	}
+
+	stdout, _, code := taskmgr(t, root, "guide", "--list", "--json")
+	if code != 0 {
+		t.Fatalf("guide --list --json: exit %d", code)
+	}
+	var rows []struct {
+		ID      string `json:"id"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, stdout)
+	}
+	want := map[string]string{
+		"pkg:policy:decomposing": "turn a review or a plan into a set of issues",
+		"pkg:policy:types":       "contributed by package policy",
+	}
+	for _, r := range rows {
+		if w, ok := want[r.ID]; ok && r.Summary != w {
+			t.Errorf("%s: summary = %q, want %q", r.ID, r.Summary, w)
+		}
+	}
+}
+
 // A job is one command, and what it prints has to be sufficient. A package's
 // rules for that job therefore arrive with it — the caller never learns that a
 // second topic existed, which is the round trip the placement removes.

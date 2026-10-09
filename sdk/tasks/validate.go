@@ -203,6 +203,9 @@ func fieldViolations(iss *Issue) []*ValidationError {
 			break
 		}
 	}
+	if slices.Contains(iss.Related, iss.ID) {
+		add("related", "issue cannot relate to itself")
+	}
 	if dup := firstDuplicate(iss.BlockedBy); dup != "" {
 		add("blocked_by", "duplicate dependency %q", dup)
 	}

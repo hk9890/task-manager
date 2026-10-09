@@ -67,6 +67,7 @@ func TestL4_Create_CreatorFlagPersists(t *testing.T) {
 
 	// Verify via show --json.
 	showOut, _, code2 := taskmgr(t, root, "--json", "show", issID)
+	showOut = firstShown(showOut)
 	if code2 != 0 {
 		t.Fatalf("show failed (exit %d): %s", code2, showOut)
 	}
@@ -113,6 +114,7 @@ func TestL4_Create_CreatorDefaultsToUSER(t *testing.T) {
 	}
 
 	showOut, _, code2 := taskmgr(t, root, "--json", "show", issID)
+	showOut = firstShown(showOut)
 	if code2 != 0 {
 		t.Fatalf("show failed (exit %d): %s", code2, showOut)
 	}
@@ -145,6 +147,7 @@ func TestL4_IssueDTO_CreatorPresent(t *testing.T) {
 
 	// show --json
 	showOut, _, code := taskmgr(t, root, "--json", "show", issID)
+	showOut = firstShown(showOut)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, showOut)
 	}
@@ -222,6 +225,7 @@ func TestL4_IssueDTO_CreatorOmittedWhenEmpty(t *testing.T) {
 	issID := iss.ID
 
 	showOut, _, code := taskmgr(t, root, "--json", "show", issID)
+	showOut = firstShown(showOut)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, showOut)
 	}

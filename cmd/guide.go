@@ -100,8 +100,23 @@ guess one, so capture it from --json and reuse it:
 
   id=$(taskmgr create --title "Schema" --type task --json | jq -r .id)
 
-Filing a set that depends on itself: create in dependency order, because an id
-does not exist until its issue does.
+Filing a set that depends on itself: put it in one YAML file and file it in one
+call. Entries name each other by ref, in any order, and one refused entry files
+none of them:
+
+  taskmgr create --from set.yaml --json     # prints [{ref, id}, ...]
+
+  - ref: schema
+    title: Schema
+  - title: Export endpoint
+    type: feature
+    blocked_by: [schema]          # a ref of this file, or an existing id
+    description: |
+      ## Acceptance criteria
+      - [ ] UTF-8 with BOM
+
+The keys are ref, title, type, priority, assignee, labels, description, parent,
+blocked_by and related.
 
 ## The description body
 
@@ -140,7 +155,10 @@ Two views are derived from the dependency graph, not from the status field:
 
   taskmgr ready     open issues with no open blockers — what you can start now
   taskmgr blocked   non-closed issues waiting on at least one open blocker
-  taskmgr show <id> full detail: fields, edges, description, comments
+  taskmgr tree [id] open issues nested under their parents, each marked ready
+                    or blocked by <ids>; --format mermaid prints it as a graph
+  taskmgr show <id> full detail: fields, edges, description, comments; takes
+                    several ids in one call; --json is always an array
 
 blocked is not the same as status == "blocked". An issue can be open and yet
 blocked, or carry the blocked status with no open blocker at all — the status is
@@ -201,7 +219,7 @@ again afterwards to see what opened up.
 update --description replaces the body — it does not append. To amend one, run
 show, take the text, and resubmit the whole modified body:
 
-  taskmgr show <id> --json | jq -r .description   # ...edit, then resubmit
+  taskmgr show <id> --json | jq -r '.[0].description'   # ...edit, then resubmit
   taskmgr update <id> --description-file -
 
 A mutation's --json echoes the issue's scalar fields, but not the description and
@@ -270,7 +288,7 @@ Pick the job, run its command, then act.
 
 // guideOverviewTail closes the overview with the surfaces that are not jobs.
 const guideOverviewTail = `
-  taskmgr commands          every command and flag, as a catalog
+  taskmgr commands [name]   every command or the named ones: flags and --json fields
   taskmgr <command> --help  one command
   taskmgr guide --list      every topic, as data (--json)
 `
@@ -370,9 +388,18 @@ func renderGuideOverview(topics []tasks.GuideTopic) string {
 }
 
 // guidePackageSummary is the roster line for a topic a package owns outright.
+//
+// A declared `summary:` is the line: the list is an index the caller routes on,
+// and a topic whose line says only where it came from is one the caller has no
+// reason to open — measured, an agent driving a decomposition fetched `types`,
+// whose id it could guess, and never `decomposing`, whose id it could not. The
+// package's name stays the fallback, so a manifest without one still lists.
 func guidePackageSummary(t tasks.GuideTopic) string {
 	if t.Detail != "" {
 		return fmt.Sprintf("from package %s (unreadable: %s)", t.Package, t.Detail)
+	}
+	if t.Summary != "" {
+		return t.Summary
 	}
 	return fmt.Sprintf("from package %s", t.Package)
 }
@@ -462,6 +489,11 @@ func guideCap(t tasks.GuideTopic) int {
 // guideFlags holds this command's own flags.
 var guideFlags struct{ list bool }
 
+// guideDTO is the --json shape of `guide`: the printed text, wrapped.
+type guideDTO struct {
+	Guide string `json:"guide"`
+}
+
 // guideTopicDTO is one row of `guide --list` (CLI-SPEC §6).
 type guideTopicDTO struct {
 	ID      string `json:"id"`
@@ -505,7 +537,7 @@ to get the topics as an array.`,
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"guide": text})
+			return printJSON(guideDTO{Guide: text})
 		}
 		_, _ = fmt.Fprint(stdout, text)
 		return nil
@@ -595,6 +627,7 @@ var guideAliases = map[string]string{
 	"file":    "filing",
 	"ready":   "finding",
 	"blocked": "finding",
+	"tree":    "finding",
 	"list":    "finding",
 	"search":  "finding",
 	"update":  "progress",
@@ -649,6 +682,9 @@ func runGuideList(topics []tasks.GuideTopic) error {
 	for _, t := range topics {
 		row := guideTopicDTO{ID: t.ID, Kind: "package", Package: t.Package, Scope: t.Scope, Into: t.Into, Detail: t.Detail}
 		row.Summary = fmt.Sprintf("contributed by package %s", t.Package)
+		if t.Summary != "" {
+			row.Summary = t.Summary
+		}
 		if t.Overview {
 			// Say that this one arrives on its own: a caller that already has the
 			// overview has already read it, and does not need to spend a command.

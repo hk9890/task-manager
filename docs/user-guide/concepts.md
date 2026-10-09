@@ -43,8 +43,8 @@ EOF
 `taskmgr show <id> --json` and resubmit the full modified text.
 
 A body of any size is accepted. A very large one is stored in a file beside the issue
-rather than inside it; `show` truncates it on screen and says so, while `--json` always
-returns the whole thing.
+rather than inside it; `show` truncates it on screen and says so, while `--json` and
+`show <id> --fields description` always return the whole thing.
 
 ## Comments
 
@@ -83,6 +83,11 @@ Two views are derived from the dependency graph:
   ordered by priority, then oldest first.
 - **`taskmgr blocked`** — non-closed issues with at least one open blocker, each listed
   with what is holding it.
+
+**`taskmgr tree`** puts both on one page: every open issue nested under its parent, with
+`[ready]` or `[blocked by <ids>]` on each issue that is in one of the two views. Give it an
+ID to see one epic. `--format mermaid` prints the same structure as Mermaid flowchart text;
+GitHub draws it from a `mermaid` code block in a pull request or an issue.
 
 **These come from the graph, not from the `status` field.** The `blocked` *status* is a
 label you set by hand and nothing ever clears: an issue can carry `status: blocked` with

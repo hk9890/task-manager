@@ -556,6 +556,10 @@ type GuideTopic struct {
 	// the caller printing the guide matches it against its own topics and reports
 	// one that names nothing.
 	Into string
+	// Summary is the entry's one-line `summary:` (GuideEntry.Summary), empty
+	// when it declared none. The caller printing the job list uses it as the
+	// topic's line, and falls back to naming the package when it is empty.
+	Summary string
 	// Package is the package that contributes the fragment.
 	Package string
 	// Scope is "global" or "store": which config file's `use:` list brought the
@@ -627,7 +631,7 @@ func guideTopics(fs vfs.FS, guide []packageGuide, infos []PackageInfo) []GuideTo
 	out := make([]GuideTopic, 0, len(guide))
 	for _, pg := range guide {
 		pkg := packageOfID(pg.id)
-		t := GuideTopic{ID: pg.id, Overview: pg.overview, Into: pg.into, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
+		t := GuideTopic{ID: pg.id, Overview: pg.overview, Into: pg.into, Summary: pg.summary, Package: pkg, Scope: scopeOf[pkg], Path: pg.path}
 		limit := MaxGuideFragmentBytes
 		if pg.overview {
 			limit = MaxGuideOverviewBytes

@@ -76,7 +76,7 @@ gate catches a missing one; [REVIEWING.md](REVIEWING.md) is where it is checked.
 
 ## Modules
 
-Two modules: root (the CLI) and `sdk/` (minimal-dep — only `yaml.v3`). The
+Two modules: root (the CLI) and `sdk/` (minimal-dep — `yaml.v3`, and `fsnotify` inside `internal/vfs`). The
 committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has no
 `replace` and pins the published `sdk vX.Y.Z` for consumers. `mise run build:all`
 compiles both so a cross-module break fails the gate.
