@@ -1682,7 +1682,14 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	if cycle := findCycle(idx, iss.ID); cycle != "" {
 		violations = append(violations, invalid("blocked_by", "dependency cycle: %s", cycle))
 	}
-	return s.firstIntroduced(iss, violations)
+	return s.firstIntroduced(iss, violations, edgesUnchanged)
+}
+
+// edgesUnchanged is fieldUnchanged for the reference and cycle checks. The
+// edges of a closed issue are outside the graph those checks walk, so a reopen
+// brings every one of them into it.
+func edgesUnchanged(field string, prev, next *Issue) bool {
+	return prev.Status.IsClosed() == next.Status.IsClosed() && fieldUnchanged(field, prev, next)
 }
 
 // Labels returns the sorted set of distinct labels in use across all issues.

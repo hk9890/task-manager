@@ -949,9 +949,10 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   message names an entry by its `Ref`, not by the ID allocated to it: the caller
   wrote the `Ref`, and the ID names an issue that was never written. The first refusal
   aborts the set: nothing is written and the error is a `*BatchEntryError` (§6) for
-  that one entry, with its `Ref` trimmed. The checks run in phases over the whole set
-  — IDs and refs, then field constraints, then references and cycles, then hooks — so the
-  entry it names is the first in phase order, not always the first in entry order. A `*HookDeniedError` inside it carries the hints of the entries that passed
+  that one entry, with its `Ref` trimmed. The checks run in phases, each over the whole
+  set — IDs, then refs, then field constraints, then references and cycles, then hooks —
+  so the entry it names is the first in phase order, not always the first in entry
+  order. A `*HookDeniedError` inside it carries the hints of the entries that passed
   before it, since no result will. An empty set is a `*ValidationError`, and so is a
   set of more than **256** entries: the lock is held across the hooks of every entry
   (HOOK-SPEC §8), so the bound is what caps that hold. A failure no entry owns, such
@@ -1008,6 +1009,9 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   `StatusOpen` (the pre-close status is not persisted). `Reopen` always lands on
   `open`; to reopen directly into another active status use `Update` with that
   `Status`. On an already-active issue `Reopen` is a no-op, returning it unchanged.
+  `Reopen` runs no reference check, so it can make live a cycle that runs through the
+  closed issue (storage §9); `Update` with a non-closed `Status` runs the check and
+  refuses it.
 - **`AddRelated` / `RemoveRelated`** manage the non-blocking `related` link, the
   peer to `AddDep`/`RemoveDep` for `blocked_by`. The relationship is **symmetric**:
   `AddRelated(a, b)` stores the edge on `a` (idempotent; rejects a self-link and a

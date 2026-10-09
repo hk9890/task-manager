@@ -42,28 +42,31 @@ type MutationResult struct {
 // config file's `use:` list — a write checks what it introduces, not what it
 // finds — and it keeps the invariant that matters: the engine never *writes* a
 // violation it did not already have to live with.
-//
-// The stored issue is read only once a violation has been found, i.e. only on
-// the path that is about to refuse the write, so the successful write is
-// unchanged and the in-lock path does not lengthen (docs/REVIEWING.md).
 func (s *Store) validateWrite(iss *Issue) error {
-	return s.firstIntroduced(iss, fieldViolations(iss))
+	return s.firstIntroduced(iss, fieldViolations(iss), fieldUnchanged)
 }
 
 // firstIntroduced returns the first of the violations that this write of iss
-// introduces, or nil when the stored issue already carries every one of them.
-func (s *Store) firstIntroduced(iss *Issue, violations []*ValidationError) error {
+// introduces, or nil when the stored issue already carries every one of them:
+// unchanged reports whether a violation's field is as stored.
+//
+// The stored issue is read only once a violation has been found, and without
+// its body, which no constraint reads. A write of a valid issue is unchanged,
+// and a write that inherits a violation reads the task file once per check,
+// never the content sidecar, so the in-lock path stays short
+// (docs/REVIEWING.md).
+func (s *Store) firstIntroduced(iss *Issue, violations []*ValidationError, unchanged func(field string, prev, next *Issue) bool) error {
 	if len(violations) == 0 {
 		return nil
 	}
-	prev, err := s.Get(iss.ID)
+	prev, err := s.getUnresolved(iss.ID)
 	if err != nil {
 		// Nothing on disk to inherit from — a create, or a store that cannot be
 		// read. Either way every violation is this write's own.
 		return violations[0]
 	}
 	for _, v := range violations {
-		if !fieldUnchanged(v.Field, prev, iss) {
+		if !unchanged(v.Field, prev, iss) {
 			return v
 		}
 	}

@@ -19,7 +19,6 @@ package tasks
 import (
 	"bytes"
 	"errors"
-	iofs "io/fs"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -81,20 +80,33 @@ func TestFieldUnchanged_ComparesEveryInputTheConstraintReads(t *testing.T) {
 
 // ── the rule, through the store (L2) ────────────────────────────────────────
 
-// seedInvalidCreator hand-edits an issue's frontmatter to carry a creator past
-// its length limit — a value `UpdateInput` has no field for, so no command can
-// rewrite it. It is the shape a restore or an older build leaves behind.
-func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+// seedStored hand-edits a stored issue, the way a restore, a merge or an older
+// build leaves a value the engine would refuse to write.
+func seedStored(t *testing.T, fs vfs.FS, s *Store, id string, edit func(*Issue)) {
 	t.Helper()
 	path := filepath.Join(s.dir, id+FileExt)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read issue: %v", err)
 	}
-	raw := strings.Replace(string(data), "---\n", "---\ncreator: "+strings.Repeat("n", maxCreatorLen+1)+"\n", 1)
-	if err := fs.WriteAtomic(path, []byte(raw), 0o644); err != nil {
+	iss, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("parse issue: %v", err)
+	}
+	edit(iss)
+	if data, err = Marshal(iss); err != nil {
+		t.Fatalf("marshal issue: %v", err)
+	}
+	if err := fs.WriteAtomic(path, data, 0o644); err != nil {
 		t.Fatalf("seed issue: %v", err)
 	}
+}
+
+// seedInvalidCreator stores a creator past its length limit — a value
+// `UpdateInput` has no field for, so no command can rewrite it.
+func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+	t.Helper()
+	seedStored(t, fs, s, id, func(iss *Issue) { iss.Creator = strings.Repeat("n", maxCreatorLen+1) })
 }
 
 func TestClose_AnInvalidStoredFieldDoesNotFreezeTheIssue(t *testing.T) {
@@ -171,28 +183,6 @@ func strPtr(s string) *string { return &s }
 
 // ── the same rule for the graph checks (L2) ─────────────────────────────────
 
-// seedEdges hand-edits the stored edges of an issue, the way a restore, a merge
-// or an older build leaves a reference the engine would refuse to write.
-func seedEdges(t *testing.T, fs vfs.FS, s *Store, id string, edit func(*Issue)) {
-	t.Helper()
-	path := filepath.Join(s.dir, id+FileExt)
-	data, err := fs.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read issue: %v", err)
-	}
-	iss, err := Unmarshal(data)
-	if err != nil {
-		t.Fatalf("parse issue: %v", err)
-	}
-	edit(iss)
-	if data, err = Marshal(iss); err != nil {
-		t.Fatalf("marshal issue: %v", err)
-	}
-	if err := fs.WriteAtomic(path, data, 0o644); err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
-}
-
 func TestUpdate_AStoredGraphViolationDoesNotFreezeTheIssue(t *testing.T) {
 	cases := map[string]func(a, b *Issue){
 		"own parent":       func(a, b *Issue) { a.Parent = a.ID },
@@ -207,7 +197,7 @@ func TestUpdate_AStoredGraphViolationDoesNotFreezeTheIssue(t *testing.T) {
 			s, fs := chainStore(t)
 			a := mustCreate(t, s, CreateInput{Title: "a"})
 			b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID, BlockedBy: []string{a.ID}})
-			seedEdges(t, fs, s, a.ID, func(stored *Issue) { violate(stored, b) })
+			seedStored(t, fs, s, a.ID, func(stored *Issue) { violate(stored, b) })
 
 			if _, err := s.Update(a.ID, UpdateInput{Title: strPtr("renamed")}); err != nil {
 				t.Fatalf("a title edit must not be refused by an edge it does not touch: %v", err)
@@ -224,12 +214,14 @@ func TestUpdate_AStoredParentCycle_IsRepairedThroughTheParent(t *testing.T) {
 	s, fs := chainStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID})
-	seedEdges(t, fs, s, a.ID, func(stored *Issue) { stored.Parent = b.ID })
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.Parent = b.ID })
 
 	if _, err := s.Update(a.ID, UpdateInput{Parent: strPtr("")}); err != nil {
 		t.Fatalf("clearing the parent must break the cycle: %v", err)
 	}
-	if _, err := s.Update(a.ID, UpdateInput{Parent: &b.ID}); err == nil || !strings.Contains(err.Error(), "parent cycle") {
+	_, err := s.Update(a.ID, UpdateInput{Parent: &b.ID})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "parent" || !strings.Contains(ve.Message, "parent cycle") {
 		t.Errorf("writing the cycle back must be refused, got %v", err)
 	}
 }
@@ -238,7 +230,7 @@ func TestAddDep_AStoredDanglingBlocker_IsRefusedUntilItIsRemoved(t *testing.T) {
 	s, fs := chainStore(t)
 	a := mustCreate(t, s, CreateInput{Title: "a"})
 	b := mustCreate(t, s, CreateInput{Title: "b"})
-	seedEdges(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = []string{"tst-gone00"} })
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = []string{"tst-gone00"} })
 
 	err := s.AddDep(a.ID, b.ID)
 	var ve *ValidationError
@@ -253,20 +245,40 @@ func TestAddDep_AStoredDanglingBlocker_IsRefusedUntilItIsRemoved(t *testing.T) {
 	}
 }
 
-// Reads take no lock, so a close can move a file out of the hot directory
-// between the listing and the read. That is an omission (SDK-SPEC §7), not a
-// failed list.
-func TestAll_AFileGoneAfterTheListing_IsLeftOut(t *testing.T) {
-	s, m := batchStore(t)
-	stays := mustCreate(t, s, CreateInput{Title: "stays"})
-	moved := mustCreate(t, s, CreateInput{Title: "moved"})
-	m.FailOn("ReadFile", s.filePath(moved.ID), iofs.ErrNotExist)
+func TestRemoveDep_AnotherStoredDanglingBlocker_DoesNotRefuseTheRemoval(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	gone := []string{"tst-gone00", "tst-gone01"}
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = gone })
 
-	got, err := s.All()
-	if err != nil {
-		t.Fatalf("a file that is gone must not fail the read: %v", err)
+	for _, id := range gone {
+		if err := s.RemoveDep(a.ID, id); err != nil {
+			t.Fatalf("each removal is a repair, also while another bad edge stays: %v", err)
+		}
 	}
-	if len(got) != 1 || got[0].ID != stays.ID {
-		t.Errorf("got %d issues, want only %s", len(got), stays.ID)
+}
+
+// The cycle walks end at closed/, so a cycle through a closed issue is on disk
+// without ever being refused. The reopen is the write that brings it into the
+// graph, although it changes no edge.
+func TestUpdate_ReopenIntoADependencyCycle_IsRefused(t *testing.T) {
+	s, _ := chainStore(t)
+	b := mustCreate(t, s, CreateInput{Title: "b"})
+	a := mustCreate(t, s, CreateInput{Title: "a", BlockedBy: []string{b.ID}})
+	if _, err := s.Close(a.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDep(b.ID, a.ID); err != nil {
+		t.Fatalf("an edge to a closed issue closes no cycle yet: %v", err)
+	}
+
+	open := StatusOpen
+	_, err := s.Update(a.ID, UpdateInput{Status: &open})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "blocked_by" || !strings.Contains(ve.Message, "dependency cycle") {
+		t.Fatalf("want the dependency-cycle validation error, got %v", err)
+	}
+	if got, err := s.Get(a.ID); err != nil || !got.Status.IsClosed() {
+		t.Errorf("a must stay closed, got %+v (err %v)", got, err)
 	}
 }

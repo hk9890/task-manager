@@ -605,7 +605,7 @@ There is no same-type constraint: any issue may parent or block any other.
 - **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection), and
   so is a cycle in the `parent` chain. Both walks cover the hot directory only: an
   edge into `closed/` ends the walk, so a cycle that runs through a closed issue is
-  accepted, and a reopen of that issue makes it live. A file edited by hand can hold
+  accepted while that issue is closed. A file edited by hand can hold
   a cycle too. A reader must end its walk on one.
 
 Ready/blocked are **derived from the dependency graph, not from the `status`
@@ -648,8 +648,9 @@ that touches the offending field is refused as usual.
 The reference and cycle rules follow the same rule, one edge field at a time. A dangling
 `parent` or a parent cycle refuses only a write that changes `parent`; a dangling blocker
 or a dependency cycle only one that changes `blocked_by`; a dangling `related` only one
-that changes `related`. A write that changes an edge field is checked on the whole field
-as it will be stored, so the write that removes the bad edge passes and is the repair.
+that changes `related`. A write that sets `parent` or adds an edge is checked on the whole
+field as it will be stored. A write that only removes an edge is never refused by these
+rules: it passes while another bad edge stays in the field, so each removal is a repair.
 
 Without the rule such an issue is frozen rather than repaired: the constraints cover
 fields no input surface can rewrite, so the only refusal available was a permanent one.
