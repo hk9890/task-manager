@@ -18,6 +18,7 @@ package vfs
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,6 +81,18 @@ type Mem struct {
 
 	// locks maps lock paths to their in-process mutex. Access is guarded by mu.
 	locks map[string]*sync.Mutex
+
+	// watches holds every Watch whose context is not done. Access is guarded
+	// by mu.
+	watches map[*memWatch]struct{}
+}
+
+// memWatch is one Watch call. Its paths wait in pending, so a mutation never
+// blocks on a receiver while it holds Mem.mu.
+type memWatch struct {
+	dirs    map[string]bool
+	pending []string      // guarded by Mem.mu
+	wake    chan struct{} // capacity 1: pending is not empty
 }
 
 // NewMem returns a new empty in-memory FS.
@@ -88,6 +101,8 @@ func NewMem() *Mem {
 		files: make(map[string][]byte),
 		dirs:  make(map[string]bool),
 		locks: make(map[string]*sync.Mutex),
+
+		watches: make(map[*memWatch]struct{}),
 	}
 }
 
@@ -247,6 +262,7 @@ func (m *Mem) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	}
 
 	m.files[name] = bytes.Clone(data)
+	m.changed(name)
 	return nil
 }
 
@@ -273,6 +289,7 @@ func (m *Mem) Append(name string, data []byte, perm os.FileMode) error {
 	copy(combined, existing)
 	copy(combined[len(existing):], data)
 	m.files[name] = combined
+	m.changed(name)
 	return nil
 }
 
@@ -313,6 +330,8 @@ func (m *Mem) Rename(oldpath, newpath string) error {
 
 	m.files[newpath] = bytes.Clone(data)
 	delete(m.files, oldpath)
+	m.changed(oldpath)
+	m.changed(newpath)
 	return nil
 }
 
@@ -368,6 +387,8 @@ func (m *Mem) MoveTree(src, dst string) error {
 		m.files[p] = data
 	}
 	m.ensureDir(dst)
+	m.changed(src)
+	m.changed(dst)
 	return nil
 }
 
@@ -383,7 +404,10 @@ func (m *Mem) MkdirAll(dir string, perm os.FileMode) error {
 	}
 
 	dir = filepath.Clean(dir)
-	m.ensureDir(dir)
+	if !m.dirs[dir] {
+		m.ensureDir(dir)
+		m.changed(dir)
+	}
 	return nil
 }
 
@@ -400,11 +424,13 @@ func (m *Mem) Remove(name string) error {
 		// Also check if it is a directory.
 		if m.dirs[name] {
 			delete(m.dirs, name)
+			m.changed(name)
 			return nil
 		}
 		return fmt.Errorf("%w: %s", os.ErrNotExist, name)
 	}
 	delete(m.files, name)
+	m.changed(name)
 	return nil
 }
 
@@ -430,6 +456,7 @@ func (m *Mem) RemoveAll(path string) error {
 			delete(m.dirs, d)
 		}
 	}
+	m.changed(path)
 	return nil
 }
 
@@ -491,6 +518,71 @@ func (m *Mem) EvalSymlinks(path string) (string, error) {
 		return clean, nil
 	}
 	return "", fmt.Errorf("%w: %s", os.ErrNotExist, path)
+}
+
+// Watch reports the mutations made through this Mem. It does not model the
+// two things only a real disk produces: a lost change, and the removal of dir
+// itself, so the channel closes on ctx alone.
+func (m *Mem) Watch(ctx context.Context, dir string, subdirs []string) (<-chan string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFault("Watch", dir); err != nil {
+		return nil, err
+	}
+	if !m.dirs[dir] {
+		return nil, fmt.Errorf("vfs.Watch: %w: %s", os.ErrNotExist, dir)
+	}
+
+	w := &memWatch{dirs: map[string]bool{dir: true}, wake: make(chan struct{}, 1)}
+	for _, name := range subdirs {
+		w.dirs[filepath.Join(dir, name)] = true
+	}
+	m.watches[w] = struct{}{}
+
+	changes := make(chan string)
+	go func() {
+		defer close(changes)
+		defer func() {
+			m.mu.Lock()
+			delete(m.watches, w)
+			m.mu.Unlock()
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.wake:
+			}
+			m.mu.Lock()
+			pending := w.pending
+			w.pending = nil
+			m.mu.Unlock()
+			for _, path := range pending {
+				select {
+				case changes <- path:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return changes, nil
+}
+
+// changed queues path for every watch on its directory. Must be called with
+// m.mu held.
+func (m *Mem) changed(path string) {
+	for w := range m.watches {
+		if !w.dirs[filepath.Dir(path)] {
+			continue
+		}
+		w.pending = append(w.pending, path)
+		select {
+		case w.wake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // compile-time check that Mem satisfies FS.

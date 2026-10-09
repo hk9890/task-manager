@@ -91,4 +91,5 @@ command tree. `sdk/tasks/doc.go` is the package's own orientation.
 | Git remote and releases | https://github.com/hk9890/task-manager |
 | The hook packages, and their own tests | https://github.com/hk9890/task-manager-packages — installed with `taskmgr package repo add`, never vendored here |
 | Command framework | [`spf13/cobra`](https://pkg.go.dev/github.com/spf13/cobra) (resolved version: `go.mod`) |
-| YAML encoder — the SDK's only dependency | [`gopkg.in/yaml.v3`](https://pkg.go.dev/gopkg.in/yaml.v3) |
+| YAML encoder — one of the SDK's two dependencies | [`gopkg.in/yaml.v3`](https://pkg.go.dev/gopkg.in/yaml.v3) |
+| File notifications behind `Store.Watch` — the other | [`fsnotify/fsnotify`](https://pkg.go.dev/github.com/fsnotify/fsnotify) |

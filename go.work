@@ -5,7 +5,7 @@
 // go.work is intentionally committed but only affects local development:
 // `go install <module>@<version>` and downstream consumers ignore it entirely,
 // and release builds resolve the SDK from its published `sdk/vX.Y.Z` tag.
-go 1.26
+go 1.26.0
 
 use (
 	.
