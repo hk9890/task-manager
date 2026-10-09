@@ -43,6 +43,9 @@ type commandDoc struct {
 	Usage   string    `yaml:"usage" json:"usage"`
 	Example string    `yaml:"example" json:"example"`
 	Flags   []flagDoc `yaml:"flags,omitempty" json:"flags,omitempty"`
+	// Output is the shape the command prints under --json, absent for a command
+	// that prints none.
+	Output *outputDoc `yaml:"output,omitempty" json:"output,omitempty"`
 }
 
 // catalogDoc is the full machine-readable CLI catalog.
@@ -59,6 +62,10 @@ var commandsCmd = &cobra.Command{
 	Long: `Print a structured catalog of the entire CLI surface — one entry per
 command with its purpose, flags, and a usage example. The catalog is derived
 from the live command tree, so it never drifts from the actual CLI.
+
+A command that prints JSON under --json also carries "output": whether the
+result is an object or an array, and each field with its JSON type. A field
+marked optional is absent when it is empty.
 
 Output is YAML by default (compact and agent-friendly); pass --json for JSON.`,
 	Args: cobra.NoArgs,
@@ -109,6 +116,7 @@ func docFor(c *cobra.Command) commandDoc {
 		Usage:   c.UseLine(),
 		Example: exampleFor(c),
 		Flags:   collectFlags(c.LocalFlags(), c),
+		Output:  outputFor(name),
 	}
 }
 

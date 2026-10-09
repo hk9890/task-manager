@@ -241,13 +241,20 @@ func openStore() (*tasks.Store, error) {
 	return s, err
 }
 
+// versionDTO is the --json shape of `version`.
+type versionDTO struct {
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
+	Version string `json:"version"`
+}
+
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		version, commit, date := buildInfo()
 		if flagJSON {
-			return printJSON(map[string]string{"version": version, "commit": commit, "date": date})
+			return printJSON(versionDTO{Commit: commit, Date: date, Version: version})
 		}
 		_, _ = fmt.Fprintf(stdout, "taskmgr %s (commit %s, built %s)\n", version, commit, date)
 		return nil

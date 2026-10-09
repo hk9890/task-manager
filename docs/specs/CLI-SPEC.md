@@ -867,7 +867,7 @@ Idempotent.
 | `taskmgr statuses` | The valid status values, in display order. |
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
-| `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, and a usage example — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
+| `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, a usage example, and the shape of its `--json` output (§5.2) — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
 | `taskmgr guide [topic...]` | A workflow-shaped how-to in named parts: the issue model, the everyday command loop, the filter language, and what this store adds. Bare, it prints the **overview** — the roster and where to go next, not the whole guide. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with conformance tests keeping its model lists and the flags it names in step with the live tree. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. Topics: §5.1 below. |
 
 ### 5.1 Guide topics
@@ -940,11 +940,54 @@ Three consequences, all normative:
   its manifest would stop its hooks, turning that mismatch into refused writes for
   every store using it (HOOK-SPEC.md §3.7).
 
+### 5.2 Command output shapes
+
+The entry of a command that prints JSON under `--json` carries `output`, the shape of
+what it prints. A command that prints none has no `output` key.
+
+| Key | Value |
+|---|---|
+| `type` | `object` or `array` — what the top level of the result is. |
+| `items` | For an `array`, the JSON type of each element: `object` or `string`. |
+| `fields` | The fields of the object, or of each element of an array of objects, in print order. Absent for an array of strings. |
+| `with_flag` | Present when a flag replaces the shape: one entry per flag, carrying `flag` (the flag name, no dashes) and that shape's own `type`, `items` and `fields`. `guide --list` and `import --batch` are the two. |
+
+A field carries `name`, `type` (`string` \| `integer` \| `boolean` \| `array` \|
+`object`), `items` for an array, `optional: true` when the field is omitted while
+empty, and its own `fields` when it is an object or an array of objects — so a nested
+`refDTO` or `commentDTO` is listed where it occurs. A timestamp is a `string`
+(RFC 3339).
+
+```yaml
+- name: create
+  output:
+    type: object
+    fields:
+      - {name: id, type: string}
+      - {name: store, type: string, optional: true}
+      - {name: hints, type: array, items: string, optional: true}
+      - {name: warnings, type: array, items: string, optional: true}
+```
+
+The shapes are those of §6, which stays the home of what each field **means**; the
+catalog carries only names and types. It exists because a caller in another project
+has the binary and not this document, and a guessed field name fails silently: `jq`
+prints nothing and exits `0`.
+
+Two things keep it from drifting. The field list is reflected from the Go type the
+command encodes, never written by hand. The link from a command to that type is one
+table (`jsonOutputs` in `cmd/commands_output.go`), and a test reads the command
+sources and fails when a command that prints JSON is missing from it.
+
+Not carried: the `hook_denied` error object of §6, which is printed at exit `1`, and
+the `output` of `commands` itself.
+
 ---
 
 ## 6. JSON output shapes
 
-Stable `snake_case` DTOs. Optional fields are omitted when empty.
+Stable `snake_case` DTOs. Optional fields are omitted when empty. `taskmgr commands`
+serves the field names and types of each command from the binary (§5.2).
 
 **`issueDTO`** — emitted by `create` (`id` and `store` only), `list`, `search`,
 `ready`, and nested in others:
