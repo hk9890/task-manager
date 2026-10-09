@@ -168,8 +168,8 @@ func requiredFlagsMsg(missing []string) string {
 // filterFieldOps is the filter fields (QUERY-SPEC §2) that get a hint when guessed
 // as a flag, each with the operator the caller most likely meant. A date gets ">="
 // because "==" compares one instant, which is never what "--created 2026-01-01"
-// asks for. The map is a hand copy: cmd/ cannot import the engine's field table,
-// and TestFilterFieldOps_MatchesTheEngineFields fails when the two differ.
+// asks for. TestFilterFieldOps_MatchesTheEngineFields fails when a field of
+// tasks.QueryFields has no operator here.
 var filterFieldOps = map[string]string{
 	"status":   "==",
 	"type":     "==",
@@ -353,7 +353,10 @@ func filterTerm(field, value string, given bool) (term string, closedStatus bool
 	if expr, err := fieldCriteria(field, value).Build(); err == nil && expr != "" {
 		return expr, false
 	}
-	return field + " " + filterFieldOps[field] + " " + quoteFilterValue(value), false
+	// Criteria.Build declines a date, an empty value, and a status or type the
+	// engine does not know, which is printed as typed so that running it returns
+	// the engine's own error.
+	return field + " " + filterFieldOps[field] + " " + tasks.QuoteQueryValue(value), false
 }
 
 // fieldCriteria is the Criteria that selects on one field, for the fields
@@ -382,14 +385,6 @@ func fieldCriteria(field, value string) tasks.Criteria {
 		return tasks.Criteria{Text: value}
 	}
 	return tasks.Criteria{}
-}
-
-// quoteFilterValue quotes a value as a QUERY-SPEC §3 string, for the predicates
-// Criteria.Build declines: a date, an empty value, and a status or type the engine
-// does not know, which is printed as typed so that running it returns the engine's
-// own error.
-func quoteFilterValue(value string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 }
 
 // shellQuote returns arg as one POSIX shell word, quoted only when it needs it.

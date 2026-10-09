@@ -26,17 +26,15 @@
 package cmd
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // TestMisuse_MissingArg_ShowsBlock: `show` with no id renders purpose, usage,
@@ -307,35 +305,12 @@ func TestMisuse_ClosedFlagWithoutValue_HintListsClosedIssues(t *testing.T) {
 	}
 }
 
-// TestFilterFieldOps_MatchesTheEngineFields reads the engine's field table from
-// its source, because cmd/ can import neither the package nor a public list of
-// the fields. A field added to the engine fails here until it has an operator in
+// A field added to the engine fails here until it has an operator in
 // filterFieldOps.
 func TestFilterFieldOps_MatchesTheEngineFields(t *testing.T) {
-	const source = "../sdk/tasks/internal/query/parse.go"
-	file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", source, err)
-	}
-	var engine []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		spec, isSpec := n.(*ast.ValueSpec)
-		if !isSpec || len(spec.Names) != 1 || spec.Names[0].Name != "knownFields" || len(spec.Values) != 1 {
-			return true
-		}
-		for _, elt := range spec.Values[0].(*ast.CompositeLit).Elts {
-			name, err := strconv.Unquote(elt.(*ast.KeyValueExpr).Key.(*ast.BasicLit).Value)
-			if err != nil {
-				t.Fatalf("knownFields key: %v", err)
-			}
-			engine = append(engine, name)
-		}
-		return false
-	})
-	hinted := slices.Sorted(maps.Keys(filterFieldOps))
-	slices.Sort(engine)
+	engine, hinted := tasks.QueryFields(), slices.Sorted(maps.Keys(filterFieldOps))
 	if !slices.Equal(engine, hinted) {
-		t.Errorf("filterFieldOps is out of step with knownFields in %s\nengine: %v\nhinted: %v", source, engine, hinted)
+		t.Errorf("filterFieldOps is out of step with tasks.QueryFields\nengine: %v\nhinted: %v", engine, hinted)
 	}
 }
 

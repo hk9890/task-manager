@@ -750,7 +750,7 @@ Create a new issue and allocate its ID.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--title <t>` | — | **Required.** Issue title. |
+| `--title <t>` | — | **Required** unless `--from` is given. Issue title. |
 | `--description <md>` | empty | Description (markdown body). |
 | `--description-file <path>` | — | Read the description from a file (`-` = stdin). |
 | `--type <t>` | `task` | `task` \| `bug` \| `feature` \| `epic` \| `chore` \| `doc`. `doc` carries a document rather than work: it is an ordinary issue but never appears in `ready` / `blocked` (TASK-STORAGE-SPEC §9). Use `--description-file` to load a page from disk; a large body is stored in the content sidecar automatically (§4.6). |

@@ -38,6 +38,8 @@ package query
 // with Pos = byte offset of the offending token.
 
 import (
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +79,11 @@ var knownFields = map[string]fieldInfo{
 	"created":  {kind: fieldDate, allowOps: []string{"==", "!=", "<", "<=", ">", ">="}},
 	"updated":  {kind: fieldDate, allowOps: []string{"==", "!=", "<", "<=", ">", ">="}},
 	"closed":   {kind: fieldDate, allowOps: []string{"==", "!=", "<", "<=", ">", ">="}},
+}
+
+// Fields returns the names of the comparison fields, sorted.
+func Fields() []string {
+	return slices.Sorted(maps.Keys(knownFields))
 }
 
 // knownBareFields are the bare boolean predicates.

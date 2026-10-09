@@ -39,6 +39,10 @@ import (
 //	if errors.As(err, &pe) { ... }
 type ParseError = query.ParseError
 
+// QueryFields returns the comparison fields of the filter-expression language
+// (QUERY-SPEC.md §2), sorted.
+func QueryFields() []string { return query.Fields() }
+
 // issueRow adapts a *Issue to the query.Row interface so the pure evaluator can
 // operate on it without importing the tasks package.
 //

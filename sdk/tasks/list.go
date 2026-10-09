@@ -29,7 +29,6 @@ package tasks
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/query"
 )
@@ -53,18 +52,16 @@ func (s *Store) closedStatFn() func(id string) bool {
 // every consumer — the CLI, the `ready` query predicate, any future UI — agrees
 // without having to remember it.
 func (s *Store) Ready() ([]*Issue, error) {
-	idx, all, err := s.index()
+	nodes, err := s.Graph()
 	if err != nil {
 		return nil, err
 	}
-	closedStat := s.closedStatFn()
 	var ready []*Issue
-	for _, iss := range all {
-		if isReady(iss, openBlockers(idx, closedStat, iss)) {
-			ready = append(ready, iss)
+	for _, n := range nodes {
+		if n.Ready {
+			ready = append(ready, n.Issue)
 		}
 	}
-	sortByWork(ready)
 	return ready, nil
 }
 
@@ -75,32 +72,44 @@ func (s *Store) Ready() ([]*Issue, error) {
 // Ready: they are not work, so "blocked work" should never surface one
 // (TASK-STORAGE-SPEC §9).
 func (s *Store) Blocked() ([]BlockedIssue, error) {
+	nodes, err := s.Graph()
+	if err != nil {
+		return nil, err
+	}
+	var blocked []BlockedIssue
+	for _, n := range nodes {
+		if n.Blocked {
+			blocked = append(blocked, BlockedIssue{Issue: n.Issue, BlockedBy: n.BlockedBy})
+		}
+	}
+	return blocked, nil
+}
+
+// Graph returns every issue of the hot set with the marks the dependency graph
+// gives it, in work order. Ready, Blocked and the open blockers come from one
+// read of the store, so they cannot disagree with each other.
+func (s *Store) Graph() ([]GraphNode, error) {
 	idx, all, err := s.index()
 	if err != nil {
 		return nil, err
 	}
+	sortByWork(all)
 	closedStat := s.closedStatFn()
-	var blocked []BlockedIssue
-	for _, iss := range all {
+	nodes := make([]GraphNode, len(all))
+	for i, iss := range all {
 		open := openBlockers(idx, closedStat, iss)
-		if !isBlocked(iss, open) {
-			continue
-		}
-		bi := BlockedIssue{Issue: iss}
-		for _, id := range open {
-			if blk, ok := idx[id]; ok {
-				bi.BlockedBy = append(bi.BlockedBy, ref(blk))
+		n := GraphNode{Issue: iss, Ready: isReady(iss, open), Blocked: isBlocked(iss, open)}
+		if n.Blocked {
+			for _, id := range open {
+				// A dangling blocker keeps the issue blocked but has no ref.
+				if blk, ok := idx[id]; ok {
+					n.BlockedBy = append(n.BlockedBy, ref(blk))
+				}
 			}
-			// Dangling blockers are included in open (see openBlockers) but
-			// cannot be resolved to a ref — they are omitted from BlockedBy
-			// refs. The issue still appears in Blocked to surface the inconsistency.
 		}
-		blocked = append(blocked, bi)
+		nodes[i] = n
 	}
-	sort.Slice(blocked, func(i, j int) bool {
-		return less(blocked[i].Issue, blocked[j].Issue)
-	})
-	return blocked, nil
+	return nodes, nil
 }
 
 // Detail loads an issue and resolves both its outgoing references and its
@@ -113,18 +122,38 @@ func (s *Store) Blocked() ([]BlockedIssue, error) {
 // handles the hot→closed fall-through) and populates the ref from the closed
 // issue's metadata.
 func (s *Store) Detail(id string) (*Detail, error) {
+	details, err := s.Details(id)
+	if err != nil {
+		return nil, err
+	}
+	return details[0], nil
+}
+
+// Details is Detail for several issues, in the order of ids, over one read of
+// the hot set. The first ID that fails fails the call.
+func (s *Store) Details(ids ...string) ([]*Detail, error) {
 	idx, all, err := s.index()
 	if err != nil {
 		return nil, err
 	}
+	details := make([]*Detail, len(ids))
+	for i, id := range ids {
+		if details[i], err = s.detailFrom(idx, all, id); err != nil {
+			return nil, err
+		}
+	}
+	return details, nil
+}
+
+func (s *Store) detailFrom(idx map[string]*Issue, all []*Issue, id string) (*Detail, error) {
 	iss, ok := idx[id]
 	if !ok {
 		// Fall through to closed/. Unresolved on purpose: Get would resolve the
 		// body here and clear the flag, so BodyExternal below would read false
 		// for every closed overflowed issue — the one class of issue most likely
 		// to be overflowed. Detail resolves the body itself, after recording it.
-		iss, err = s.getUnresolved(id)
-		if err != nil {
+		var err error
+		if iss, err = s.getUnresolved(id); err != nil {
 			return nil, err
 		}
 	}

@@ -39,44 +39,26 @@ type treeNode struct {
 // that issue alone, holding the open issues below it; with nil, every issue
 // whose parent is absent from the open set is a root.
 //
-// ready and blocked are read from the engine's own views rather than derived
-// here, so the marks cannot disagree with `taskmgr ready` and `taskmgr blocked`.
+// ready and blocked are the engine's own marks rather than derived here, so they
+// cannot disagree with `taskmgr ready` and `taskmgr blocked`.
 func buildTree(s *tasks.Store, rootID *string) ([]*treeNode, error) {
-	open, err := s.List(tasks.Filter{})
-	if err != nil {
-		return nil, err
-	}
-	ready, err := s.List(tasks.Filter{Expr: "ready"})
-	if err != nil {
-		return nil, err
-	}
-	blocked, err := s.Blocked()
+	graph, err := s.Graph()
 	if err != nil {
 		return nil, err
 	}
 
-	nodes := make(map[string]*treeNode, len(open))
+	open := make([]*tasks.Issue, len(graph))
+	nodes := make(map[string]*treeNode, len(graph))
 	byParent := make(map[string][]*treeNode)
-	for _, iss := range open {
-		n := &treeNode{issue: iss}
-		nodes[iss.ID] = n
-		byParent[iss.Parent] = append(byParent[iss.Parent], n)
+	for i, g := range graph {
+		open[i] = g.Issue
+		n := &treeNode{issue: g.Issue, ready: g.Ready, blocked: g.Blocked}
+		nodes[g.Issue.ID] = n
+		byParent[g.Issue.Parent] = append(byParent[g.Issue.Parent], n)
 	}
-	for _, iss := range ready {
-		if n, ok := nodes[iss.ID]; ok {
-			n.ready = true
-		}
-	}
-	for _, b := range blocked {
-		if n, ok := nodes[b.Issue.ID]; ok {
-			n.blocked = true
-			// Blocked resolves a blocker from the open set, so it has a node here
-			// unless a write landed between the two reads.
-			for _, r := range b.BlockedBy {
-				if blocker, ok := nodes[r.ID]; ok {
-					n.blockedBy = append(n.blockedBy, blocker)
-				}
-			}
+	for _, g := range graph {
+		for _, r := range g.BlockedBy {
+			nodes[g.Issue.ID].blockedBy = append(nodes[g.Issue.ID].blockedBy, nodes[r.ID])
 		}
 	}
 
