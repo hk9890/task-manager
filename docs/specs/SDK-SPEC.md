@@ -947,9 +947,12 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   (HOOK-SPEC §4). A `blocked_by` cycle and a parent cycle through several entries are
   refused as on any write, and so is an entry `related` to itself. A validation
   message names an entry by its `Ref`, not by the ID allocated to it: the caller
-  wrote the `Ref`, and the ID names an issue that was never written. The first entry that is
-  refused aborts the set: nothing is written and the error is a `*BatchEntryError`
-  (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
+  wrote the `Ref`, and the ID names an issue that was never written. The first refusal
+  aborts the set: nothing is written and the error is a `*BatchEntryError` (§6) for
+  that one entry, with its `Ref` trimmed. The checks run in phases, each over the whole
+  set — IDs, then refs, then field constraints, then references and cycles, then hooks —
+  so the entry it names is the first in phase order, not always the first in entry
+  order. A `*HookDeniedError` inside it carries the hints of the entries that passed
   before it, since no result will. An empty set is a `*ValidationError`, and so is a
   set of more than **256** entries: the lock is held across the hooks of every entry
   (HOOK-SPEC §8), so the bound is what caps that hold. A failure no entry owns, such
@@ -1006,6 +1009,9 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   `StatusOpen` (the pre-close status is not persisted). `Reopen` always lands on
   `open`; to reopen directly into another active status use `Update` with that
   `Status`. On an already-active issue `Reopen` is a no-op, returning it unchanged.
+  `Reopen` runs no reference check, so it can make live a cycle that runs through the
+  closed issue (storage §9); `Update` with a non-closed `Status` runs the check and
+  refuses it.
 - **`AddRelated` / `RemoveRelated`** manage the non-blocking `related` link, the
   peer to `AddDep`/`RemoveDep` for `blocked_by`. The relationship is **symmetric**:
   `AddRelated(a, b)` stores the edge on `a` (idempotent; rejects a self-link and a
@@ -1033,7 +1039,9 @@ func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error)
 ```
 
 For a long-running consumer that shows the store and must read it again when it
-changes.
+changes. Call `Watch` before the first read: a change between a read and a later
+`Watch` call gives no signal. Each call starts its own watch, so several calls on
+one handle are permitted and each channel gets every signal.
 
 - **A value means "read again".** It says the store changed since the last
   receive, and carries nothing else: no issue ID, no kind of change. A consumer
@@ -1058,9 +1066,12 @@ changes.
   what it already has.
 - **A write that changes nothing gives no signal**, although it takes the lock:
   the lock file is not reported.
-- **The channel closes** when `ctx` is done, or when the store directory is
-  removed or renamed. A consumer follows a moved store by resolving it again and
-  calling `Watch` on the new handle. A rename of a directory above the store —
+- **The channel closes** when `ctx` is done, when the store directory is
+  removed or renamed, or when the operating system refuses a later sub-watch
+  (below). The close carries no cause: a consumer calls `Watch` again, and that
+  call returns the error when the cause still holds. The same handle is valid for
+  it once the directory exists again at the same path. A consumer follows a moved
+  store by resolving it again and calling `Watch` on the new handle. A rename of a directory above the store —
   the project directory of a local `.tasks/` — is not reported: the channel stays
   open and a read through the handle fails, so a consumer treats a failed read
   as the end of the watch.
@@ -1179,12 +1190,18 @@ The store rejects (before any byte is written) every invariant listed in the
 storage spec: empty title, unknown enum, priority out of range, self/duplicate/
 dangling references, dependency cycles, and field-constraint violations.
 
-**A write checks what it introduces, not what it finds** (TASK-STORAGE-SPEC §5). A field
+**A write checks what it introduces, not what it finds** (TASK-STORAGE-SPEC §10). A
 violation already on disk — a hand edit, a restore, a build with looser rules — does not
 refuse a write that leaves that field alone, so `Close`, `Reopen` and the four edge
 mutations still work on an issue the engine would not have written. A write that touches
 the offending field is refused as usual. Without the rule an invalid field no input
 struct exposes froze its issue permanently: it could never be closed or re-linked again.
+
+The rule covers dangling references and cycles too. An `Update` that leaves `Parent`
+alone passes on a stored parent cycle or a dangling parent, and an `Update` that sets
+`Parent` to another value or to `""` repairs it. `RemoveDep` and `RemoveRelated` repair
+a stored `blocked_by` or `related` edge the same way; `AddDep` and `AddRelated` are
+refused until they have.
 
 A malformed filter expression (`List` / `ListPage`) returns a typed parse error
 locating the failure; it is not a validation error and never reaches disk:

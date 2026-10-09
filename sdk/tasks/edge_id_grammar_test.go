@@ -161,7 +161,7 @@ func TestUpdate_ParentOutsideTheIDGrammar_IsRefused(t *testing.T) {
 // blocker — the shape a build that did not check the grammar left behind.
 func seedBlocker(t *testing.T, fs vfs.FS, s *Store, id, value string) {
 	t.Helper()
-	seedFrontmatter(t, fs, s, id, "blocked_by:\n  - "+value+"\n")
+	seedStored(t, fs, s, id, func(iss *Issue) { iss.BlockedBy = []string{value} })
 }
 
 func TestUpdate_StoredEdgeOutsideTheIDGrammar_DoesNotFreezeTheIssue(t *testing.T) {
@@ -265,7 +265,11 @@ func TestDetail_StoredEdgeOutsideTheIDGrammar_IsNotResolved(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedNote(t, fs)
-	seedFrontmatter(t, fs, s, iss.ID, "parent: ../"+open.ID+"\nblocked_by:\n  - ../"+open.ID+"\nrelated:\n  - ../../notes\n")
+	seedStored(t, fs, s, iss.ID, func(iss *Issue) {
+		iss.Parent = "../" + open.ID
+		iss.BlockedBy = []string{"../" + open.ID}
+		iss.Related = []string{"../../notes"}
+	})
 
 	d, err := s.Detail(iss.ID)
 	if err != nil {
@@ -283,7 +287,7 @@ func TestRemoveRelated_TargetOutsideTheIDGrammar_HasNoInverseSide(t *testing.T) 
 		t.Fatal(err)
 	}
 	seedNote(t, fs)
-	seedFrontmatter(t, fs, s, iss.ID, "related:\n  - ../../notes\n")
+	seedStored(t, fs, s, iss.ID, func(iss *Issue) { iss.Related = []string{"../../notes"} })
 
 	if err := s.RemoveRelated(iss.ID, "../../notes"); err != nil {
 		t.Fatalf("rel rm of the invalid value is the repair and must not read the file it names: %v", err)

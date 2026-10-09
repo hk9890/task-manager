@@ -18,6 +18,7 @@ package tasks
 
 import (
 	"errors"
+	iofs "io/fs"
 	"strings"
 	"testing"
 )
@@ -297,5 +298,23 @@ func TestMemStore_CrossPartitionDedup_NoDuplicateID(t *testing.T) {
 		if seen[id] != 1 {
 			t.Errorf("ID %q appears %d times, want exactly 1 (full set %v)", id, seen[id], seen)
 		}
+	}
+}
+
+// Reads take no lock, so a close can move a file out of the hot directory
+// between the listing and the read. That is an omission (SDK-SPEC §7), not a
+// failed list.
+func TestAll_AFileGoneAfterTheListing_IsLeftOut(t *testing.T) {
+	s, m := newMemStore(t)
+	stays := mustCreate(t, s, CreateInput{Title: "stays"})
+	moved := mustCreate(t, s, CreateInput{Title: "moved"})
+	m.FailOn("ReadFile", s.filePath(moved.ID), iofs.ErrNotExist)
+
+	got, err := s.All()
+	if err != nil {
+		t.Fatalf("a file that is gone must not fail the read: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != stays.ID {
+		t.Errorf("got %d issues, want only %s", len(got), stays.ID)
 	}
 }
