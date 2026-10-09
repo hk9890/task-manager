@@ -156,7 +156,6 @@ already on both.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
-| `watch.go` | `Watch`: turns the changed paths the vfs seam reports into merged change signals (SDK-SPEC §4). Reaches the seam through the store's `FS` alone, so it is on no import list. |
 | `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)
@@ -185,6 +184,7 @@ call.
 | `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
 | `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
+| `watch.go` | `mergeChanges`: merges the changed paths of a watch into the change signals of `Watch` (SDK-SPEC §4) — the quiet period, the one-signal channel, the lock-file filter. A function over a channel of paths; the method that feeds it from the vfs seam is in `store.go`. |
 | `doc.go` | Package documentation. |
 
 ### Seams and os/syscall confinement
@@ -337,7 +337,9 @@ correctness is enforced in exactly one place.
 
 `fsnotify` is imported by `internal/vfs` alone. The alternative with no
 dependency was to poll file modification times: its idle cost grows with
-`closed/`, which has no bound, and its latency is the poll interval. A watcher
+`closed/`, which has no bound, and its latency is the poll interval. The watch
+has that same growth on macOS and the BSDs alone (SDK-SPEC §4), and there it is
+a cost at the start, not one paid each second. A watcher
 written here against each operating system's own interface would be the same
 code as `fsnotify`, maintained in this repository.
 

@@ -101,8 +101,9 @@ type FS interface {
 	// from the moment it appears. An empty path reports that changes were lost
 	// and nothing is known about them.
 	//
-	// The receiver must keep receiving. The channel closes when ctx is done, or
-	// when dir itself is removed or renamed.
+	// The receiver must keep receiving. The channel closes when ctx is done,
+	// when dir itself is removed or renamed, or when a named subdirectory
+	// appears and cannot be watched.
 	Watch(ctx context.Context, dir string, subdirs []string) (<-chan string, error)
 }
 

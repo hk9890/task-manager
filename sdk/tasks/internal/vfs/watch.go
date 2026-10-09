@@ -19,7 +19,6 @@ package vfs
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -42,7 +41,7 @@ func (osFS) Watch(ctx context.Context, dir string, subdirs []string) (<-chan str
 	for _, name := range subdirs {
 		sub := filepath.Join(dir, name)
 		isSubdir[sub] = true
-		if err := w.Add(sub); err != nil && !pathMissing(sub) {
+		if err := w.Add(sub); err != nil && !IsNotExist(err) {
 			_ = w.Close()
 			return nil, fmt.Errorf("vfs.Watch: %w", err)
 		}
@@ -68,9 +67,12 @@ func (osFS) Watch(ctx context.Context, dir string, subdirs []string) (<-chan str
 					continue
 				}
 				if isSubdir[ev.Name] && ev.Has(fsnotify.Create) {
-					// A failed Add leaves the subdirectory unwatched; the
-					// path sent below still reports that it appeared.
-					_ = w.Add(ev.Name)
+					// A subdirectory that cannot be watched would lose its
+					// changes in silence, so the watch ends. One that is
+					// gone again has nothing to lose.
+					if err := w.Add(ev.Name); err != nil && !IsNotExist(err) {
+						return
+					}
 				}
 				path = ev.Name
 			case _, ok := <-w.Errors:
@@ -86,9 +88,4 @@ func (osFS) Watch(ctx context.Context, dir string, subdirs []string) (<-chan str
 		}
 	}()
 	return changes, nil
-}
-
-func pathMissing(path string) bool {
-	_, err := os.Stat(path)
-	return os.IsNotExist(err)
 }

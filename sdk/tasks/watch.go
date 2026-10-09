@@ -17,35 +17,21 @@
 package tasks
 
 import (
-	"context"
-	"fmt"
 	"path/filepath"
 	"time"
 )
 
-// watchQuietPeriod is how long Watch collects changes before it signals. One
-// write touches up to three files, and a signal for each would make a consumer
-// read the store while the write is still in progress.
+// watchQuietPeriod is how long mergeChanges collects changes before it
+// signals. One write touches up to three files, and a signal for each would
+// make a consumer read the store while the write is still in progress.
 const watchQuietPeriod = 100 * time.Millisecond
 
-// Watch signals each change to the store, from any process and from this
-// handle alike: an issue, a comment, a body sidecar or the configuration that
-// is written, moved or removed, by the engine or by hand.
-//
-// A value on the channel says "the store changed since your last receive, read
-// it again". It carries nothing else. Changes that arrive close together give
-// one signal, and a signal that is not received yet absorbs the next one, so a
-// slow consumer never falls behind. A signal can be redundant: it reports that
-// files changed, not that any query now answers differently.
-//
-// The channel closes when ctx is done, or when the store directory is removed
-// or renamed. Call Watch again on a new handle to follow a moved store.
-func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error) {
-	changes, err := s.fs.Watch(ctx, s.dir, []string{closedDirName, commentsDirName, contentDirName})
-	if err != nil {
-		return nil, fmt.Errorf("watch store: %w", err)
-	}
-
+// mergeChanges turns the changed paths of a store into the signals of
+// Store.Watch. The first path starts a quiet period, and one signal follows
+// when it ends. The channel holds one signal, so a signal that is not received
+// yet absorbs the next one. An empty path reports lost changes and signals like
+// any other path. The signals end when changes is closed.
+func mergeChanges(changes <-chan string) <-chan struct{} {
 	signals := make(chan struct{}, 1)
 	go func() {
 		defer close(signals)
@@ -73,5 +59,5 @@ func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error) {
 			}
 		}
 	}()
-	return signals, nil
+	return signals
 }

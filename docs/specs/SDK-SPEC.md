@@ -969,12 +969,16 @@ changes.
   handle or another process, an edit by hand and a version-control checkout all
   signal. The watch covers the store directory, `closed/`, `comments/` and
   `content/` (TASK-STORAGE-SPEC §2), and so the configuration file too. It does
-  not cover the per-user home.
+  not cover the per-user home, and it does not cover the hook packages a store
+  holds under `packages/`: a change there gives no signal.
 - **Signals are merged.** `Watch` collects changes for 100 ms after the first one
   and then signals once, because one write touches up to three files and a signal
-  for each would make the consumer read during the write. The channel holds one
-  signal: a signal that is not received yet absorbs the next, so a slow consumer
-  does not fall behind.
+  for each would make the consumer read during the write. The 100 ms count from
+  the first change and do not start again with each later one, so a continuous
+  series of writes cannot hold the signal back. A write that takes longer than
+  100 ms gives a second signal when it ends. The channel holds one signal: a
+  signal that is not received yet absorbs the next, so a slow consumer does not
+  fall behind.
 - **A signal can be redundant.** It reports that files changed, not that any
   query now answers differently. A consumer must tolerate a read that returns
   what it already has.
@@ -982,9 +986,18 @@ changes.
   the lock file is not reported.
 - **The channel closes** when `ctx` is done, or when the store directory is
   removed or renamed. A consumer follows a moved store by resolving it again and
-  calling `Watch` on the new handle.
+  calling `Watch` on the new handle. A rename of a directory above the store —
+  the project directory of a local `.tasks/` — is not reported: the channel stays
+  open and a read through the handle fails, so a consumer treats a failed read
+  as the end of the watch.
 - **`Watch` returns an error** when the operating system refuses the watch, for
-  example when the per-user limit of watches is reached.
+  example when the per-user limit of watches is reached. When it refuses the
+  watch on `closed/`, `comments/` or `content/` after the start, because that
+  directory appeared later, the channel closes.
+- **The cost depends on the operating system.** Linux and Windows use one watch
+  for each of the four directories. macOS and the BSDs use one open file
+  descriptor for each file in them, so the cost grows with the store, `closed/`
+  included, and `Watch` returns an error at the descriptor limit of the process.
 
 `Watch` relies on the operating system's file notifications. Where a filesystem
 delivers none (some network mounts), the channel stays silent and no error

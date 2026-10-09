@@ -15,13 +15,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // L2 tests for Store.Watch on vfs.Mem: which writes signal, how signals merge,
-// and when the channel closes.
+// and when the channel closes. A test that waits for the quiet period runs in a
+// synctest bubble, so the wait passes on a fake clock and costs no real time.
 package tasks_test
 
 import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks"
@@ -123,65 +125,73 @@ func TestWatch_EachWrite_GivesOneSignal(t *testing.T) {
 	}
 	for name, write := range writes {
 		t.Run(name, func(t *testing.T) {
-			s := storetest.New(t).
-				Issue("tst-0001").
-				Issue("tst-0002").
-				Closed("tst-0003").
-				Comment("tst-0003", "hans", "first note").
-				Mem()
-			signals := watchStore(t, s)
+			synctest.Test(t, func(t *testing.T) {
+				s := storetest.New(t).
+					Issue("tst-0001").
+					Issue("tst-0002").
+					Closed("tst-0003").
+					Comment("tst-0003", "hans", "first note").
+					Mem()
+				signals := watchStore(t, s)
 
-			if err := write(s); err != nil {
-				t.Fatalf("write: %v", err)
-			}
+				if err := write(s); err != nil {
+					t.Fatalf("write: %v", err)
+				}
 
-			wantSignal(t, signals)
-			wantNoSignal(t, signals)
+				wantSignal(t, signals)
+				wantNoSignal(t, signals)
+			})
 		})
 	}
 }
 
 func TestWatch_Burst_GivesOneSignal(t *testing.T) {
-	s := storetest.New(t).Mem()
-	signals := watchStore(t, s)
+	synctest.Test(t, func(t *testing.T) {
+		s := storetest.New(t).Mem()
+		signals := watchStore(t, s)
 
-	for range 5 {
-		if _, err := s.Create(tasks.CreateInput{Title: "one of a burst"}); err != nil {
-			t.Fatalf("Create: %v", err)
+		for range 5 {
+			if _, err := s.Create(tasks.CreateInput{Title: "one of a burst"}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
 		}
-	}
 
-	wantSignal(t, signals)
-	wantNoSignal(t, signals)
+		wantSignal(t, signals)
+		wantNoSignal(t, signals)
+	})
 }
 
 func TestWatch_UnreceivedSignal_AbsorbsTheNext(t *testing.T) {
-	s := storetest.New(t).Mem()
-	signals := watchStore(t, s)
+	synctest.Test(t, func(t *testing.T) {
+		s := storetest.New(t).Mem()
+		signals := watchStore(t, s)
 
-	for range 2 {
-		if _, err := s.Create(tasks.CreateInput{Title: "nobody is receiving"}); err != nil {
-			t.Fatalf("Create: %v", err)
+		for range 2 {
+			if _, err := s.Create(tasks.CreateInput{Title: "nobody is receiving"}); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			time.Sleep(silenceWindow)
 		}
-		time.Sleep(silenceWindow)
-	}
 
-	wantSignal(t, signals)
-	wantNoSignal(t, signals)
+		wantSignal(t, signals)
+		wantNoSignal(t, signals)
+	})
 }
 
 func TestWatch_Read_GivesNoSignal(t *testing.T) {
-	s := storetest.New(t).Issue("tst-0001").Mem()
-	signals := watchStore(t, s)
+	synctest.Test(t, func(t *testing.T) {
+		s := storetest.New(t).Issue("tst-0001").Mem()
+		signals := watchStore(t, s)
 
-	if _, err := s.Get("tst-0001"); err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if _, err := s.List(tasks.Filter{}); err != nil {
-		t.Fatalf("List: %v", err)
-	}
+		if _, err := s.Get("tst-0001"); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if _, err := s.List(tasks.Filter{}); err != nil {
+			t.Fatalf("List: %v", err)
+		}
 
-	wantNoSignal(t, signals)
+		wantNoSignal(t, signals)
+	})
 }
 
 func TestWatch_ContextDone_ClosesChannel(t *testing.T) {
