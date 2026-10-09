@@ -551,10 +551,11 @@ it, and so does human output when `--fields` names `description`. Bodies are
 unbounded, so a doc holding a generated page would otherwise flood a terminal on
 every `show`.
 
-- **Output (JSON):** one ID → a `detailDTO` object (§6); two or more → an array of
-  `detailDTO`. Never truncated. The shape follows the argument count because the
-  object is what every existing caller of `show <id> --json` parses; an array for
-  one ID would break each of them.
+- **Output (JSON):** an array of `detailDTO` (§6), one element per ID in argument
+  order — an array of one for a single ID. Never truncated. Until v0.10.0 `show`
+  took one ID and printed the bare object; a shape that followed the argument count
+  was rejected, because a caller passing a list of variable length would get an
+  object the day the list had one element. Read a single issue as `.[0]`.
 
 ### `taskmgr list [-q <expr>] [options]`
 
@@ -1007,7 +1008,7 @@ provenance of **this document** (§1.1). The `comments` array (in `detailDTO`) i
 **`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
 when false), `parent_ref` (`refDTO`), `blocked_by_refs`, `related_refs`,
 `blocks`, `children` (each `refDTO[]`), and `comments` (`commentDTO[]`). Emitted
-by `show`, as an array when it is given more than one ID. `description` is always the complete body; `body_external` only says
+by `show`, always as an array. `description` is always the complete body; `body_external` only says
 it was read from the content sidecar rather than the `.md`
 (TASK-STORAGE-SPEC §4.6). `issueDTO` carries no description, so list-shaped
 output is unaffected by body size.

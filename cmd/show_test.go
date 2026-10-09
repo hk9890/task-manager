@@ -37,7 +37,9 @@ func TestShow_SeveralIDs_PrintsBlocksInArgumentOrder(t *testing.T) {
 	}
 }
 
-func TestShow_OneID_JSONIsAnObject(t *testing.T) {
+// One shape whatever the number of IDs: a caller that passes a list of variable
+// length must not get an object the day the list has one element.
+func TestShow_OneID_JSONIsAnArrayOfOne(t *testing.T) {
 	root := newStore(t)
 	a := createIssue(t, root)
 
@@ -45,14 +47,14 @@ func TestShow_OneID_JSONIsAnObject(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("show: exit %d, stderr %q", code, errOut)
 	}
-	var dto struct {
+	var dtos []struct {
 		ID string `json:"id"`
 	}
-	if err := json.Unmarshal([]byte(out), &dto); err != nil {
-		t.Fatalf("one ID must stay a JSON object: %v\n%s", err, out)
+	if err := json.Unmarshal([]byte(out), &dtos); err != nil {
+		t.Fatalf("one ID must print a JSON array: %v\n%s", err, out)
 	}
-	if dto.ID != a {
-		t.Errorf("id = %q, want %q", dto.ID, a)
+	if len(dtos) != 1 || dtos[0].ID != a {
+		t.Errorf("got %+v, want [%s]", dtos, a)
 	}
 }
 
@@ -108,7 +110,7 @@ func TestShow_Fields_JSONKeepsIDAndNamedKeysInDTOOrder(t *testing.T) {
 		t.Fatalf("show: exit %d, stderr %q", code, errOut)
 	}
 	var got map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
+	if err := json.Unmarshal([]byte(firstShown(out)), &got); err != nil {
 		t.Fatalf("parse: %v\n%s", err, out)
 	}
 	if len(got) != 4 || got["id"] == nil || got["status"] == nil || got["blocked_by"] == nil || got["blocked_by_refs"] == nil {

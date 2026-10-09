@@ -62,20 +62,20 @@ var showCmd = &cobra.Command{
 			}
 			return nil
 		}
-		dtos := make([]any, len(details))
+		dtos := make([]detailDTO, len(details))
 		for i, d := range details {
-			dto := toDetailDTO(s.Name(), d)
-			dtos[i] = dto
-			if selected != nil {
-				if dtos[i], err = selectFields(dto, selected); err != nil {
-					return err
-				}
+			dtos[i] = toDetailDTO(s.Name(), d)
+		}
+		if selected == nil {
+			return printJSON(dtos)
+		}
+		selections := make([]fieldSelection, len(dtos))
+		for i, dto := range dtos {
+			if selections[i], err = selectFields(dto, selected); err != nil {
+				return err
 			}
 		}
-		if len(dtos) == 1 {
-			return printJSON(dtos[0])
-		}
-		return printJSON(dtos)
+		return printJSON(selections)
 	},
 }
 
