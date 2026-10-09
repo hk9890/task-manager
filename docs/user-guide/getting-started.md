@@ -60,6 +60,7 @@ command useful.
 ```bash
 taskmgr ready     # open issues with no open blockers — what you can start now
 taskmgr blocked   # what is waiting, and on what
+taskmgr tree      # open issues under their parents, marked ready or blocked
 taskmgr list      # every active issue
 ```
 

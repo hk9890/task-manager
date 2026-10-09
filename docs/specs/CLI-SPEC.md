@@ -612,6 +612,51 @@ proj-0051  open         P2  Wire up export
 - **Output (JSON):** array of `blockedDTO` (§6) — `issueDTO` plus `blocked_by_refs`
   (`refDTO[]`).
 
+### `taskmgr tree [id] [--format text|mermaid]`
+
+Print the open issues nested under their parents. With `<id>`, print that issue and
+its open descendants; the root may be closed, since a closed issue can still hold open
+children. Without, every open issue whose parent is not open is a root. Siblings are
+in work order (priority, then age).
+
+Each issue carries one derived mark, read from the same views as `ready` and
+`blocked`: `[ready]`, `[blocked by <id>, …]` naming its open blockers, or none.
+`[blocked]` alone marks an issue whose only open blocker is a dangling ID. Human
+output is one line per issue, indented two spaces per level:
+
+```
+proj-0007  open  P1  epic  Export  [ready]
+  proj-0047  open  P1  task  Define export schema  [ready]
+  proj-0051  open  P2  task  Wire up export  [blocked by proj-0047]
+```
+
+`--format mermaid` prints the same tree as a Mermaid flowchart: a solid edge from a
+parent to each child, a dotted `blocks` edge from an open blocker to the issue it
+holds. A blocker outside the printed tree is declared as a node, so every edge has
+two labelled ends.
+
+```
+graph TD
+  proj_0007["proj-0007: Export (epic, open, ready)"]
+  proj_0047["proj-0047: Define export schema (task, open, ready)"]
+  proj_0051["proj-0051: Wire up export (task, open, blocked by proj-0047)"]
+  proj_0007 --> proj_0047
+  proj_0007 --> proj_0051
+  proj_0047 -.->|blocks| proj_0051
+```
+
+A node ID is the issue ID with its dash replaced by an underscore; the label carries
+the issue ID unchanged. Mermaid reads `end-…`, `graph-…` or `class-…` as a keyword,
+and a store prefix may be any of them. In a label, `"`, `<` and `>` are written as
+`#quot;`, `#lt;` and `#gt;`.
+
+The command prints text only. Drawing the graph is a viewer's job, which is why there
+is no image or HTML format.
+
+- **Output (JSON):** array of `treeDTO` (§6), roots first. `--format mermaid` with
+  `--json` is an error.
+- **Errors:** an unknown `--format` value; an `<id>` that does not exist.
+
 ---
 
 ## 4. Mutation commands
@@ -936,6 +981,9 @@ output is unaffected by body size.
 **`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
 `blocked`.
 
+**`treeDTO`** — `issueDTO` plus `ready` and `blocked` (both bool, always present) and
+`children` (`treeDTO[]`, omitted when empty). Emitted by `tree`.
+
 **`whereDTO`** — emitted by `where`. `kind` is one of `local` | `central` |
 `override_name` | `none` (mirrors the engine's `ResolveKind`, SDK-SPEC §1).
 `store_path` and `project_path` are omitted when `kind` is `none`, and `store` for a
@@ -1064,6 +1112,7 @@ taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
 taskmgr ready    [--limit]
 taskmgr blocked
+taskmgr tree     [id] [--format text|mermaid]  # open issues under their parents
 taskmgr update   <id> [--title --description[-file] --status --type --priority
                      --assignee --parent --add-label --remove-label
                      --set-labels --clear-labels]
