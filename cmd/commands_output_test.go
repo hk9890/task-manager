@@ -65,7 +65,7 @@ func TestCommands_Output_NamesTheFieldsOfShowListAndCreate(t *testing.T) {
 		kind   string
 		fields []string
 	}{
-		"show":   {"object", []string{"description", "comments", "blocked_by_refs", "children"}},
+		"show":   {"array", []string{"description", "comments", "blocked_by_refs", "children"}},
 		"list":   {"array", []string{"id", "title", "status", "parent", "created", "updated"}},
 		"create": {"object", []string{"id", "store"}},
 	}
@@ -242,6 +242,11 @@ func TestCommands_Output_EveryCommandPrintsItsDeclaredType(t *testing.T) {
 	if err := os.WriteFile(envelope, []byte(`{"title": "imported"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	set := filepath.Join(t.TempDir(), "set.yaml")
+	if err := os.WriteFile(set, []byte("- title: from a set\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inStore("create", "--from", set)
 	inStore("import", "--file", envelope)
 	inStore("import", "--batch", "--file", envelope)
 

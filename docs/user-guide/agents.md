@@ -102,13 +102,16 @@ the environment does.
 
 - **Capture IDs; there is no way to derive one.** They are random tokens, so
   `--json | jq -r .id` is the only source ([Getting started](getting-started.md#file-a-task)
-  has the pattern).
+  has the pattern). For a set that depends on itself, `create --from <file>` removes the
+  capture: entries name each other by `ref`, and its `--json` returns the `ref` to ID map.
 - **Write bodies through `--description-file -`, not `--description`,** which stores a
   literal backslash-n ([Concepts](concepts.md#the-description-body)). `comment add --file -`
   reads standard input the same way.
 
 A mutation's `--json` echoes the issue's scalar fields, not its description or comments —
-run `show` to confirm what landed.
+run `show` to confirm what landed. `show` takes several IDs in one call, and its `--json` is
+always an array: read a single issue as `.[0]`. `--fields status,blocked_by` cuts either
+output down to the named fields.
 
 ## The loop worth prescribing
 

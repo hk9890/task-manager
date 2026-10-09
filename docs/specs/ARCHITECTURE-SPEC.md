@@ -175,7 +175,8 @@ call.
 | `frontmatter.go` | File ⇄ `Issue` (de)serialization (`Marshal` / `Unmarshal`). |
 | `overflow.go` | The body-overflow rule: the split/join watermarks (`layoutFor`) and rendering an issue into its `.md` and sidecar halves (`renderForWrite`). Decides from a byte count and a bool; the I/O is in `content.go`. |
 | `validate.go` | Single-issue field invariants. |
-| `ready.go` | The graph rules: open-blocker computation, cycle detection, sort and window. Plain functions over an issue index and an "is this closed?" predicate; the methods that supply both are in `list.go`. |
+| `batch.go` | The rules of a `CreateBatch` set: local refs to allocated IDs (`resolveBatchRefs`) and the referenced-first write order (`batchWriteOrder`). The set itself is written by `createSet` in `store.go`. |
+| `ready.go` | The graph rules: open-blocker computation, cycle detection (blockers, and the parent chain of a set), sort and window. Plain functions over an issue index and an "is this closed?" predicate; the methods that supply both are in `list.go`. |
 | `resolve.go` | Canonical path matching and store-resolution precedence (CONFIG-SPEC §4): lexical canonicalization, ancestor/longest-prefix match, local-then-central decision; no FS. |
 | `transition.go` | Classifies an old/new `Issue` pair into a `transition` and derives its `pre-`/`post-` event names; issue cloning and equality. |
 | `query.go` / `search.go` | The query surface: the `*Issue`→`query.Row` adapter and the `ParseError` alias, and `SearchExpr` free-text→expression. |
@@ -248,6 +249,13 @@ enforced:
 6. **Release the lock.**
 7. **Run post-hooks** outside the lock ([HOOK-SPEC.md](HOOK-SPEC.md) §4): non-vetoing
    notifications that cannot change the committed outcome.
+
+A **set** (`CreateBatch`, [SDK-SPEC.md](SDK-SPEC.md) §4) takes this path once for all its
+issues, and `Create` is a set of one: steps 2–4 run for every issue before step 5 for
+any, so a refusal writes nothing. Step 5 then writes one file after another, each issue
+after the issues of the set it references. The files are individually atomic and the set
+is not a transaction: a failed write removes the files already written, and a process
+killed between two writes leaves the earlier issues, every edge of which resolves.
 
 Reads take a fresh snapshot of the directory and never hold the lock.
 

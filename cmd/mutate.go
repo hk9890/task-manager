@@ -446,7 +446,7 @@ func printNotes(hints, warnings []string) {
 func mutationError(err error) error {
 	var de *tasks.HookDeniedError
 	if errors.As(err, &de) && flagJSON {
-		_ = printJSON(hookDeniedDTO{
+		dto := hookDeniedDTO{
 			Error:   "hook_denied",
 			Event:   de.Event,
 			Hook:    de.Hook,
@@ -454,7 +454,12 @@ func mutationError(err error) error {
 			Exit:    de.Exit,
 			Reason:  de.Reason,
 			Hints:   de.Hints,
-		})
+		}
+		var be *tasks.BatchEntryError
+		if errors.As(err, &be) {
+			dto.IssueID, dto.Entry, dto.Ref = "", be.Index+1, be.Ref
+		}
+		_ = printJSON(dto)
 		return silentError{err}
 	}
 	return err

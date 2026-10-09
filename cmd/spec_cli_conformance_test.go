@@ -158,6 +158,7 @@ func TestSpec_CLI_CloseIdempotent(t *testing.T) {
 
 	// Verify the issue is still closed after the idempotent call.
 	out, _, code3 := taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code3 != 0 {
 		t.Fatalf("show after re-close failed: %s", out)
 	}
@@ -204,6 +205,7 @@ func TestSpec_CLI_DepAddIdempotent(t *testing.T) {
 
 	// Exactly one entry in blocked_by (no duplicate written).
 	out, _, code3 := taskmgr(t, root, "--json", "show", dep.ID)
+	out = firstShown(out)
 	if code3 != 0 {
 		t.Fatalf("show dep failed: %s", out)
 	}
@@ -312,6 +314,7 @@ func TestSpec_CLI_DetailDTOHasCommentsArray(t *testing.T) {
 	taskmgr(t, root, "comment", "add", issID, "a note")
 
 	out, _, code := taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -342,6 +345,7 @@ func TestSpec_CLI_DetailDTOCommentsEmptyIsArray(t *testing.T) {
 	// No comments added.
 
 	out, _, code := taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}

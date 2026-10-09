@@ -50,6 +50,17 @@ func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	return outBuf.String(), errBuf.String(), code
 }
 
+// firstShown returns the first element of the array `show --json` prints, as
+// JSON, for the many tests that show one issue to read its fields. Anything that
+// is not such an array comes back unchanged, so the caller's own parse reports it.
+func firstShown(out string) string {
+	var shown []json.RawMessage
+	if json.Unmarshal([]byte(out), &shown) != nil || len(shown) == 0 {
+		return out
+	}
+	return string(shown[0])
+}
+
 // newStore initialises a store in a temp dir and returns its root.
 func newStore(t *testing.T) string {
 	t.Helper()
@@ -120,6 +131,7 @@ func TestRun_FlagsDoNotLeakBetweenInvocations(t *testing.T) {
 		t.Fatalf("parse create JSON: %v (%q)", err, out)
 	}
 	show, _, code := run(t, "--dir", root, "--json", "show", created.ID)
+	show = firstShown(show)
 	if code != 0 {
 		t.Fatalf("show: exit %d", code)
 	}
@@ -155,6 +167,7 @@ func TestRun_ShowJSON_HasTheDocumentedDetailShape(t *testing.T) {
 	}
 
 	out, _, code = run(t, "--dir", root, "--json", "show", created.ID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show: exit %d", code)
 	}
@@ -300,7 +313,7 @@ func TestExampleFor_GroupCommandsShowASubcommand(t *testing.T) {
 }
 
 func TestExampleFor_IncludesPositionalsAndRequiredFlags(t *testing.T) {
-	if got, want := exampleFor(findCommand(t, "show")), "taskmgr show <id>"; got != want {
+	if got, want := exampleFor(findCommand(t, "show")), "taskmgr show <id> [more ids...]"; got != want {
 		t.Errorf("exampleFor(show) = %q, want %q", got, want)
 	}
 	if got := exampleFor(findCommand(t, "create")); !strings.Contains(got, "--title") {

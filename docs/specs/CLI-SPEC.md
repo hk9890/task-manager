@@ -103,6 +103,49 @@ Mistyped commands are corrected, not dead-ended: an unknown top-level command or
 unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
 group with no subcommand prints its help and exits `0`).
 
+**A filter field guessed as a flag is answered with the command.** Filtering has one
+surface, `-q` (§3.1), and no flag per field. When a command that takes `-q/--query`
+(`list`, `search`) rejects an unknown flag whose name is a comparison
+field of [QUERY-SPEC](QUERY-SPEC.md) §2, one line follows the error line, before the
+blank line that opens the rest of the help block:
+
+```text
+$ taskmgr -C /srv/proj list --all --status open --type bug
+taskmgr: unknown flag: --status
+To filter by status and type: taskmgr -C /srv/proj list --all -q 'status == "open" && type == "bug"'
+```
+
+- **The command** is the caller's own invocation. Every argument stays where it was
+  typed — global flags, `--all`, `--sort`, the words of a `search` — and is quoted for
+  a POSIX shell where it needs it. Only the field flags, their values and a `-q`
+  already given are taken out; one `-q` goes in where the first of them stood.
+- **The expression** joins every field flag in the invocation with `&&`, not only the
+  one the error names. A `-q` already given leads it, in parentheses when it contains
+  `||`: `list -q 'ready || priority == 0' --type bug` prints
+  `-q '(ready || priority == 0) && type == "bug"'`.
+- **The value** is the one given, as `--status open` or `--status=open`. The argument
+  after `--status` is its value unless it is `--`, a flag of the command, or another
+  field flag, so `--label -wontfix` filters by `-wontfix`. A field without a value
+  prints the placeholder `"<value>"`.
+- **The operator** is `==`, with two exceptions: `text` takes `~`, the only operator it
+  has, and `created` / `updated` / `closed` take `>=`, because `==` on a date compares
+  one instant and matches nothing a caller means by `--created 2026-01-01`.
+- **`priority`** is printed bare, as the non-negative integer the grammar takes; `P1`,
+  the form the issue table prints, becomes `1`. Any other value, or none, prints the
+  placeholder `<0-4>`.
+- **A date without a value** prints the placeholder `"<YYYY-MM-DD>"` for `created` and
+  `updated`. A bare `--closed` asks for the closed issues, and prints
+  `--all -q 'status == "closed"'`.
+- A value is not validated: `--status wip` prints `status == "wip"`, and running that
+  returns the engine's own error, which names the legal values.
+
+Any other unknown flag, and a field name on a command without `-q` (`show <id> --status
+open`), prints the help block unchanged. The bare predicates `ready` and `blocked` get
+no hint. The field names are a copy held by the CLI, checked against the engine's field
+table by a test, so a new query field owes an entry there. A flag per field was
+rejected: it would be a second filter surface to keep in step with the grammar, and
+could not express `!=`, `~` or `||`.
+
 ### Store resolution
 
 The store a command operates on is resolved by the engine (the same logic every
@@ -515,21 +558,50 @@ the state this warning exists to make visible rather than silent.
 
 ## 3. Read commands
 
-### `taskmgr show <id>`
+### `taskmgr show <id> [more ids...]`
 
-Show full detail for one issue: all fields, resolved relationships (parent,
-blocked-by, related, plus derived **blocks** and **children**), the description
-body, and comments (the **resolved** log — edits applied, deleted comments
-removed; see storage spec §4.4).
+Show full detail for each named issue, in argument order: all fields, resolved
+relationships (parent, blocked-by, related, plus derived **blocks** and
+**children**), the description body, and comments (the **resolved** log — edits
+applied, deleted comments removed; see storage spec §4.4). Human output separates
+two issues with a blank line.
+
+Every ID resolves before anything prints: one that does not exist fails the whole
+command with `issue not found: <id>` and an empty stdout, so a caller never parses
+a partial result.
+
+| Flag | Meaning |
+|---|---|
+| `--fields <name,...>` | Print only the named fields. A name is a top-level key of `detailDTO` (§6); an unknown one is misuse, and the message lists the valid names. |
+
+A name selects a **line of the human block**, and with it every key that line is
+rendered from: `type` and `priority`, `agent` and `session`, `closed` and
+`close_reason`, and an edge with its `_refs` twin (`parent`, `blocked_by`, `related`).
+Human output prints the header line (ID and title) and the selected lines. JSON
+carries `id` and the selected keys, in `detailDTO` order; a key that is empty stays
+omitted, as in the full object. Selecting by line is what makes one name mean the
+same in both modes: `related` is stored on one side of a link only, so the bare key
+is absent on the other side while the line — and `related_refs` — shows the link.
+
+`store`, `creator` and `body_external` have no human line. Each selects only itself,
+and naming one without `--json` is misuse — a header with nothing under it would read
+as "this issue has none". Names are trimmed and empty ones dropped (`status, created`
+works); a `--fields` value that names nothing is misuse and never falls back to the
+full output.
 
 A body larger than 4096 bytes is **truncated in human output**, followed by a
 notice giving its full size and, when the body lives in the content sidecar
 (TASK-STORAGE-SPEC §4.6), its path. Truncation is a display choice only: `--json`
 always carries the complete body, because a script or an agent asked for all of
-it. Bodies are unbounded, so a doc holding a generated page would otherwise flood
-a terminal on every `show`.
+it, and so does human output when `--fields` names `description`. Bodies are
+unbounded, so a doc holding a generated page would otherwise flood a terminal on
+every `show`.
 
-- **Output (JSON):** `detailDTO` (§6) — never truncated.
+- **Output (JSON):** an array of `detailDTO` (§6), one element per ID in argument
+  order — an array of one for a single ID. Never truncated. Until v0.10.0 `show`
+  took one ID and printed the bare object; a shape that followed the argument count
+  was rejected, because a caller passing a list of variable length would get an
+  object the day the list had one element. Read a single issue as `.[0]`.
 
 ### `taskmgr list [-q <expr>] [options]`
 
@@ -691,9 +763,60 @@ Create a new issue and allocate its ID.
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
 | `--related <id>` | — | Related issue ID; repeatable. |
+| `--from <path>` | — | Create a set of issues from a YAML file (`-` = stdin). Replaces every option above except `--creator`, `--agent` and `--session`, `--title` included; see below. |
 
 - **Output:** the new ID (`{"id", "store"}` in JSON; `store` is the registry name of
   the store it landed in, omitted for a local store — §6).
+
+#### `taskmgr create --from <path>`
+
+File a set of issues that reference each other, **all or nothing** (SDK-SPEC §4,
+`CreateBatch`). The file is a YAML list; each entry takes the fields of the options
+above under their JSON names, plus `ref`:
+
+```yaml
+- ref: epic                 # optional; a name local to this file, never stored
+  title: Sign-out ends every session
+  type: epic
+  description: |
+    ## Context
+    ...
+- ref: schema
+  title: Add the revocation table
+  parent: epic              # a ref of this file, or the ID of an existing issue
+  labels: [area:auth]
+- title: Check revocation in verifyToken
+  priority: 1
+  parent: epic
+  blocked_by: [schema]
+  related: [at-0042ab]
+```
+
+- **Keys:** `ref`, `title`, `type`, `priority`, `assignee`, `labels`, `description`,
+  `parent`, `blocked_by`, `related`.
+- **The file is read strictly.** It holds exactly one YAML document, a list of 1 to
+  256 entries, with no empty item. An unknown key, a second document after `---`, an empty list item and
+  a top-level mapping are each an error. A lenient reader skips all four without a
+  word, and each one is an issue or an edge the caller believes was filed.
+- **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
+  any order. A `ref` must be unique and must not carry the store prefix. A parent
+  cycle or a `blocked_by` cycle between entries is refused.
+- **An empty path** (`--from ""`, what an unset shell variable gives) is misuse. It
+  never falls back to the single-issue form.
+- **All or nothing.** Every entry is validated and passes its `pre-create` hooks
+  before the first issue is written. A refusal exits `1`, writes nothing, and names
+  the entry: `taskmgr: entry 3 (ref "schema"): …`. Without this, a set refused at its
+  third `create` leaves two issues filed and the caller's shell variables empty.
+- **Who files:** `--creator`, `--agent` and `--session` apply to every issue of the
+  set. Any other `create` option beside `--from` is misuse.
+- **Output:** one `Created <id>` line per issue in file order, with `(<ref>)` after
+  the ID where the entry has one. JSON: an array of `{"ref", "id", "store", "hints",
+  "warnings"}` in file order — the map from the file's names to the new IDs.
+- A denied set under `--json` prints the `hook_denied` object (§6) with `entry` (the
+  1-based position) and `ref` in place of `issue_id`, since the issue never existed.
+
+`import --batch` is not this: it writes verbatim end-states, skips hooks by default,
+needs edges that already exist, and lands each record independently.
 
 ### `taskmgr import [--file <path>] [--batch] [--run-hooks]`
 
@@ -954,7 +1077,7 @@ what it prints. A command that prints none has no `output` key.
 | `type` | `object` or `array` — what the top level of the result is. |
 | `items` | For an `array`, the JSON type of each element: `object` or `string`. |
 | `fields` | The fields of the object, or of each element of an array of objects, in print order. Absent for an array of strings. |
-| `with_flag` | Present when a flag replaces the shape: one entry per flag, carrying `flag` (the flag name, no dashes) and that shape's own `type`, `items` and `fields`. `guide --list` and `import --batch` are the two. |
+| `with_flag` | Present when a flag replaces the shape: one entry per flag, carrying `flag` (the flag name, no dashes) and that shape's own `type`, `items` and `fields`. `guide --list`, `import --batch` and `create --from` are the three. A flag that only *narrows* the shape is not listed: `show --fields` prints a subset of the fields of `show`, so a field the catalog does not mark `optional` is absent there when it was not selected. |
 
 A field carries `name`, `type` (`string` \| `integer` \| `boolean` \| `array` \|
 `object`), `items` for an array, `optional: true` when the field is omitted while
@@ -1044,7 +1167,7 @@ provenance of **this document** (§1.1). The `comments` array (in `detailDTO`) i
 **`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
 when false), `parent_ref` (`refDTO`), `blocked_by_refs`, `related_refs`,
 `blocks`, `children` (each `refDTO[]`), and `comments` (`commentDTO[]`). Emitted
-by `show`. `description` is always the complete body; `body_external` only says
+by `show`, always as an array. `description` is always the complete body; `body_external` only says
 it was read from the content sidecar rather than the `.md`
 (TASK-STORAGE-SPEC §4.6). `issueDTO` carries no description, so list-shaped
 output is unaffected by body size.
@@ -1161,6 +1284,9 @@ prints a structured error:
   "hints": ["run `make fmt` before retrying"] }
 ```
 
+A set refused by `create --from` carries `"entry"` (the 1-based position in the file)
+and `"ref"` (omitted when the entry has none) instead of `"issue_id"`.
+
 ---
 
 ## 7. Command summary
@@ -1182,8 +1308,9 @@ taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]
+taskmgr create   --from <path> [--creator --agent --session]   # a set, all or nothing
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
-taskmgr show     <id>
+taskmgr show     <id> [more ids...] [--fields]
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
 taskmgr ready    [--limit]

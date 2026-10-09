@@ -157,6 +157,7 @@ func TestL4_CommentEdit_UpdatesComment(t *testing.T) {
 
 	// show --json should have 1 comment with revised body.
 	out, _, code = taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -283,6 +284,7 @@ func TestL4_CommentRm_RemovesFromResolved(t *testing.T) {
 
 	// show should have 0 comments.
 	out, _, code = taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -323,6 +325,7 @@ func TestL4_CommentRm_Idempotent(t *testing.T) {
 	taskmgr(t, root, "comment", "rm", issID, commentID)
 
 	out, _, code = taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show after second rm failed: %s", out)
 	}
@@ -358,6 +361,7 @@ func TestL4_ShowJSON_CommentsResolved(t *testing.T) {
 	taskmgr(t, root, "comment", "edit", issID, firstID, "revised first", "--author", "alice")
 
 	out, _, code = taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -430,6 +434,7 @@ func TestL4_ShowJSON_CommentReplaces(t *testing.T) {
 	taskmgr(t, root, "comment", "edit", issID, firstID, "revised", "--author", "alice")
 
 	out, _, code = taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -491,6 +496,7 @@ func TestL4_CommentLifecycle_EndToEnd(t *testing.T) {
 func showAndExpectCount(t *testing.T, root, issID string, want int) {
 	t.Helper()
 	out, _, code := taskmgr(t, root, "--json", "show", issID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}

@@ -110,6 +110,7 @@ func TestL4_Show_TruncatesHumanKeepsJSON(t *testing.T) {
 	}
 
 	jsonOut, stderr, code := taskmgr(t, root, "--json", "show", id)
+	jsonOut = firstShown(jsonOut)
 	if code != 0 {
 		t.Fatalf("show --json: exit %d, stderr: %s", code, stderr)
 	}
