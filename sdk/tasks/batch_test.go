@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
@@ -34,7 +36,7 @@ func TestResolveBatchRefs_ReplacesRefsAndKeepsIDs(t *testing.T) {
 		{Ref: "epic"},
 		{Ref: "other"},
 	}
-	got, err := resolveBatchRefs("x", entries, []string{"x-1", "x-2", "x-3"})
+	got, _, err := resolveBatchRefs("x", entries, []string{"x-1", "x-2", "x-3"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,19 +47,56 @@ func TestResolveBatchRefs_ReplacesRefsAndKeepsIDs(t *testing.T) {
 }
 
 func TestResolveBatchRefs_DuplicateRef_NamesTheSecondEntry(t *testing.T) {
-	_, err := resolveBatchRefs("x", []BatchEntry{{Ref: "a"}, {Ref: "a"}}, []string{"x-1", "x-2"})
-	var be *BatchEntryError
+	_, failed, err := resolveBatchRefs("x", []BatchEntry{{Ref: "a"}, {Ref: "a"}}, []string{"x-1", "x-2"})
 	var ve *ValidationError
-	if !errors.As(err, &be) || be.Index != 1 || !errors.As(err, &ve) || ve.Field != "ref" {
-		t.Errorf("want a ref validation error on entry index 1, got %v", err)
+	if failed != 1 || !errors.As(err, &ve) || ve.Field != "ref" {
+		t.Errorf("want a ref validation error on entry index 1, got index %d, %v", failed, err)
 	}
 }
 
 func TestResolveBatchRefs_RefWithStorePrefix_IsRefused(t *testing.T) {
-	_, err := resolveBatchRefs("x", []BatchEntry{{Ref: "x-abc123"}}, []string{"x-1"})
+	_, _, err := resolveBatchRefs("x", []BatchEntry{{Ref: "x-abc123"}}, []string{"x-1"})
 	var ve *ValidationError
 	if !errors.As(err, &ve) || ve.Field != "ref" {
 		t.Errorf("a ref that could equal an issue ID must be refused, got %v", err)
+	}
+}
+
+func TestBatchWriteOrder_WritesAnIssueAfterEveryIssueItNames(t *testing.T) {
+	issues := []*Issue{
+		{ID: "child", Parent: "epic", BlockedBy: []string{"schema"}},
+		{ID: "schema", Parent: "epic", Related: []string{"outside-the-set"}},
+		{ID: "epic"},
+	}
+	if got, want := batchWriteOrder(issues), []int{2, 1, 0}; !reflect.DeepEqual(got, want) {
+		t.Errorf("order = %v, want %v (epic, schema, child)", got, want)
+	}
+}
+
+func TestBatchWriteOrder_MutuallyRelated_KeepsEveryIssueOnce(t *testing.T) {
+	issues := []*Issue{{ID: "a", Related: []string{"b"}}, {ID: "b", Related: []string{"a"}}}
+	got := batchWriteOrder(issues)
+	slices.Sort(got)
+	if !reflect.DeepEqual(got, []int{0, 1}) {
+		t.Errorf("order = %v, want each index once", got)
+	}
+}
+
+func TestFindParentCycle_ReportsTheChainBackToStart(t *testing.T) {
+	idx := map[string]*Issue{
+		"a": {ID: "a", Parent: "b"},
+		"b": {ID: "b", Parent: "a"},
+		"c": {ID: "c", Parent: "a"},
+		"d": {ID: "d", Parent: "closed-or-gone"},
+	}
+	if got := findParentCycle(idx, "a"); got != "a -> b -> a" {
+		t.Errorf("cycle from a = %q", got)
+	}
+	// c hangs below a cycle but is not on it; d's parent is outside the index.
+	for _, id := range []string{"c", "d"} {
+		if got := findParentCycle(idx, id); got != "" {
+			t.Errorf("cycle from %s = %q, want none", id, got)
+		}
 	}
 }
 
@@ -135,6 +174,70 @@ func TestCreateBatch_CycleAcrossEntries_WritesNothing(t *testing.T) {
 		t.Fatalf("want the dependency-cycle validation error, got %v", err)
 	}
 	assertStoreEmpty(t, s)
+}
+
+func TestCreateBatch_ParentCycleAcrossEntries_WritesNothing(t *testing.T) {
+	s, _ := batchStore(t)
+	_, err := s.CreateBatch([]BatchEntry{
+		{Ref: "a", CreateInput: CreateInput{Title: "a", Parent: "b"}},
+		{Ref: "b", CreateInput: CreateInput{Title: "b", Parent: "a"}},
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "parent" {
+		t.Fatalf("want the parent-cycle validation error, got %v", err)
+	}
+	assertStoreEmpty(t, s)
+}
+
+func TestCreateBatch_EntryRelatedToItself_WritesNothing(t *testing.T) {
+	s, _ := batchStore(t)
+	_, err := s.CreateBatch([]BatchEntry{{Ref: "a", CreateInput: CreateInput{Title: "a", Related: []string{"a"}}}})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "related" {
+		t.Fatalf("want the self-related validation error, got %v", err)
+	}
+	assertStoreEmpty(t, s)
+}
+
+// A set cut short between two writes must leave only issues whose edges
+// resolve, so the files land referenced-first whatever the entry order.
+func TestCreateBatch_WritesReferencedEntriesFirst(t *testing.T) {
+	s, m := batchStore(t)
+	diskFull := errors.New("simulated disk full")
+	// The child comes first in the set. Were it also written first, the epic's
+	// failing write would find it on disk and have to remove it — and that
+	// removal is rigged to fail and show up in the error.
+	m.FailOn("WriteAtomic", s.filePath("x-epic01"), diskFull)
+	m.FailOn("Remove", s.filePath("x-child1"), errors.New("the child was on disk before its parent"))
+
+	_, err := s.CreateBatch([]BatchEntry{
+		{CreateInput: CreateInput{ID: "x-child1", Title: "child", Parent: "e"}},
+		{Ref: "e", CreateInput: CreateInput{ID: "x-epic01", Title: "epic", Type: TypeEpic}},
+	})
+	var be *BatchEntryError
+	if !errors.Is(err, diskFull) || !errors.As(err, &be) || be.Index != 1 {
+		t.Fatalf("want the disk error on the epic (entry index 1), got %v", err)
+	}
+	if strings.Contains(err.Error(), "before its parent") {
+		t.Errorf("the child was written before the epic it names: %v", err)
+	}
+	assertStoreEmpty(t, s)
+}
+
+func TestCreateBatch_Denied_CarriesTheHintsOfTheEntriesThatPassed(t *testing.T) {
+	fake := &exec.Fake{Func: func(spec exec.Spec) exec.Result {
+		if bytes.Contains(spec.Stdin, []byte(`"second"`)) {
+			return exec.Deny(1, "no")
+		}
+		return exec.Allow("hint for the first")
+	}}
+	s, _ := hookTestStore(t, fake, []Hook{{ID: "gate", Event: "pre-create", Run: []string{"g"}}})
+
+	_, err := s.CreateBatch([]BatchEntry{{CreateInput: CreateInput{Title: "first"}}, {CreateInput: CreateInput{Title: "second"}}})
+	var de *HookDeniedError
+	if !errors.As(err, &de) || !reflect.DeepEqual(de.Hints, []string{"hint for the first"}) {
+		t.Fatalf("want the denial to carry the first entry's hint, got %v (%+v)", err, de)
+	}
 }
 
 func TestCreateBatch_InvalidField_WritesNothing(t *testing.T) {

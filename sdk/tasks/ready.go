@@ -94,6 +94,24 @@ type BlockedIssue struct {
 	BlockedBy []Ref
 }
 
+// findParentCycle returns the parent chain that leads from start back to start,
+// or "" when start is not among its own ancestors.
+func findParentCycle(idx map[string]*Issue, start string) string {
+	path := []string{start}
+	seen := map[string]bool{start: true}
+	for id := idx[start].Parent; id != ""; id = idx[id].Parent {
+		path = append(path, id)
+		if id == start {
+			return strings.Join(path, " -> ")
+		}
+		if _, ok := idx[id]; !ok || seen[id] {
+			return ""
+		}
+		seen[id] = true
+	}
+	return ""
+}
+
 // findCycle returns a human-readable cycle path if following BlockedBy edges
 // from start leads back into the current traversal, or "" if acyclic.
 //

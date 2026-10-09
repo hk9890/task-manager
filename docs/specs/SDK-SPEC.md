@@ -914,22 +914,27 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
 
   Under **one** lock the engine allocates every ID, validates every entry against
   the store *as it will be once the whole set exists* — so a forward reference
-  resolves and a cycle through several entries is found — and runs every entry's
-  `pre-create` hooks, all before the first write (HOOK-SPEC §4). The first entry
-  that is refused aborts the set: nothing is written and the error is a
-  `*BatchEntryError` carrying the entry's zero-based `Index`, its `Ref`, and as `Err`
-  the error a single `Create` of that entry returns, so `errors.Is` / `errors.As`
-  see through to `*ValidationError`, `*HookDeniedError` or a sentinel. An empty set
-  is a `*ValidationError`. The results are in entry order; every issue of a set
-  shares one `Created` instant.
+  resolves — and runs every entry's `pre-create` hooks, all before the first write
+  (HOOK-SPEC §4). Two checks exist only because a set can name issues that do not
+  exist yet: a `blocked_by` cycle and a **parent cycle** through several entries are
+  both refused, and so is an entry `related` to itself. The first entry that is
+  refused aborts the set: nothing is written and the error is a `*BatchEntryError`
+  (§6). A `*HookDeniedError` inside it carries the hints of the entries that passed
+  before it, since no result will. An empty set is a `*ValidationError`. The results
+  are in entry order; every issue of a set shares one `Created` instant.
+
+  `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,
+  so the two cannot diverge.
 
   The guarantee covers **refusal, not a crash**. Each file lands atomically (§7),
-  but there is no multi-file transaction: a write that fails midway removes the
-  issues already written and reports any it could not remove, while a process
-  killed between two writes leaves the earlier issues filed. A journal that closed
-  that gap was rejected — it would be the store's only recovery path, exercised
-  almost never, for a failure that leaves valid issues behind rather than a
-  corrupt store.
+  but there is no multi-file transaction. The set is written **referenced-first** —
+  an issue after every issue of the set its edges name — so whatever a cut-short set
+  leaves on disk has edges that resolve: a write that fails midway removes the
+  issues already written and reports any it could not remove, and a process killed
+  between two writes leaves the earlier issues filed. Two entries `related` to each
+  other have no such order; a kill between exactly those two writes leaves one with
+  a dangling `related`. A journal that closed the gap was rejected — it would be the
+  store's only recovery path, exercised almost never.
 - **`Import`** is a direct write of a complete issue **end-state** from an external
   system — not a `Create`→`Update`→`Close` replay. Unlike `Create` it takes the
   final `Status` (including `closed`) and the original `Created`/`Updated`/`Closed`
@@ -1092,9 +1097,23 @@ returns `ErrNoStore` when there is no local store to promote. A corrupt
 `config.yaml` or `mapping.yaml`, or a registry with a duplicate canonical `path`,
 is reported as a (non-sentinel) configuration error (CONFIG-SPEC §2–§3).
 
-`ErrAlreadyExists` is returned by `Create` and `Import` when the caller supplies an
-explicit `ID` the store already holds; allocated IDs retry against the existing set
-and cannot hit it.
+`ErrAlreadyExists` is returned by `Create`, `CreateBatch` and `Import` when the caller
+supplies an explicit `ID` the store already holds, and by `CreateBatch` when two entries
+of one set supply the same `ID`; allocated IDs retry against the existing set and cannot
+hit it.
+
+`CreateBatch` wraps the error of the entry at fault, whatever its kind, so the caller
+learns which entry to repair:
+
+```go
+type BatchEntryError struct {
+    Index int    // zero-based position of the entry in the set
+    Ref   string // the entry's Ref, empty when it has none
+    Err   error  // what a single Create of that entry returns
+}
+func (e *BatchEntryError) Error() string // "entry 3 (ref \"schema\"): …"
+func (e *BatchEntryError) Unwrap() error
+```
 
 `ErrPackageMissing` distinguishes a `use:` entry whose directory is simply not there
 from one that is there and unusable — "install this" rather than "repair this". It is

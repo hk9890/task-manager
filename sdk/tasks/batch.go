@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // batch.go — the pure half of CreateBatch: the entry type, the error that names
-// a refused entry, and the rule that turns a set's local refs into issue IDs.
+// a refused entry, the rule that turns a set's local refs into issue IDs, and
+// the order a set is written in.
 package tasks
 
 import (
@@ -54,21 +55,22 @@ func (e *BatchEntryError) Unwrap() error { return e.Err }
 // resolveBatchRefs returns the entries as plain create inputs, with every edge
 // that names a ref of the set replaced by the ID allocated to that entry; ids[i]
 // is the ID of entries[i]. An edge that names no ref is left for the reference
-// check, which accepts it only as the ID of an existing issue.
+// check to resolve as the ID of an existing issue. On a refusal, failed is the
+// index of the entry at fault.
 //
 // A ref may not carry the store prefix: it could then equal the ID of an existing
 // issue, and an edge naming it would silently bind to the wrong one.
-func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) ([]CreateInput, error) {
+func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs []CreateInput, failed int, err error) {
 	idOf := make(map[string]string, len(entries))
 	for i, e := range entries {
 		if e.Ref == "" {
 			continue
 		}
 		if strings.HasPrefix(e.Ref, prefix+"-") {
-			return nil, &BatchEntryError{i, e.Ref, invalid("ref", "%q carries the store prefix %q, which is reserved for issue IDs", e.Ref, prefix)}
+			return nil, i, invalid("ref", "%q carries the store prefix %q, which is reserved for issue IDs", e.Ref, prefix)
 		}
 		if _, dup := idOf[e.Ref]; dup {
-			return nil, &BatchEntryError{i, e.Ref, invalid("ref", "%q is already used by an earlier entry", e.Ref)}
+			return nil, i, invalid("ref", "%q is already used by an earlier entry", e.Ref)
 		}
 		idOf[e.Ref] = ids[i]
 	}
@@ -78,7 +80,7 @@ func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) ([]Crea
 		}
 		return edge
 	}
-	inputs := make([]CreateInput, len(entries))
+	inputs = make([]CreateInput, len(entries))
 	for i, e := range entries {
 		in := e.CreateInput
 		in.ID = ids[i]
@@ -87,7 +89,7 @@ func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) ([]Crea
 		in.Related = mapStrings(in.Related, resolve)
 		inputs[i] = in
 	}
-	return inputs, nil
+	return inputs, 0, nil
 }
 
 func mapStrings(in []string, f func(string) string) []string {
@@ -99,4 +101,36 @@ func mapStrings(in []string, f func(string) string) []string {
 		out[i] = f(v)
 	}
 	return out
+}
+
+// batchWriteOrder returns the indexes of issues in the order to write them: an
+// issue after every issue of the set its edges name. Each file on disk then
+// references only files already there, so a set cut short between two writes
+// leaves issues the engine accepts. Two issues that are related to each other
+// have no such order and are written in entry order.
+func batchWriteOrder(issues []*Issue) []int {
+	indexOf := make(map[string]int, len(issues))
+	for i, iss := range issues {
+		indexOf[iss.ID] = i
+	}
+	order := make([]int, 0, len(issues))
+	visited := make([]bool, len(issues))
+	var visit func(i int)
+	visit = func(i int) {
+		if visited[i] {
+			return
+		}
+		visited[i] = true
+		iss := issues[i]
+		for _, id := range append(append([]string{iss.Parent}, iss.BlockedBy...), iss.Related...) {
+			if j, inSet := indexOf[id]; inSet {
+				visit(j)
+			}
+		}
+		order = append(order, i)
+	}
+	for i := range issues {
+		visit(i)
+	}
+	return order
 }

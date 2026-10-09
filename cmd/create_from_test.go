@@ -168,6 +168,12 @@ func TestCreateFrom_RefusedEntry_WritesNothingAndNamesIt(t *testing.T) {
 		"cycle":        {"- ref: a\n  title: a\n  blocked_by: [b]\n- ref: b\n  title: b\n  blocked_by: [a]\n", "dependency cycle"},
 		"no title":     {"- title: ok\n- type: bug\n", "entry 2"},
 		"empty file":   {"", "the set is empty"},
+		"parent cycle": {"- ref: a\n  title: a\n  parent: b\n- ref: b\n  title: b\n  parent: a\n", "parent cycle"},
+		"self related": {"- ref: a\n  title: a\n  related: [a]\n", "cannot relate to itself"},
+		// Each of these is something a lenient YAML decoder skips without a word.
+		"second document": {"- title: one\n---\n- title: two\n", "more than one YAML document"},
+		"empty list item": {"-\n- title: ok\n", "entry 1 is empty"},
+		"not a list":      {"title: a\n", "must hold a YAML list"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -207,6 +213,19 @@ func TestCreateFrom_WithAPerIssueFlag_IsMisuse(t *testing.T) {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, errOut)
 		}
+	}
+	if n := openIssueCount(t, root); n != 0 {
+		t.Errorf("wrote %d issues", n)
+	}
+}
+
+// An empty --from is what `--from "$f"` gives with $f unset. It must not fall
+// through to the single-issue form and file whatever --title says.
+func TestCreateFrom_EmptyPath_IsMisuseAndFilesNothing(t *testing.T) {
+	root := newStore(t)
+	out, errOut, code := run(t, "--dir", root, "create", "--from", "", "--title", "x")
+	if code != 1 || out != "" || !strings.Contains(errOut, "--from needs a file path") {
+		t.Errorf("exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
 	if n := openIssueCount(t, root); n != 0 {
 		t.Errorf("wrote %d issues", n)

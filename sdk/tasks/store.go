@@ -720,32 +720,35 @@ func (s *Store) allClosed() ([]*Issue, error) {
 // vfs seam and passes the union to newIDFromNames, which retries against those
 // existing names as defence in depth so an ID never collides within one store.
 // If closed/ does not yet exist, it is treated as empty (TASK-STORAGE-SPEC §3).
-//
-// taken lists IDs that are allocated but not on disk yet — the earlier entries of
-// a CreateBatch set.
-func (s *Store) nextID(taken ...string) (string, error) {
-	hotEntries, err := s.fs.ReadDir(s.dir)
+func (s *Store) nextID() (string, error) {
+	names, err := s.issueFileNames()
 	if err != nil {
 		return "", err
 	}
-	names := make([]string, 0, len(hotEntries)+len(taken))
-	for _, id := range taken {
-		names = append(names, id+".md")
+	return newIDFromNames(s.cfg.Prefix, names), nil
+}
+
+// issueFileNames lists the entry names of the hot directory and of closed/: the
+// names a fresh ID must not repeat.
+func (s *Store) issueFileNames() ([]string, error) {
+	hotEntries, err := s.fs.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
 	}
+	names := make([]string, 0, len(hotEntries))
 	for _, e := range hotEntries {
 		names = append(names, e.Name())
 	}
 
-	// Also scan closed/ for the high-water mark. Absent dir → treat as empty.
+	// Absent dir → treat as empty.
 	closedEntries, err := s.fs.ReadDir(s.closedDir())
 	if err != nil && !vfs.IsNotExist(err) {
-		return "", fmt.Errorf("scan closed dir: %w", err)
+		return nil, fmt.Errorf("scan closed dir: %w", err)
 	}
 	for _, e := range closedEntries {
 		names = append(names, e.Name())
 	}
-
-	return newIDFromNames(s.cfg.Prefix, names), nil
+	return names, nil
 }
 
 // validateNewID checks a caller-supplied issue ID (CreateInput.ID): it must
@@ -770,20 +773,49 @@ func (s *Store) validateNewID(id string) error {
 
 // resolveID returns the issue ID to use: a freshly allocated one when raw is
 // empty (after trimming), or raw itself once validated as a usable new ID.
-// taken lists the IDs already given to earlier entries of the same CreateBatch
-// set, which neither a fresh nor a supplied ID may repeat. Caller holds the lock.
-func (s *Store) resolveID(raw string, taken ...string) (string, error) {
+// Caller holds the lock.
+func (s *Store) resolveID(raw string) (string, error) {
 	id := strings.TrimSpace(raw)
 	if id == "" {
-		return s.nextID(taken...)
+		return s.nextID()
 	}
 	if err := s.validateNewID(id); err != nil {
 		return "", err
 	}
-	if slices.Contains(taken, id) {
-		return "", fmt.Errorf("%w: %s", ErrAlreadyExists, id)
-	}
 	return id, nil
+}
+
+// allocateIDs returns one ID per entry of a set: the entry's own when it supplies
+// one, a fresh one otherwise, none repeated inside the set. The store is listed
+// once for the whole set, and only when an entry needs a fresh ID. On a refusal,
+// failed is the index of the entry at fault. Caller holds the lock.
+func (s *Store) allocateIDs(entries []BatchEntry) (ids []string, failed int, err error) {
+	ids = make([]string, len(entries))
+	var stored []string
+	for i, e := range entries {
+		id := strings.TrimSpace(e.ID)
+		switch {
+		case id == "":
+			if stored == nil {
+				if stored, err = s.issueFileNames(); err != nil {
+					return nil, i, err
+				}
+			}
+			taken := stored
+			for _, earlier := range ids[:i] {
+				taken = append(taken, earlier+FileExt)
+			}
+			id = newIDFromNames(s.cfg.Prefix, taken)
+		case slices.Contains(ids[:i], id):
+			return nil, i, fmt.Errorf("%w: %s", ErrAlreadyExists, id)
+		default:
+			if err := s.validateNewID(id); err != nil {
+				return nil, i, err
+			}
+		}
+		ids[i] = id
+	}
+	return ids, 0, nil
 }
 
 // buildIssue assembles an *Issue from the shared fields common to Create and
@@ -914,34 +946,11 @@ type CreateInput struct {
 // (returning *HookDeniedError, nothing written); post-create hooks notify after
 // it commits. Hints and post-hook warnings are returned in the MutationResult.
 func (s *Store) Create(in CreateInput) (*MutationResult, error) {
-	hs, err := s.hooks()
+	results, _, err := s.createSet([]BatchEntry{{CreateInput: in}})
 	if err != nil {
 		return nil, err
 	}
-	var created *Issue
-	var preHints []string
-	err = s.withLock(func() error {
-		id, err := s.resolveID(in.ID)
-		if err != nil {
-			return err
-		}
-		now := s.now()
-		iss := buildIssue(id, in.fields(), StatusOpen, now, now)
-		idx, err := s.validateAndIndex(iss)
-		if err != nil {
-			return err
-		}
-		preHints, err = s.gateWrite(hs, transCreate, nil, iss, idx, func() error { return s.writeIssue(iss) })
-		if err != nil {
-			return err
-		}
-		created = iss
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return s.postFinish(hs, true, transCreate, nil, created, preHints), nil
+	return results[0], nil
 }
 
 func (in CreateInput) fields() issueFields {
@@ -977,59 +986,84 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 	if len(entries) == 0 {
 		return nil, invalid("entries", "the set is empty")
 	}
+	results, failed, err := s.createSet(entries)
+	if failed >= 0 {
+		return nil, &BatchEntryError{Index: failed, Ref: entries[failed].Ref, Err: err}
+	}
+	return results, err
+}
+
+// createSet is the one create path: Create runs it with a single entry. When an
+// entry is at fault, failed is its index and err the error for that entry alone;
+// failed is -1 on success and for a failure no entry owns.
+func (s *Store) createSet(entries []BatchEntry) (results []*MutationResult, failed int, err error) {
 	hs, err := s.hooks()
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	issues := make([]*Issue, len(entries))
 	preHints := make([][]string, len(entries))
-	refused := func(i int, err error) error { return &BatchEntryError{Index: i, Ref: entries[i].Ref, Err: err} }
+	failed = -1
 	err = s.withLock(func() error {
-		ids := make([]string, len(entries))
-		for i, e := range entries {
-			id, err := s.resolveID(e.ID, ids[:i]...)
-			if err != nil {
-				return refused(i, err)
-			}
-			ids[i] = id
-		}
-		inputs, err := resolveBatchRefs(s.cfg.Prefix, entries, ids)
+		ids, i, err := s.allocateIDs(entries)
 		if err != nil {
+			failed = i
 			return err
 		}
-		idx, _, err := s.index()
+		inputs, i, err := resolveBatchRefs(s.cfg.Prefix, entries, ids)
 		if err != nil {
+			failed = i
 			return err
 		}
 		now := s.now()
 		for i, in := range inputs {
 			issues[i] = buildIssue(in.ID, in.fields(), StatusOpen, now, now)
 			if err := s.validateWrite(issues[i]); err != nil {
-				return refused(i, err)
+				failed = i
+				return err
 			}
-			idx[in.ID] = issues[i]
 		}
-		// The index now holds the whole set, so an edge to a later entry resolves
-		// and a cycle that runs through several entries is found.
+		idx, _, err := s.index()
+		if err != nil {
+			return err
+		}
+		for _, iss := range issues {
+			idx[iss.ID] = iss
+		}
+		// The index holds the whole set, so an edge to a later entry resolves and
+		// a cycle that runs through several entries is found.
 		for i, iss := range issues {
 			if err := s.checkRefsWith(iss, idx); err != nil {
-				return refused(i, err)
+				failed = i
+				return err
+			}
+			if cycle := findParentCycle(idx, iss.ID); cycle != "" {
+				failed = i
+				return invalid("parent", "parent cycle: %s", cycle)
 			}
 		}
+		var allowedHints []string
 		for i, iss := range issues {
 			hints, denial, err := s.runPre(hs, transCreate.preEvent(), nil, iss, idx)
-			if err != nil {
-				return refused(i, err)
-			}
 			if denial != nil {
-				return refused(i, denial)
+				// The hints of the entries that passed would otherwise be lost
+				// with the set.
+				denial.Hints = append(allowedHints, denial.Hints...)
+				err = denial
+			}
+			if err != nil {
+				failed = i
+				return err
 			}
 			preHints[i] = hints
+			allowedHints = append(allowedHints, hints...)
 		}
-		for i, iss := range issues {
-			if err := s.writeIssue(iss); err != nil {
-				s.logIOError(string(transCreate), iss.ID, err)
-				return errors.Join(refused(i, err), s.removeCreated(issues[:i+1]))
+		order := batchWriteOrder(issues)
+		for n, i := range order {
+			if err := s.writeIssue(issues[i]); err != nil {
+				s.logIOError(string(transCreate), issues[i].ID, err)
+				failed = i
+				return errors.Join(err, s.removeCreated(issues, order[:n+1]))
 			}
 		}
 		for _, iss := range issues {
@@ -1038,19 +1072,24 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, failed, err
 	}
-	results := make([]*MutationResult, len(issues))
+	results = make([]*MutationResult, len(issues))
 	for i, iss := range issues {
 		results[i] = s.postFinish(hs, true, transCreate, nil, iss, preHints[i])
 	}
-	return results, nil
+	return results, -1, nil
 }
 
-// removeCreated deletes the files of issues a failed CreateBatch already wrote,
-// the last of which may be half-written (a sidecar without its .md). It returns
-// what it could not remove, so the caller's error names every issue left behind.
-func (s *Store) removeCreated(issues []*Issue) error {
+// removeCreated deletes the files of the issues a failed set already wrote —
+// those at the given indexes, the last of which may be half-written (a sidecar
+// without its .md). It returns what it could not remove, so the caller's error
+// names every issue left behind.
+func (s *Store) removeCreated(all []*Issue, written []int) error {
+	issues := make([]*Issue, len(written))
+	for n, i := range written {
+		issues[n] = all[i]
+	}
 	var left []error
 	for _, iss := range issues {
 		for _, path := range []string{s.filePath(iss.ID), s.contentPath(iss.ID)} {

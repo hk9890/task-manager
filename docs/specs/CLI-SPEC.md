@@ -688,8 +688,7 @@ Create a new issue and allocate its ID.
 | `--parent <id>` | — | Parent (epic/grouping) issue ID. |
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
 | `--related <id>` | — | Related issue ID; repeatable. |
-
-| `--from <path>` | — | Create a set of issues from a YAML file (`-` = stdin). Replaces every option above except `--creator`, `--agent` and `--session`; see below. |
+| `--from <path>` | — | Create a set of issues from a YAML file (`-` = stdin). Replaces every option above except `--creator`, `--agent` and `--session`, `--title` included; see below. |
 
 - **Output:** the new ID (`{"id", "store"}` in JSON; `store` is the registry name of
   the store it landed in, omitted for a local store — §6).
@@ -719,10 +718,16 @@ above under their JSON names, plus `ref`:
 ```
 
 - **Keys:** `ref`, `title`, `type`, `priority`, `assignee`, `labels`, `description`,
-  `parent`, `blocked_by`, `related`. Any other key is an error: a misspelt
-  `blocked-by` would otherwise file the issue without its edge.
+  `parent`, `blocked_by`, `related`.
+- **The file is read strictly.** It holds exactly one YAML document, a list, with no
+  empty item. An unknown key, a second document after `---`, an empty list item and
+  a top-level mapping are each an error. A lenient reader skips all four without a
+  word, and each one is an issue or an edge the caller believes was filed.
 - **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
-  any order. A `ref` must be unique and must not carry the store prefix.
+  any order. A `ref` must be unique and must not carry the store prefix. A parent
+  cycle or a `blocked_by` cycle between entries is refused.
+- **An empty path** (`--from ""`, what an unset shell variable gives) is misuse. It
+  never falls back to the single-issue form.
 - **All or nothing.** Every entry is validated and passes its `pre-create` hooks
   before the first issue is written. A refusal exits `1`, writes nothing, and names
   the entry: `taskmgr: entry 3 (ref "schema"): …`. Without this, a set refused at its

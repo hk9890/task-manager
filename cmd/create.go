@@ -73,8 +73,11 @@ var createCmd = &cobra.Command{
 	Short: "Create a new issue, or a set of issues from a file",
 	Args:  cobra.NoArgs,
 	PreRunE: func(cmd *cobra.Command, args []string) error {
-		if createFlags.from == "" {
+		if !cmd.Flags().Changed("from") {
 			return nil
+		}
+		if createFlags.from == "" {
+			return &usageError{cmd: cmd, msg: `--from needs a file path, or "-" for stdin`}
 		}
 		var perIssue []string
 		cmd.LocalNonPersistentFlags().VisitAll(func(f *pflag.Flag) {
@@ -85,8 +88,8 @@ var createCmd = &cobra.Command{
 		if len(perIssue) > 0 {
 			return &usageError{cmd: cmd, msg: "--from takes every issue from the file; it excludes " + strings.Join(perIssue, ", ")}
 		}
-		// Cobra checks required flags after PreRunE. The file carries the titles,
-		// so --title counts as given.
+		// --title is the one cobra-required flag, checked after PreRunE. The file
+		// carries the titles, so it counts as given.
 		cmd.Flags().Lookup("title").Changed = true
 		return nil
 	},
@@ -95,7 +98,7 @@ var createCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if createFlags.from != "" {
+		if cmd.Flags().Changed("from") {
 			return createFrom(cmd, s)
 		}
 
@@ -154,11 +157,8 @@ func createFrom(cmd *cobra.Command, s *tasks.Store) error {
 	if err != nil {
 		return err
 	}
-	var file []createFromEntry
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	// A misspelt key (blocked-by) would otherwise drop the edge and file the issue without it.
-	dec.KnownFields(true)
-	if err := dec.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
+	file, err := parseCreateFromFile(raw)
+	if err != nil {
 		return fmt.Errorf("--from %s: %w", createFlags.from, err)
 	}
 	by, err := resolveActor(cmd, createFlags.creator, createFlags.agent, createFlags.session)
@@ -204,6 +204,37 @@ func createFrom(cmd *cobra.Command, s *tasks.Store) error {
 	return nil
 }
 
+// parseCreateFromFile reads the one YAML list a --from file holds. Everything a
+// lenient decoder would skip is refused instead, because each skipped piece is an
+// issue or an edge the caller believes was filed: a misspelt key (blocked-by), an
+// empty list item, and a second document after "---".
+func parseCreateFromFile(raw []byte) ([]createFromEntry, error) {
+	var shape yaml.Node
+	if err := yaml.Unmarshal(raw, &shape); err != nil {
+		return nil, err
+	}
+	if len(shape.Content) > 0 && shape.Content[0].Kind != yaml.SequenceNode {
+		return nil, errors.New("the file must hold a YAML list of issues")
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	var items []*createFromEntry
+	if err := dec.Decode(&items); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if err := dec.Decode(new(yaml.Node)); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the file holds more than one YAML document; put every issue in one list")
+	}
+	entries := make([]createFromEntry, len(items))
+	for i, item := range items {
+		if item == nil {
+			return nil, fmt.Errorf("entry %d is empty", i+1)
+		}
+		entries[i] = *item
+	}
+	return entries, nil
+}
+
 // readFileOrStdin reads from stdin when path is "-", otherwise from the file.
 func readFileOrStdin(path string) ([]byte, error) {
 	if path == "-" {
@@ -214,7 +245,7 @@ func readFileOrStdin(path string) ([]byte, error) {
 
 func init() {
 	f := createCmd.Flags()
-	f.StringVar(&createFlags.title, "title", "", "issue title (required)")
+	f.StringVar(&createFlags.title, "title", "", "issue title (required unless --from)")
 	f.StringVar(&createFlags.description, "description", "", "issue description (markdown body)")
 	f.StringVar(&createFlags.descriptionFile, "description-file", "", `read description from a file ("-" for stdin)`)
 	f.StringVar(&createFlags.typ, "type", "task", "issue type (task|bug|feature|epic|chore|doc)")
@@ -226,7 +257,7 @@ func init() {
 	f.StringVar(&createFlags.parent, "parent", "", "parent issue ID")
 	f.StringSliceVar(&createFlags.blockedBy, "blocked-by", nil, "blocker issue ID (repeatable)")
 	f.StringSliceVar(&createFlags.related, "related", nil, "related issue ID (repeatable)")
-	f.StringVar(&createFlags.from, "from", "", `create a set of issues from a YAML file ("-" for stdin), all or nothing; replaces the per-issue flags`)
 	_ = createCmd.MarkFlagRequired("title")
+	f.StringVar(&createFlags.from, "from", "", `create a set of issues from a YAML file ("-" for stdin), all or nothing; replaces the per-issue flags`)
 	rootCmd.AddCommand(createCmd)
 }
