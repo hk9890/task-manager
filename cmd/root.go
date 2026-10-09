@@ -153,6 +153,7 @@ func Run(args []string, stdoutW, stderrW io.Writer) int {
 	case errors.As(err, &ue):
 		// Misinvocation: render the compact help block (purpose, usage, example,
 		// flags/subcommands, --help pointer) instead of the bare one-liner.
+		ue.hint = filterHint(ue, args)
 		renderUsageError(ue)
 	case errors.As(err, &se):
 		// Output already emitted to stdout (e.g. a hook_denied JSON object).
