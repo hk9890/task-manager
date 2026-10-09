@@ -269,14 +269,15 @@ func TestPackageRepoRm_JSON_NamesUsedPackagesUnderStillUsed(t *testing.T) {
 		t.Fatal("setup: package add")
 	}
 
-	got := repoRmJSON(t, filepath.Base(origin))
+	name := filepath.Base(origin)
+	got := repoRmJSON(t, name)
 	if want := []any{"task-writing"}; !reflect.DeepEqual(got["still_used"], want) {
 		t.Errorf("still_used = %v, want %v", got["still_used"], want)
 	}
 	if _, ok := got["packages"]; ok {
 		t.Errorf("output = %v, want no packages key", got)
 	}
-	if got["name"] != filepath.Base(origin) || got["path"] == "" {
+	if path, _ := got["path"].(string); got["name"] != name || filepath.Base(path) != name {
 		t.Errorf("output = %v, want the name and path of the removed repository", got)
 	}
 }

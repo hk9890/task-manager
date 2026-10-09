@@ -79,20 +79,27 @@ func TestFieldUnchanged_ComparesEveryInputTheConstraintReads(t *testing.T) {
 
 // ── the rule, through the store (L2) ────────────────────────────────────────
 
-// seedInvalidCreator hand-edits an issue's frontmatter to carry a creator past
-// its length limit — a value `UpdateInput` has no field for, so no command can
-// rewrite it. It is the shape a restore or an older build leaves behind.
-func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+// seedFrontmatter hand-edits an issue's file to open its frontmatter with the
+// given YAML lines — the way to store a value no write would accept.
+func seedFrontmatter(t *testing.T, fs vfs.FS, s *Store, id, lines string) {
 	t.Helper()
 	path := filepath.Join(s.dir, id+FileExt)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read issue: %v", err)
 	}
-	raw := strings.Replace(string(data), "---\n", "---\ncreator: "+strings.Repeat("n", maxCreatorLen+1)+"\n", 1)
+	raw := strings.Replace(string(data), "---\n", "---\n"+lines, 1)
 	if err := fs.WriteAtomic(path, []byte(raw), 0o644); err != nil {
 		t.Fatalf("seed issue: %v", err)
 	}
+}
+
+// seedInvalidCreator hand-edits an issue's frontmatter to carry a creator past
+// its length limit — a value `UpdateInput` has no field for, so no command can
+// rewrite it. It is the shape a restore or an older build leaves behind.
+func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+	t.Helper()
+	seedFrontmatter(t, fs, s, id, "creator: "+strings.Repeat("n", maxCreatorLen+1)+"\n")
 }
 
 func TestClose_AnInvalidStoredFieldDoesNotFreezeTheIssue(t *testing.T) {

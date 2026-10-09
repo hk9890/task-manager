@@ -18,8 +18,6 @@ package tasks
 
 import (
 	"errors"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -163,15 +161,7 @@ func TestUpdate_ParentOutsideTheIDGrammar_IsRefused(t *testing.T) {
 // blocker — the shape a build that did not check the grammar left behind.
 func seedBlocker(t *testing.T, fs vfs.FS, s *Store, id, value string) {
 	t.Helper()
-	path := filepath.Join(s.dir, id+FileExt)
-	data, err := fs.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read issue: %v", err)
-	}
-	raw := strings.Replace(string(data), "---\n", "---\nblocked_by:\n  - "+value+"\n", 1)
-	if err := fs.WriteAtomic(path, []byte(raw), 0o644); err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
+	seedFrontmatter(t, fs, s, id, "blocked_by:\n  - "+value+"\n")
 }
 
 func TestUpdate_StoredEdgeOutsideTheIDGrammar_DoesNotFreezeTheIssue(t *testing.T) {
@@ -219,5 +209,90 @@ func TestUpdate_StoredEdgeOutsideTheIDGrammar_DoesNotFreezeTheIssue(t *testing.T
 	}
 	if err := s.AddDep(iss.ID, other.ID); err != nil {
 		t.Errorf("dep add after the repair: %v", err)
+	}
+}
+
+// ── a value already stored, on the read side (L2) ───────────────────────────
+
+// The write path keeps a stored value, so the read path meets it. Joined onto
+// closed/ it named the open issue's own file: the blocker counted as resolved
+// and the issue stayed listed as ready.
+func TestReady_StoredBlockerOutsideTheIDGrammar_IsNotResolved(t *testing.T) {
+	s, fs := newMemStore(t)
+	open, err := unwrap(s.Create(CreateInput{Title: "open"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBlocker(t, fs, s, iss.ID, "../"+open.ID)
+
+	ready, err := s.Ready()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 1 || ready[0].ID != open.ID {
+		t.Errorf("ready = %v, want only %s: a blocker that names no issue is not resolved", ids(ready), open.ID)
+	}
+	blocked, err := s.Blocked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || blocked[0].Issue.ID != iss.ID {
+		t.Errorf("blocked holds %d issues, want only %s", len(blocked), iss.ID)
+	}
+}
+
+// seedNote writes a markdown file that is no issue beside the store, where
+// "../../notes" joined onto a store directory lands.
+func seedNote(t *testing.T, fs vfs.FS) {
+	t.Helper()
+	if err := fs.WriteAtomic("/notes.md", []byte("# notes\n"), 0o644); err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+}
+
+func TestDetail_StoredEdgeOutsideTheIDGrammar_IsNotResolved(t *testing.T) {
+	s, fs := newMemStore(t)
+	open, err := unwrap(s.Create(CreateInput{Title: "open"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedNote(t, fs)
+	seedFrontmatter(t, fs, s, iss.ID, "parent: ../"+open.ID+"\nblocked_by:\n  - ../"+open.ID+"\nrelated:\n  - ../../notes\n")
+
+	d, err := s.Detail(iss.ID)
+	if err != nil {
+		t.Fatalf("an issue that stores such a value must stay readable: %v", err)
+	}
+	if d.ParentRef != nil || len(d.BlockedByRefs)+len(d.RelatedRefs) != 0 {
+		t.Errorf("parent %v, blockers %v, related %v; want none resolved", d.ParentRef, d.BlockedByRefs, d.RelatedRefs)
+	}
+}
+
+func TestRemoveRelated_TargetOutsideTheIDGrammar_HasNoInverseSide(t *testing.T) {
+	s, fs := newMemStore(t)
+	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedNote(t, fs)
+	seedFrontmatter(t, fs, s, iss.ID, "related:\n  - ../../notes\n")
+
+	if err := s.RemoveRelated(iss.ID, "../../notes"); err != nil {
+		t.Fatalf("rel rm of the invalid value is the repair and must not read the file it names: %v", err)
+	}
+	got, err := s.Get(iss.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Related) != 0 {
+		t.Errorf("related = %v, want the value removed", got.Related)
 	}
 }

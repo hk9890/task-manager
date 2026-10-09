@@ -1593,6 +1593,11 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 
 		// Inverse side: best-effort. Absent or closed → leave it (a closed issue
 		// is immutable, and the active view never derives inverses from closed/).
+		// A value outside the ID grammar names no issue, so it has no inverse
+		// side, and it is never joined onto a store directory to look for one.
+		if !validIssueID(otherID) {
+			return nil
+		}
 		other, err := s.Get(otherID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
@@ -1650,10 +1655,10 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	// through only a value the stored issue already carried — so it is passed
 	// over here rather than refused a second time without that tolerance.
 	refExists := func(id string) bool {
-		if !validIssueID(id) {
+		if _, ok := idx[id]; ok {
 			return true
 		}
-		if _, ok := idx[id]; ok {
+		if !validIssueID(id) {
 			return true
 		}
 		_, statErr := s.fs.Stat(s.closedFilePath(id))

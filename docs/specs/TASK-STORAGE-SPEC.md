@@ -591,8 +591,10 @@ There is no same-type constraint: any issue may parent or block any other.
 - **Ready** = `status: open` issues **of a work type** whose every `blocked_by`
   is closed. A blocker that exists in `closed/` counts as resolved; a reference
   that exists in neither the hot directory nor `closed/` is a dangling reference
-  and is a validation error, not silently treated as satisfied. Ordering:
-  priority (most urgent first), then oldest `created`, then ID.
+  and is a validation error, not silently treated as satisfied. A stored value
+  that is not a valid ID (§3) is dangling too: a reader resolves it to a file no
+  more than a writer does (§10). Ordering: priority (most urgent first), then
+  oldest `created`, then ID.
 - **Blocked** = non-closed issues **of a work type** with at least one open
   blocker.
 - **Work type** = every type except `doc`. A document is not something to be

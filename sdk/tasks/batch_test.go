@@ -153,12 +153,12 @@ func TestCreateBatch_UnknownEdge_WritesNothing(t *testing.T) {
 	s, _ := batchStore(t)
 	_, err := s.CreateBatch([]BatchEntry{
 		{CreateInput: CreateInput{Title: "ok"}},
-		{Ref: "b", CreateInput: CreateInput{Title: "dangling", BlockedBy: []string{"nope"}}},
+		{Ref: "b", CreateInput: CreateInput{Title: "dangling", BlockedBy: []string{"x-nope"}}},
 	})
 	var be *BatchEntryError
 	var ve *ValidationError
-	if !errors.As(err, &be) || be.Index != 1 || be.Ref != "b" || !errors.As(err, &ve) || ve.Field != "blocked_by" {
-		t.Fatalf("want a blocked_by validation error on entry index 1, got %v", err)
+	if !errors.As(err, &be) || be.Index != 1 || be.Ref != "b" || !errors.As(err, &ve) || ve.Field != "blocked_by" || !strings.Contains(ve.Message, "does not exist") {
+		t.Fatalf("want a dangling blocked_by validation error on entry index 1, got %v", err)
 	}
 	assertStoreEmpty(t, s)
 }

@@ -36,8 +36,15 @@ import (
 // closedStatFn returns a function that checks whether an issue ID exists in the
 // closed/ partition using a cheap vfs.Stat (no parse). The returned function is
 // safe to call multiple times; each call performs one Stat.
+//
+// A value outside the ID grammar is in no partition and is never looked up:
+// joined onto closed/, a stored "../<open-id>" names the open issue's own file,
+// and the blocker would count as resolved while it is open.
 func (s *Store) closedStatFn() func(id string) bool {
 	return func(id string) bool {
+		if !validIssueID(id) {
+			return false
+		}
 		_, err := s.fs.Stat(s.closedFilePath(id))
 		return err == nil
 	}
@@ -180,6 +187,11 @@ func (s *Store) detailFrom(idx map[string]*Issue, all []*Issue, id string) (*Det
 		if x, ok := idx[refID]; ok {
 			r := ref(x)
 			return &r, nil
+		}
+		if !validIssueID(refID) {
+			// Dangling by definition, and never read: joined onto a store
+			// directory, "../../<name>" names a file outside the store.
+			return nil, nil
 		}
 		x, err := s.getUnresolved(refID)
 		if errors.Is(err, ErrNotFound) {
