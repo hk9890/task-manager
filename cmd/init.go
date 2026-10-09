@@ -31,6 +31,14 @@ var initFlags struct {
 	central bool
 }
 
+// initDTO is the --json shape of `init`. Store is the registry name of a
+// central store and is omitted for a local one, which has none.
+type initDTO struct {
+	Dir    string `json:"dir"`
+	Prefix string `json:"prefix"`
+	Store  string `json:"store,omitempty"`
+}
+
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a store for the current project (local, or central with --central)",
@@ -77,7 +85,7 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 				return err
 			}
 			if flagJSON {
-				return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix(), "store": name})
+				return printJSON(initDTO{Dir: s.Dir(), Prefix: s.Prefix(), Store: name})
 			}
 			_, _ = fmt.Fprintf(stdout, "Initialized central store %q at %s (prefix %q)\n", name, s.Dir(), s.Prefix())
 			_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")
@@ -89,7 +97,7 @@ registry name (default: the project directory name). See CONFIG-SPEC.`,
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"dir": s.Dir(), "prefix": s.Prefix()})
+			return printJSON(initDTO{Dir: s.Dir(), Prefix: s.Prefix()})
 		}
 		_, _ = fmt.Fprintf(stdout, "Initialized task-manager store at %s (prefix %q)\n", s.Dir(), s.Prefix())
 		_, _ = fmt.Fprintln(stderr, "next: run 'taskmgr guide' to learn the workflow")

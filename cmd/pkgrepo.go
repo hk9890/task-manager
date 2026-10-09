@@ -51,7 +51,8 @@ type repoDTO struct {
 	Detail   string   `json:"detail,omitempty"`
 }
 
-// repoAddedDTO is what `package repo add` and `package repo rm` print.
+// repoAddedDTO is what `package repo add` and `package repo rm` print, and each
+// element of what `package repo update` prints.
 type repoAddedDTO struct {
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`

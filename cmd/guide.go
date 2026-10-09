@@ -288,7 +288,7 @@ Pick the job, run its command, then act.
 
 // guideOverviewTail closes the overview with the surfaces that are not jobs.
 const guideOverviewTail = `
-  taskmgr commands          every command and flag, as a catalog
+  taskmgr commands [name]   every command or the named ones: flags and --json fields
   taskmgr <command> --help  one command
   taskmgr guide --list      every topic, as data (--json)
 `
@@ -489,6 +489,11 @@ func guideCap(t tasks.GuideTopic) int {
 // guideFlags holds this command's own flags.
 var guideFlags struct{ list bool }
 
+// guideDTO is the --json shape of `guide`: the printed text, wrapped.
+type guideDTO struct {
+	Guide string `json:"guide"`
+}
+
 // guideTopicDTO is one row of `guide --list` (CLI-SPEC §6).
 type guideTopicDTO struct {
 	ID      string `json:"id"`
@@ -532,7 +537,7 @@ to get the topics as an array.`,
 			return err
 		}
 		if flagJSON {
-			return printJSON(map[string]string{"guide": text})
+			return printJSON(guideDTO{Guide: text})
 		}
 		_, _ = fmt.Fprint(stdout, text)
 		return nil

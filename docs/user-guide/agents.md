@@ -13,9 +13,11 @@ to tell one, and the conventions it can rely on.
 The agent reads the one for the job in front of it — `taskmgr guide filing` before filing,
 `taskmgr guide finding` before searching — and what that prints is meant to be enough on
 its own, this project's own rules for that job included. `taskmgr commands` prints a
-catalog of every command with its flags and an example, derived from the live command tree,
-so it cannot fall out of date. Both ship inside the binary, so an agent with the binary
-needs no files and no network.
+catalog of every command with its flags, an example, and the fields its `--json` output
+carries; `taskmgr commands show "comment add"` prints only the entries named. The catalog
+is generated from the command tree and from the types the commands print, so it does not
+go stale the way a written reference does. Both ship inside the binary, so an agent with
+the binary needs no files and no network.
 
 ## Paste the job list into the agent's instructions
 

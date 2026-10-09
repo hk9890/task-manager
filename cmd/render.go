@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -40,8 +41,20 @@ var (
 	stderr io.Writer = os.Stderr
 )
 
+// printedType is the type of the value printJSON was last handed. Nothing in a
+// command reads it: the tests compare it with what jsonOutputs declares for the
+// command that ran, which is what ties the catalog's `output` to the output.
+var printedType reflect.Type
+
 // printJSON writes v as indented JSON to the command's stdout.
 func printJSON(v any) error {
+	return printJSONAs(v, v)
+}
+
+// printJSONAs writes v, which carries a subset of the fields of shape: the type
+// the catalog declares for the command. `show --fields` is the one caller.
+func printJSONAs(shape, v any) error {
+	printedType = reflect.TypeOf(shape)
 	return newJSONEncoder(stdout).Encode(v)
 }
 

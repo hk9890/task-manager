@@ -75,7 +75,7 @@ var showCmd = &cobra.Command{
 				return err
 			}
 		}
-		return printJSON(selections)
+		return printJSONAs(dtos, selections)
 	},
 }
 

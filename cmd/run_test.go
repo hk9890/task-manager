@@ -37,10 +37,16 @@ import (
 )
 
 // run invokes the CLI in-process and returns stdout, stderr and the exit code.
+// A successful invocation is also held to the commands catalog: what it printed
+// as JSON must be the type the catalog describes for that command.
 func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var outBuf, errBuf bytes.Buffer
+	printedType = nil
 	code = Run(args, &outBuf, &errBuf)
+	if code == 0 {
+		assertPrintsDeclaredType(t, args, outBuf.Bytes())
+	}
 	return outBuf.String(), errBuf.String(), code
 }
 
@@ -202,6 +208,51 @@ func TestRun_ListJSON_IsAnArray(t *testing.T) {
 	}
 	if len(issues) != 1 {
 		t.Fatalf("list returned %d issues, want 1", len(issues))
+	}
+}
+
+// A script reads the result of a batch with `.[]`, which fails on null.
+func TestRun_ImportBatchJSON_EmptyStreamIsAnEmptyArray(t *testing.T) {
+	root := newStore(t)
+	empty := filepath.Join(t.TempDir(), "empty.ndjson")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := run(t, "--dir", root, "--json", "import", "--batch", "--file", empty)
+	if code != 0 {
+		t.Fatalf("import --batch: exit %d, stderr %q", code, errOut)
+	}
+	if strings.TrimSpace(out) != "[]" {
+		t.Errorf("stdout = %q, want []", out)
+	}
+}
+
+// An issue whose only open blocker cannot be read is still blocked, and has no
+// ref to show for it.
+func TestRun_BlockedJSON_UnresolvedBlockerIsAnEmptyRefArray(t *testing.T) {
+	root, _ := treeStore(t)
+	if err := os.Remove(filepath.Join(storeDataDir(root), "tst-0004.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := run(t, "--dir", root, "close", "tst-0002"); code != 0 {
+		t.Fatalf("close: exit %d, stderr %q", code, errOut)
+	}
+	out, errOut, code := run(t, "--dir", root, "--json", "blocked")
+	if code != 0 {
+		t.Fatalf("blocked: exit %d, stderr %q", code, errOut)
+	}
+	var blocked []struct {
+		ID   string          `json:"id"`
+		Refs json.RawMessage `json:"blocked_by_refs"`
+	}
+	if err := json.Unmarshal([]byte(out), &blocked); err != nil {
+		t.Fatalf("parse blocked JSON: %v (%q)", err, out)
+	}
+	if len(blocked) != 1 || blocked[0].ID != "tst-0003" {
+		t.Fatalf("blocked = %s, want tst-0003 alone", out)
+	}
+	if string(blocked[0].Refs) != "[]" {
+		t.Errorf("blocked_by_refs = %s, want []", blocked[0].Refs)
 	}
 }
 
