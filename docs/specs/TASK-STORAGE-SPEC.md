@@ -603,8 +603,10 @@ There is no same-type constraint: any issue may parent or block any other.
   corresponding read methods. Documents are excluded from these two views only —
   they remain fully visible to `list`, `search`, and every filter expression.
 - **Cycles** in `blocked_by` are rejected at write time (DFS back-edge detection), and
-  so is a cycle in the `parent` chain. A file edited by hand can still hold a parent
-  cycle; a reader must end its walk on one.
+  so is a cycle in the `parent` chain. Both walks cover the hot directory only: an
+  edge into `closed/` ends the walk, so a cycle that runs through a closed issue is
+  accepted, and a reopen of that issue makes it live. A file edited by hand can hold
+  a cycle too. A reader must end its walk on one.
 
 Ready/blocked are **derived from the dependency graph, not from the `status`
 field**. The `blocked` *status value* is a manual label: the engine never sets or
@@ -638,10 +640,16 @@ An issue body is **not** rejected for being large: it overflows to the content
 sidecar instead (§4.6).
 
 **A write rejects what it introduces, not what it finds.** The rules above are checked
-against the issue the write proposes, and a field violation that the issue **already had
+against the issue the write proposes, and a violation that the issue **already had
 on disk, unchanged by this write**, does not refuse it. So an issue whose `creator` was
 hand-edited past its length limit can still be closed, reopened and re-linked, and a write
 that touches the offending field is refused as usual.
+
+The reference and cycle rules follow the same rule, one edge field at a time. A dangling
+`parent` or a parent cycle refuses only a write that changes `parent`; a dangling blocker
+or a dependency cycle only one that changes `blocked_by`; a dangling `related` only one
+that changes `related`. A write that changes an edge field is checked on the whole field
+as it will be stored, so the write that removes the bad edge passes and is the repair.
 
 Without the rule such an issue is frozen rather than repaired: the constraints cover
 fields no input surface can rewrite, so the only refusal available was a permanent one.

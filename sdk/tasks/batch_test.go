@@ -444,3 +444,12 @@ func TestCreateBatch_SuppliedIDRepeatedInTheSet_IsRefused(t *testing.T) {
 	}
 	assertStoreEmpty(t, s)
 }
+
+func TestCreateBatch_RefusedEntry_CarriesItsRefTrimmed(t *testing.T) {
+	s, _ := batchStore(t)
+	_, err := s.CreateBatch([]BatchEntry{{Ref: " a ", CreateInput: CreateInput{Title: "a", Parent: "x-gone00"}}})
+	var be *BatchEntryError
+	if !errors.As(err, &be) || be.Ref != "a" {
+		t.Fatalf("want a BatchEntryError with ref %q, got %v", "a", err)
+	}
+}

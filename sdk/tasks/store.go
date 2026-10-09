@@ -664,6 +664,11 @@ func (s *Store) loadIssuesFromDir(dir, errPrefix string) ([]*Issue, error) {
 			continue
 		}
 		data, err := s.fs.ReadFile(filepath.Join(dir, name))
+		if vfs.IsNotExist(err) {
+			// Reads take no lock: a close, a reopen or a delete moved the file
+			// away after ReadDir listed it.
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -996,7 +1001,7 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 	}
 	results, failed, err := s.createSet(entries)
 	if failed >= 0 {
-		return nil, &BatchEntryError{Index: failed, Ref: entries[failed].Ref, Err: err}
+		return nil, &BatchEntryError{Index: failed, Ref: strings.TrimSpace(entries[failed].Ref), Err: err}
 	}
 	return results, err
 }
@@ -1625,7 +1630,8 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 // in the closed/ partition (checked via a cheap vfs.Stat — no parse needed).
 // A reference to an ID present in neither partition is a dangling reference
 // and is returned as a *ValidationError. This implements TASK-STORAGE-SPEC
-// §9/§10: closed refs are valid; dangling refs are always rejected.
+// §9/§10: closed refs are valid; a write that introduces a dangling ref or a
+// cycle is refused.
 func (s *Store) checkRefs(iss *Issue) error {
 	idx, _, err := s.index()
 	if err != nil {
@@ -1638,6 +1644,10 @@ func (s *Store) checkRefs(iss *Issue) error {
 // it overlays with iss. A gated mutation builds the index once and shares it
 // between reference-checking and the hook `when` row, avoiding a second
 // whole-store scan under the lock (HOOK-SPEC §8).
+//
+// Like validateWrite, it refuses what the write introduces: a dangling
+// reference or a cycle in an edge list the write leaves as stored is passed
+// through, so the issue stays editable and the edge itself stays repairable.
 func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	idx[iss.ID] = iss // include the (possibly new) issue itself
 
@@ -1651,28 +1661,28 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 		return statErr == nil
 	}
 
+	var violations []*ValidationError
 	if iss.Parent != "" {
 		if !refExists(iss.Parent) {
-			return invalid("parent", "referenced issue %q does not exist", iss.Parent)
-		}
-		if cycle := findParentCycle(idx, iss.ID); cycle != "" {
-			return invalid("parent", "parent cycle: %s", cycle)
+			violations = append(violations, invalid("parent", "referenced issue %q does not exist", iss.Parent))
+		} else if cycle := findParentCycle(idx, iss.ID); cycle != "" {
+			violations = append(violations, invalid("parent", "parent cycle: %s", cycle))
 		}
 	}
 	for _, id := range iss.BlockedBy {
 		if !refExists(id) {
-			return invalid("blocked_by", "referenced issue %q does not exist", id)
+			violations = append(violations, invalid("blocked_by", "referenced issue %q does not exist", id))
 		}
 	}
 	for _, id := range iss.Related {
 		if !refExists(id) {
-			return invalid("related", "referenced issue %q does not exist", id)
+			violations = append(violations, invalid("related", "referenced issue %q does not exist", id))
 		}
 	}
 	if cycle := findCycle(idx, iss.ID); cycle != "" {
-		return invalid("blocked_by", "dependency cycle: %s", cycle)
+		violations = append(violations, invalid("blocked_by", "dependency cycle: %s", cycle))
 	}
-	return nil
+	return s.firstIntroduced(iss, violations)
 }
 
 // Labels returns the sorted set of distinct labels in use across all issues.
@@ -1705,10 +1715,14 @@ func (s *Store) Labels() ([]string, error) {
 // slow consumer never falls behind. A signal can be redundant: it reports that
 // files changed, not that any query now answers differently.
 //
-// The channel closes when ctx is done, or when the store directory is removed
-// or renamed. Call Watch again on a new handle to follow a moved store. A
-// rename of a directory above the store is not reported: the channel stays
-// open, and a read through this handle fails.
+// The channel closes when ctx is done, when the store directory is removed or
+// renamed, or when the operating system refuses the watch on a subdirectory
+// that appeared after the start. The close carries no cause: call Watch again,
+// and that call returns the error when the cause still holds. Call it on a new
+// handle to follow a moved store. A rename of a directory above the store is
+// not reported: the channel stays open, and a read through this handle fails.
+//
+// Call Watch before the first read, or a change between the two is missed.
 func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error) {
 	changes, err := s.fs.Watch(ctx, s.dir, []string{closedDirName, commentsDirName, contentDirName})
 	if err != nil {

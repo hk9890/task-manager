@@ -18,6 +18,8 @@ package tasks
 
 import (
 	"bytes"
+	"errors"
+	iofs "io/fs"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -166,3 +168,105 @@ func TestLogIOError_ValidationRefusalIsNotAnIOError(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// ── the same rule for the graph checks (L2) ─────────────────────────────────
+
+// seedEdges hand-edits the stored edges of an issue, the way a restore, a merge
+// or an older build leaves a reference the engine would refuse to write.
+func seedEdges(t *testing.T, fs vfs.FS, s *Store, id string, edit func(*Issue)) {
+	t.Helper()
+	path := filepath.Join(s.dir, id+FileExt)
+	data, err := fs.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read issue: %v", err)
+	}
+	iss, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("parse issue: %v", err)
+	}
+	edit(iss)
+	if data, err = Marshal(iss); err != nil {
+		t.Fatalf("marshal issue: %v", err)
+	}
+	if err := fs.WriteAtomic(path, data, 0o644); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+}
+
+func TestUpdate_AStoredGraphViolationDoesNotFreezeTheIssue(t *testing.T) {
+	cases := map[string]func(a, b *Issue){
+		"own parent":       func(a, b *Issue) { a.Parent = a.ID },
+		"parent cycle":     func(a, b *Issue) { a.Parent = b.ID },
+		"dangling parent":  func(a, b *Issue) { a.Parent = "tst-gone00" },
+		"dangling blocker": func(a, b *Issue) { a.BlockedBy = []string{"tst-gone00"} },
+		"dangling related": func(a, b *Issue) { a.Related = []string{"tst-gone00"} },
+		"dependency cycle": func(a, b *Issue) { a.BlockedBy = []string{b.ID} },
+	}
+	for name, violate := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, fs := chainStore(t)
+			a := mustCreate(t, s, CreateInput{Title: "a"})
+			b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID, BlockedBy: []string{a.ID}})
+			seedEdges(t, fs, s, a.ID, func(stored *Issue) { violate(stored, b) })
+
+			if _, err := s.Update(a.ID, UpdateInput{Title: strPtr("renamed")}); err != nil {
+				t.Fatalf("a title edit must not be refused by an edge it does not touch: %v", err)
+			}
+			closed := StatusClosed
+			if _, err := s.Update(a.ID, UpdateInput{Status: &closed}); err != nil {
+				t.Errorf("a close through Update must not be refused either: %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdate_AStoredParentCycle_IsRepairedThroughTheParent(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID})
+	seedEdges(t, fs, s, a.ID, func(stored *Issue) { stored.Parent = b.ID })
+
+	if _, err := s.Update(a.ID, UpdateInput{Parent: strPtr("")}); err != nil {
+		t.Fatalf("clearing the parent must break the cycle: %v", err)
+	}
+	if _, err := s.Update(a.ID, UpdateInput{Parent: &b.ID}); err == nil || !strings.Contains(err.Error(), "parent cycle") {
+		t.Errorf("writing the cycle back must be refused, got %v", err)
+	}
+}
+
+func TestAddDep_AStoredDanglingBlocker_IsRefusedUntilItIsRemoved(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b"})
+	seedEdges(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = []string{"tst-gone00"} })
+
+	err := s.AddDep(a.ID, b.ID)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "blocked_by" {
+		t.Fatalf("a write to blocked_by must still check the whole list, got %v", err)
+	}
+	if err := s.RemoveDep(a.ID, "tst-gone00"); err != nil {
+		t.Fatalf("removing the dangling blocker is the repair and must work: %v", err)
+	}
+	if err := s.AddDep(a.ID, b.ID); err != nil {
+		t.Errorf("the list is valid again, got %v", err)
+	}
+}
+
+// Reads take no lock, so a close can move a file out of the hot directory
+// between the listing and the read. That is an omission (SDK-SPEC §7), not a
+// failed list.
+func TestAll_AFileGoneAfterTheListing_IsLeftOut(t *testing.T) {
+	s, m := batchStore(t)
+	stays := mustCreate(t, s, CreateInput{Title: "stays"})
+	moved := mustCreate(t, s, CreateInput{Title: "moved"})
+	m.FailOn("ReadFile", s.filePath(moved.ID), iofs.ErrNotExist)
+
+	got, err := s.All()
+	if err != nil {
+		t.Fatalf("a file that is gone must not fail the read: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != stays.ID {
+		t.Errorf("got %d issues, want only %s", len(got), stays.ID)
+	}
+}

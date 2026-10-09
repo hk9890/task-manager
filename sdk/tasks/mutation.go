@@ -47,7 +47,12 @@ type MutationResult struct {
 // the path that is about to refuse the write, so the successful write is
 // unchanged and the in-lock path does not lengthen (docs/REVIEWING.md).
 func (s *Store) validateWrite(iss *Issue) error {
-	violations := fieldViolations(iss)
+	return s.firstIntroduced(iss, fieldViolations(iss))
+}
+
+// firstIntroduced returns the first of the violations that this write of iss
+// introduces, or nil when the stored issue already carries every one of them.
+func (s *Store) firstIntroduced(iss *Issue, violations []*ValidationError) error {
 	if len(violations) == 0 {
 		return nil
 	}
