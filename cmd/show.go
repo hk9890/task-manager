@@ -41,9 +41,6 @@ var showCmd = &cobra.Command{
 			}
 		}
 		if flagJSON {
-			if len(details) == 1 {
-				return printJSON(toDetailDTO(s.Name(), details[0]))
-			}
 			dtos := make([]detailDTO, len(details))
 			for i, d := range details {
 				dtos[i] = toDetailDTO(s.Name(), d)

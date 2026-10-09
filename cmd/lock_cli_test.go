@@ -93,6 +93,7 @@ func TestL4_ConcurrentProcesses_NoLostUpdate(t *testing.T) {
 	}
 
 	out, stderr, code := taskmgr(t, root, "--json", "show", issueID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, stderr)
 	}
