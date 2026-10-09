@@ -104,7 +104,7 @@ func showIssue(t *testing.T, root, id string) shownIssue {
 		t.Fatalf("show %s: exit %d, stderr %q", id, code, errOut)
 	}
 	var iss shownIssue
-	if err := json.Unmarshal([]byte(out), &iss); err != nil {
+	if err := json.Unmarshal([]byte(firstShown(out)), &iss); err != nil {
 		t.Fatalf("parse: %v\n%s", err, out)
 	}
 	return iss
