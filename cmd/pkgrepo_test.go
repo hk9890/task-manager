@@ -134,6 +134,41 @@ func TestPackageRepoList_ReportsPackagesAndWhichAreUsed(t *testing.T) {
 	}
 }
 
+// `used` is about what an entry resolves to: a `path:` entry outside the
+// repository does not use the repository's package of the same name.
+func TestPackageRepoList_APathEntryOfTheSameNameIsNotUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	origin := originRepo(t, "task-writing")
+	writeCmdPackageAt(t, filepath.Join(home, "vendored", "task-writing"), `hooks:
+  - id: gate
+    event: pre-create
+    run: ["/bin/true"]
+`)
+
+	if _, _, code := run(t, "package", "repo", "add", origin); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, errOut, code := run(t, "package", "add", "--global", "--path", "vendored/task-writing"); code != 0 {
+		t.Fatalf("setup: package add --path: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "package", "repo", "list", "--json")
+	if code != 0 {
+		t.Fatalf("repo list: exit %d, stderr %q", code, errOut)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo list --json: %v\n%s", err, out)
+	}
+	if len(got) != 1 {
+		t.Fatalf("repo list = %v, want one repository", got)
+	}
+	if _, ok := got[0]["used"]; ok {
+		t.Errorf("repo list = %v, want no used key", got)
+	}
+}
+
 // The name is derived from the URL, so two repositories whose URLs end the same
 // way collide. Overwriting either would delete a package a config still names,
 // so the collision is refused and --as is named as the way past it.
@@ -295,6 +330,59 @@ func TestPackageRepoRm_JSON_NothingUsedOmitsStillUsed(t *testing.T) {
 		if _, ok := got[key]; ok {
 			t.Errorf("output = %v, want no %s key", got, key)
 		}
+	}
+}
+
+// A `path:` entry names a directory outside the repository, so it resolves
+// after the removal whatever its last segment is called.
+func TestPackageRepoRm_JSON_APathEntryOfTheSameNameIsNotStillUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	origin := originRepo(t, "task-writing")
+	writeCmdPackageAt(t, filepath.Join(home, "vendored", "task-writing"), `hooks:
+  - id: gate
+    event: pre-create
+    run: ["/bin/true"]
+`)
+
+	if _, _, code := run(t, "package", "repo", "add", origin); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, errOut, code := run(t, "package", "add", "--global", "--path", "vendored/task-writing"); code != 0 {
+		t.Fatalf("setup: package add --path: %s", errOut)
+	}
+
+	got := repoRmJSON(t, filepath.Base(origin))
+	if _, ok := got["still_used"]; ok {
+		t.Errorf("output = %v, want no still_used key", got)
+	}
+	if out, _, _ := run(t, "package", "list", "--global"); strings.Contains(out, "missing") {
+		t.Errorf("package list = %q, want the path entry to resolve", out)
+	}
+}
+
+// With a second repository that provides the same name, the entry resolves into
+// neither while both are installed, and into the one that stays afterwards.
+func TestPackageRepoRm_JSON_APackageAnotherRepositoryProvidesIsNotStillUsed(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	origin := originRepo(t, "task-writing")
+
+	if _, _, code := run(t, "package", "repo", "add", origin, "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add first")
+	}
+	if _, _, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+	if _, _, code := run(t, "package", "repo", "add", origin, "--as", "second"); code != 0 {
+		t.Fatal("setup: repo add second")
+	}
+
+	got := repoRmJSON(t, "first")
+	if _, ok := got["still_used"]; ok {
+		t.Errorf("output = %v, want no still_used key", got)
+	}
+	if out, _, _ := run(t, "package", "list", "--global"); strings.Contains(out, "missing") {
+		t.Errorf("package list = %q, want the entry to resolve into the repository that stays", out)
 	}
 }
 
