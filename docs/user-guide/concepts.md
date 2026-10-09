@@ -84,10 +84,10 @@ Two views are derived from the dependency graph:
 - **`taskmgr blocked`** — non-closed issues with at least one open blocker, each listed
   with what is holding it.
 
-**`taskmgr tree`** puts both on one page: every open issue nested under its parent, each
-marked `[ready]` or `[blocked by <ids>]`. Give it an ID to see one epic. `--format mermaid`
-prints the same structure as Mermaid flowchart text, which GitHub draws when you paste it
-into a pull request or an issue.
+**`taskmgr tree`** puts both on one page: every open issue nested under its parent, with
+`[ready]` or `[blocked by <ids>]` on each issue that is in one of the two views. Give it an
+ID to see one epic. `--format mermaid` prints the same structure as Mermaid flowchart text;
+GitHub draws it from a `mermaid` code block in a pull request or an issue.
 
 **These come from the graph, not from the `status` field.** The `blocked` *status* is a
 label you set by hand and nothing ever clears: an issue can carry `status: blocked` with

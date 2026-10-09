@@ -97,7 +97,7 @@ func TestTree_Mermaid_DeclaresEveryNodeAnEdgeNames(t *testing.T) {
   tst_0001["tst-0001: Export #quot;v2#quot; (epic, open, ready)"]
   tst_0002["tst-0002: Define schema (task, open, ready)"]
   tst_0003["tst-0003: Wire up export (task, open, blocked by tst-0002, tst-0004)"]
-  tst_0004["tst-0004: Outside blocker (task, open)"]
+  tst_0004["tst-0004: Outside blocker (task, open, ready)"]
   tst_0001 --> tst_0002
   tst_0001 --> tst_0003
   tst_0002 -.->|blocks| tst_0003
@@ -189,6 +189,40 @@ func TestTree_ParentCycle_PrintsEachIssueOnce(t *testing.T) {
 	}
 }
 
+// An issue below a parent cycle is not on it. Here it sorts before both members
+// of the cycle, and must still print under its parent.
+func TestTree_ParentCycle_KeepsAnIssueBelowItUnderItsParent(t *testing.T) {
+	root, s := treeStore(t)
+	for _, edge := range [][2]string{
+		{"tst-0002", "tst-0003"},
+		{"tst-0003", "tst-0002"},
+		{"tst-0001", "tst-0003"},
+	} {
+		if _, err := s.Update(edge[0], tasks.UpdateInput{Parent: &edge[1]}); err != nil {
+			t.Fatalf("Update %s: %v", edge[0], err)
+		}
+	}
+
+	want := `tst-0004  open  P3  task  Outside blocker  [ready]
+tst-0003  open  P2  task  Wire up export  [blocked by tst-0002, tst-0004]
+  tst-0001  open  P0  epic  Export "v2"  [ready]
+  tst-0002  open  P1  task  Define schema  [ready]
+`
+	if got := tree(t, root); got != want {
+		t.Errorf("tree printed:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestMermaidNode_EscapesWhatALabelReadsAsMarkup(t *testing.T) {
+	got := mermaidNode(&treeNode{issue: &tasks.Issue{
+		ID: "tst-0001", Title: `Close #87; R&D <b> "x"`, Type: tasks.TypeTask, Status: tasks.StatusOpen,
+	}})
+	want := `  tst_0001["tst-0001: Close #35;87; R#amp;D #lt;b#gt; #quot;x#quot; (task, open)"]`
+	if got != want {
+		t.Errorf("mermaidNode = %s\nwant         %s", got, want)
+	}
+}
+
 func TestTree_UnknownFormat_ExitsOne(t *testing.T) {
 	root, _ := treeStore(t)
 
@@ -213,10 +247,14 @@ func TestTree_MermaidWithJSON_ExitsOne(t *testing.T) {
 	}
 }
 
+// An empty ID is an ID that does not exist, not a request for the whole tree: a
+// script that passes an unset variable must not get every issue back.
 func TestTree_UnknownID_ExitsOne(t *testing.T) {
 	root, _ := treeStore(t)
 
-	if _, _, code := run(t, "--dir", root, "tree", "tst-9999"); code != 1 {
-		t.Errorf("exit = %d, want 1", code)
+	for _, id := range []string{"tst-9999", ""} {
+		if out, _, code := run(t, "--dir", root, "tree", id); code != 1 || out != "" {
+			t.Errorf("tree %q: exit = %d, stdout = %q; want 1 and empty", id, code, out)
+		}
 	}
 }

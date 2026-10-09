@@ -31,17 +31,17 @@ type treeNode struct {
 	issue     *tasks.Issue
 	ready     bool
 	blocked   bool
-	blockedBy []tasks.Ref
+	blockedBy []*treeNode
 	children  []*treeNode
 }
 
 // buildTree nests the open issues under their parents. With rootID it returns
-// that issue alone, holding its open descendants; without, every issue whose
-// parent is absent from the open set is a root.
+// that issue alone, holding the open issues below it; with nil, every issue
+// whose parent is absent from the open set is a root.
 //
 // ready and blocked are read from the engine's own views rather than derived
 // here, so the marks cannot disagree with `taskmgr ready` and `taskmgr blocked`.
-func buildTree(s *tasks.Store, rootID string) ([]*treeNode, error) {
+func buildTree(s *tasks.Store, rootID *string) ([]*treeNode, error) {
 	open, err := s.List(tasks.Filter{})
 	if err != nil {
 		return nil, err
@@ -70,7 +70,13 @@ func buildTree(s *tasks.Store, rootID string) ([]*treeNode, error) {
 	for _, b := range blocked {
 		if n, ok := nodes[b.Issue.ID]; ok {
 			n.blocked = true
-			n.blockedBy = b.BlockedBy
+			// Blocked resolves a blocker from the open set, so it has a node here
+			// unless a write landed between the two reads.
+			for _, r := range b.BlockedBy {
+				if blocker, ok := nodes[r.ID]; ok {
+					n.blockedBy = append(n.blockedBy, blocker)
+				}
+			}
 		}
 	}
 
@@ -88,15 +94,19 @@ func buildTree(s *tasks.Store, rootID string) ([]*treeNode, error) {
 		}
 	}
 
-	if rootID != "" {
-		root, ok := nodes[rootID]
+	if rootID != nil {
+		root, ok := nodes[*rootID]
 		if !ok {
 			// A closed issue can still hold open children.
-			iss, err := s.Get(rootID)
+			iss, err := s.Get(*rootID)
 			if err != nil {
 				return nil, err
 			}
-			root = &treeNode{issue: iss}
+			// A case-insensitive filesystem finds an open issue under an ID in
+			// another case; the node that carries its marks is under iss.ID.
+			if root, ok = nodes[iss.ID]; !ok {
+				root = &treeNode{issue: iss}
+			}
 		}
 		attach(root)
 		return []*treeNode{root}, nil
@@ -110,13 +120,21 @@ func buildTree(s *tasks.Store, rootID string) ([]*treeNode, error) {
 			attach(n)
 		}
 	}
-	// What is still unseen sits on a parent cycle and has no root of its own.
+	// What is still unseen sits on a parent cycle or below one, and its parent
+	// is unseen too. The climb ends on the cycle, and the issue it ends on heads
+	// the cycle, so an issue that hangs off the cycle stays under its parent.
 	for _, iss := range open {
-		if !seen[iss.ID] {
-			n := nodes[iss.ID]
-			roots = append(roots, n)
-			attach(n)
+		if seen[iss.ID] {
+			continue
 		}
+		n := nodes[iss.ID]
+		climbed := make(map[string]bool)
+		for !climbed[n.issue.ID] {
+			climbed[n.issue.ID] = true
+			n = nodes[n.issue.Parent]
+		}
+		roots = append(roots, n)
+		attach(n)
 	}
 	return roots, nil
 }
@@ -129,8 +147,8 @@ func treeMark(n *treeNode) string {
 		return "ready"
 	case n.blocked && len(n.blockedBy) > 0:
 		ids := make([]string, len(n.blockedBy))
-		for i, r := range n.blockedBy {
-			ids[i] = r.ID
+		for i, b := range n.blockedBy {
+			ids[i] = b.issue.ID
 		}
 		return "blocked by " + strings.Join(ids, ", ")
 	case n.blocked:
@@ -151,8 +169,9 @@ func printTreeText(nodes []*treeNode, depth int) {
 	}
 }
 
-// mermaidEscaper keeps a title from ending its quoted label or being read as markup.
-var mermaidEscaper = strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;")
+// mermaidEscaper keeps a title from ending its quoted label or being read as
+// markup. "#" and "&" each open an entity code: unescaped, "#87;" prints as "W".
+var mermaidEscaper = strings.NewReplacer(`"`, "#quot;", "<", "#lt;", ">", "#gt;", "#", "#35;", "&", "#amp;")
 
 // mermaidID is an issue ID as a Mermaid node ID. Mermaid reads a leading keyword
 // before a dash ("end-", "graph-", "class-") as the keyword, so the one dash an
@@ -161,14 +180,19 @@ func mermaidID(id string) string {
 	return strings.Replace(id, "-", "_", 1)
 }
 
-func mermaidNode(id, title string, facts ...string) string {
-	return fmt.Sprintf("  %s[\"%s: %s (%s)\"]", mermaidID(id), id, mermaidEscaper.Replace(title), strings.Join(facts, ", "))
+func mermaidNode(n *treeNode) string {
+	i := n.issue
+	facts := []string{string(i.Type), string(i.Status)}
+	if mark := treeMark(n); mark != "" {
+		facts = append(facts, mark)
+	}
+	return fmt.Sprintf("  %s[\"%s: %s (%s)\"]", mermaidID(i.ID), i.ID, mermaidEscaper.Replace(i.Title), strings.Join(facts, ", "))
 }
 
 // printTreeMermaid prints the tree as a Mermaid flowchart: a solid edge from a
 // parent to each child, a dotted "blocks" edge from an open blocker to what it
-// holds. A blocker outside the printed tree is declared too, so no edge points
-// at a node without a label.
+// holds. A blocker outside the printed tree is declared too, with its own mark,
+// so no edge points at a node without a label.
 func printTreeMermaid(roots []*treeNode) {
 	declared := make(map[string]bool)
 	var parentEdges, blockerNodes, blockerEdges []string
@@ -177,15 +201,10 @@ func printTreeMermaid(roots []*treeNode) {
 	var declare func(nodes []*treeNode)
 	declare = func(nodes []*treeNode) {
 		for _, n := range nodes {
-			i := n.issue
-			facts := []string{string(i.Type), string(i.Status)}
-			if mark := treeMark(n); mark != "" {
-				facts = append(facts, mark)
-			}
-			_, _ = fmt.Fprintln(stdout, mermaidNode(i.ID, i.Title, facts...))
-			declared[i.ID] = true
+			_, _ = fmt.Fprintln(stdout, mermaidNode(n))
+			declared[n.issue.ID] = true
 			for _, c := range n.children {
-				parentEdges = append(parentEdges, fmt.Sprintf("  %s --> %s", mermaidID(i.ID), mermaidID(c.issue.ID)))
+				parentEdges = append(parentEdges, fmt.Sprintf("  %s --> %s", mermaidID(n.issue.ID), mermaidID(c.issue.ID)))
 			}
 			declare(n.children)
 		}
@@ -195,12 +214,12 @@ func printTreeMermaid(roots []*treeNode) {
 	var collectBlockers func(nodes []*treeNode)
 	collectBlockers = func(nodes []*treeNode) {
 		for _, n := range nodes {
-			for _, r := range n.blockedBy {
-				if !declared[r.ID] {
-					declared[r.ID] = true
-					blockerNodes = append(blockerNodes, mermaidNode(r.ID, r.Title, string(r.Type), string(r.Status)))
+			for _, b := range n.blockedBy {
+				if !declared[b.issue.ID] {
+					declared[b.issue.ID] = true
+					blockerNodes = append(blockerNodes, mermaidNode(b))
 				}
-				blockerEdges = append(blockerEdges, fmt.Sprintf("  %s -.->|blocks| %s", mermaidID(r.ID), mermaidID(n.issue.ID)))
+				blockerEdges = append(blockerEdges, fmt.Sprintf("  %s -.->|blocks| %s", mermaidID(b.issue.ID), mermaidID(n.issue.ID)))
 			}
 			collectBlockers(n.children)
 		}
@@ -253,9 +272,9 @@ var treeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		rootID := ""
+		var rootID *string
 		if len(args) == 1 {
-			rootID = args[0]
+			rootID = &args[0]
 		}
 		roots, err := buildTree(s, rootID)
 		if err != nil {

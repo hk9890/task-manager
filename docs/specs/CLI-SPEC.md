@@ -615,9 +615,13 @@ proj-0051  open         P2  Wire up export
 ### `taskmgr tree [id] [--format text|mermaid]`
 
 Print the open issues nested under their parents. With `<id>`, print that issue and
-its open descendants; the root may be closed, since a closed issue can still hold open
-children. Without, every open issue whose parent is not open is a root. Siblings are
-in work order (priority, then age).
+the open issues below it; the root may be closed, since a closed issue can still hold
+open children. Below the root only open issues are followed, because the cold
+partition is not read: an open issue under a closed child is not printed, and the
+bare tree lists it as a root. Without `<id>`, every open issue whose parent is not
+open is a root. Siblings are in work order (priority, then age). A parent cycle has no
+root, so one issue on it heads the cycle and everything below it, after the other
+roots.
 
 Each issue carries one derived mark, read from the same views as `ready` and
 `blocked`: `[ready]`, `[blocked by <id>, …]` naming its open blockers, or none.
@@ -632,8 +636,8 @@ proj-0007  open  P1  epic  Export  [ready]
 
 `--format mermaid` prints the same tree as a Mermaid flowchart: a solid edge from a
 parent to each child, a dotted `blocks` edge from an open blocker to the issue it
-holds. A blocker outside the printed tree is declared as a node, so every edge has
-two labelled ends.
+holds. A blocker outside the printed tree is declared as a node with its own mark, so
+every edge has two labelled ends.
 
 ```
 graph TD
@@ -647,15 +651,17 @@ graph TD
 
 A node ID is the issue ID with its dash replaced by an underscore; the label carries
 the issue ID unchanged. Mermaid reads `end-…`, `graph-…` or `class-…` as a keyword,
-and a store prefix may be any of them. In a label, `"`, `<` and `>` are written as
-`#quot;`, `#lt;` and `#gt;`.
+and a store prefix may be any of them. In a label, `"`, `<`, `>`, `#` and `&` are
+written as the entity codes `#quot;`, `#lt;`, `#gt;`, `#35;` and `#amp;`, so a title
+cannot end the label or be read as a tag or an entity.
 
 The command prints text only. Drawing the graph is a viewer's job, which is why there
 is no image or HTML format.
 
 - **Output (JSON):** array of `treeDTO` (§6), roots first. `--format mermaid` with
   `--json` is an error.
-- **Errors:** an unknown `--format` value; an `<id>` that does not exist.
+- **Errors:** an unknown `--format` value; an `<id>` that does not exist, the empty
+  string included.
 
 ---
 

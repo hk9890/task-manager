@@ -69,7 +69,7 @@ var allUserFacingCommands = []string{
 	"dep", "dep add", "dep rm",
 	"rel", "rel add", "rel rm",
 	"comment", "comment add", "comment edit", "comment rm",
-	"list", "search", "ready", "blocked", "labels", "statuses", "types",
+	"list", "search", "ready", "blocked", "tree", "labels", "statuses", "types",
 	"version", "commands", "guide",
 }
 
