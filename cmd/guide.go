@@ -142,7 +142,8 @@ Two views are derived from the dependency graph, not from the status field:
   taskmgr blocked   non-closed issues waiting on at least one open blocker
   taskmgr tree [id] open issues nested under their parents, each marked ready
                     or blocked by <ids>; --format mermaid prints it as a graph
-  taskmgr show <id> full detail: fields, edges, description, comments
+  taskmgr show <id> full detail: fields, edges, description, comments; takes
+                    several ids in one call; --json is always an array
 
 blocked is not the same as status == "blocked". An issue can be open and yet
 blocked, or carry the blocked status with no open blocker at all — the status is
@@ -203,7 +204,7 @@ again afterwards to see what opened up.
 update --description replaces the body — it does not append. To amend one, run
 show, take the text, and resubmit the whole modified body:
 
-  taskmgr show <id> --json | jq -r .description   # ...edit, then resubmit
+  taskmgr show <id> --json | jq -r '.[0].description'   # ...edit, then resubmit
   taskmgr update <id> --description-file -
 
 A mutation's --json echoes the issue's scalar fields, but not the description and

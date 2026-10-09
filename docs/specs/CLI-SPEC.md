@@ -555,12 +555,17 @@ the state this warning exists to make visible rather than silent.
 
 ## 3. Read commands
 
-### `taskmgr show <id>`
+### `taskmgr show <id> [more ids...]`
 
-Show full detail for one issue: all fields, resolved relationships (parent,
-blocked-by, related, plus derived **blocks** and **children**), the description
-body, and comments (the **resolved** log — edits applied, deleted comments
-removed; see storage spec §4.4).
+Show full detail for each named issue, in argument order: all fields, resolved
+relationships (parent, blocked-by, related, plus derived **blocks** and
+**children**), the description body, and comments (the **resolved** log — edits
+applied, deleted comments removed; see storage spec §4.4). Human output separates
+two issues with a blank line.
+
+Every ID resolves before anything prints: one that does not exist fails the whole
+command with `issue not found: <id>` and an empty stdout, so a caller never parses
+a partial result.
 
 A body larger than 4096 bytes is **truncated in human output**, followed by a
 notice giving its full size and, when the body lives in the content sidecar
@@ -569,7 +574,11 @@ always carries the complete body, because a script or an agent asked for all of
 it. Bodies are unbounded, so a doc holding a generated page would otherwise flood
 a terminal on every `show`.
 
-- **Output (JSON):** `detailDTO` (§6) — never truncated.
+- **Output (JSON):** an array of `detailDTO` (§6), one element per ID in argument
+  order — an array of one for a single ID. Never truncated. Until v0.10.0 `show`
+  took one ID and printed the bare object; a shape that followed the argument count
+  was rejected, because a caller passing a list of variable length would get an
+  object the day the list had one element. Read a single issue as `.[0]`.
 
 ### `taskmgr list [-q <expr>] [options]`
 
@@ -1022,7 +1031,7 @@ provenance of **this document** (§1.1). The `comments` array (in `detailDTO`) i
 **`detailDTO`** — `issueDTO` plus: `description`, `body_external` (bool, omitted
 when false), `parent_ref` (`refDTO`), `blocked_by_refs`, `related_refs`,
 `blocks`, `children` (each `refDTO[]`), and `comments` (`commentDTO[]`). Emitted
-by `show`. `description` is always the complete body; `body_external` only says
+by `show`, always as an array. `description` is always the complete body; `body_external` only says
 it was read from the content sidecar rather than the `.md`
 (TASK-STORAGE-SPEC §4.6). `issueDTO` carries no description, so list-shaped
 output is unaffected by body size.
@@ -1156,7 +1165,7 @@ taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
-taskmgr show     <id>
+taskmgr show     <id> [more ids...]
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
 taskmgr ready    [--limit]

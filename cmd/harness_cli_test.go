@@ -40,6 +40,17 @@ import (
 
 // ── driving the binary ───────────────────────────────────────────────────────
 
+// firstShown returns the first element of the array `show --json` prints, as
+// JSON, for the many tests that show one issue to read its fields. Anything that
+// is not such an array comes back unchanged, so the caller's own parse reports it.
+func firstShown(out string) string {
+	var shown []json.RawMessage
+	if json.Unmarshal([]byte(out), &shown) != nil || len(shown) == 0 {
+		return out
+	}
+	return string(shown[0])
+}
+
 // taskmgr runs the taskmgr binary (built from this module) with the given
 // arguments against storeDir. It returns stdout, stderr, and the exit code.
 func taskmgr(t *testing.T, storeDir string, args ...string) (stdout, stderr string, exitCode int) {

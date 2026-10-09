@@ -84,6 +84,7 @@ func TestL4_PreCloseGate_DeniedJSON(t *testing.T) {
 	}
 	// The issue stayed open (nothing written).
 	showOut, _, _ := taskmgr(t, root, "--json", "show", id)
+	showOut = firstShown(showOut)
 	var iss map[string]any
 	_ = json.Unmarshal([]byte(showOut), &iss)
 	if iss["status"] == "closed" {
@@ -245,6 +246,7 @@ func TestL4_HookPayload_MatchesCLIIssueShape(t *testing.T) {
 	}
 
 	showOut, _, _ := taskmgr(t, root, "--json", "show", id)
+	showOut = firstShown(showOut)
 	var dto map[string]any
 	if err := json.Unmarshal([]byte(showOut), &dto); err != nil {
 		t.Fatalf("show JSON: %v", err)
