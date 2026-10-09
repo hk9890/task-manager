@@ -619,7 +619,14 @@ func (s *Store) Get(id string) (*Issue, error) {
 // A caller that goes on to WRITE the issue must use Get instead. writeFiles
 // decides the layout from Description, so rewriting an unresolved issue would
 // see an empty body, re-join it inline and delete the sidecar.
+//
+// A value outside the ID grammar names no issue and is never joined onto a store
+// directory: "../<id>" would read the hot file through closed/, and the caller
+// would act on an issue it was not given.
 func (s *Store) getUnresolved(id string) (*Issue, error) {
+	if !validIssueID(id) {
+		return nil, errNotFound(id)
+	}
 	// Try the hot directory first.
 	data, err := s.fs.ReadFile(s.filePath(id))
 	if err == nil {
@@ -909,7 +916,7 @@ func (s *Store) writeIssue(iss *Issue) error {
 //  2. flock — cross-process advisory lock (acquired second)
 //
 // All public mutation methods call withLock exactly once at their outermost
-// level. Internal helpers (writeIssue, closeMove, reopenLocked, checkRefs,
+// level. Internal helpers (writeIssue, closeMove, reopenLocked, checkRefsWith,
 // migrateInlineComments) run inside the fn closure — they must NOT call
 // withLock themselves, or the non-reentrant Mutex will deadlock.
 // Reads (Get, All, Comments, …) are intentionally lock-free.
@@ -999,7 +1006,11 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 	if len(entries) > maxBatchEntries {
 		return nil, invalid("entries", "too many entries: %d (max %d)", len(entries), maxBatchEntries)
 	}
-	results, failed, err := s.createSet(entries)
+	var results []*MutationResult
+	failed, err := edgeNamingNothing(entries)
+	if err == nil {
+		results, failed, err = s.createSet(entries)
+	}
 	if failed >= 0 {
 		return nil, &BatchEntryError{Index: failed, Ref: strings.TrimSpace(entries[failed].Ref), Err: err}
 	}
@@ -1508,7 +1519,12 @@ func dropEdge(l *[]string, target string) bool {
 // validates and writes. Adding an edge that is already present is a no-op and
 // succeeds. field and selfMsg name the *ValidationError for a self-edge; op is
 // the log op for an I/O failure. The caller must not hold the lock.
-func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, op string) error {
+//
+// A value the list already stores that names no issue refuses the add, as any
+// violation in a field the write changes does. It is reported as the stored
+// value it is, with removeCmd — the command that removes it — because the
+// caller did not pass it and cannot tell from the bare value how to go on.
+func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, removeCmd, op string) error {
 	return s.withLock(func() error {
 		iss, err := s.getMutable(id)
 		if err != nil {
@@ -1523,9 +1539,24 @@ func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, op str
 				return nil // already present; idempotent
 			}
 		}
+		idx, _, err := s.index()
+		if err != nil {
+			return err
+		}
+		stored := slices.Clone(*cur)
 		*cur = append(*cur, target)
 		iss.Updated = s.now()
-		if err := s.checkRefs(iss); err != nil {
+		if err := s.checkRefsWith(iss, idx); err != nil {
+			for _, v := range stored {
+				if s.refExists(idx, v) {
+					continue
+				}
+				reason := "references an issue that does not exist"
+				if !validIssueID(v) {
+					reason = "is not a valid issue ID"
+				}
+				return invalid(field, "stored value %q %s; remove it with 'taskmgr %s -- %s %q'", v, reason, removeCmd, id, v)
+			}
 			return err
 		}
 		if err := s.writeIssue(iss); err != nil {
@@ -1559,7 +1590,7 @@ func (s *Store) removeEdge(id, target string, list edgeList, op string) error {
 
 // AddDep records that dependent is blocked by blocker.
 func (s *Store) AddDep(dependent, blocker string) error {
-	return s.addEdge(dependent, blocker, blockedByOf, "blocked_by", "issue cannot block itself", opDepAdd)
+	return s.addEdge(dependent, blocker, blockedByOf, "blocked_by", "issue cannot block itself", "dep rm", opDepAdd)
 }
 
 // RemoveDep removes a blocker from dependent. Removing a blocker that is not
@@ -1574,7 +1605,7 @@ func (s *Store) RemoveDep(dependent, blocker string) error {
 // on issueID; the inverse is derived on read (Detail.RelatedRefs is the symmetric
 // union), so the link surfaces from both issues.
 func (s *Store) AddRelated(issueID, otherID string) error {
-	return s.addEdge(issueID, otherID, relatedOf, "related", "issue cannot relate to itself", opRelAdd)
+	return s.addEdge(issueID, otherID, relatedOf, "related", "issue cannot relate to itself", "rel rm", opRelAdd)
 }
 
 // RemoveRelated severs the related link between issueID and otherID. Because the
@@ -1628,7 +1659,7 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 	})
 }
 
-// checkRefs verifies that every referenced ID exists and that the issue's
+// checkRefsWith verifies that every referenced ID exists and that the issue's
 // blockers and its parent create no cycle. Caller holds the lock.
 //
 // A reference is valid if the target ID is found in the hot (active) index OR
@@ -1637,41 +1668,17 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 // and is returned as a *ValidationError. This implements TASK-STORAGE-SPEC
 // §9/§10: closed refs are valid; a write that introduces a dangling ref or a
 // cycle is refused.
-func (s *Store) checkRefs(iss *Issue) error {
-	idx, _, err := s.index()
-	if err != nil {
-		return err
-	}
-	return s.checkRefsWith(iss, idx)
-}
-
-// checkRefsWith verifies references against a caller-supplied hot index, which
-// it overlays with iss. A gated mutation builds the index once and shares it
-// between reference-checking and the hook `when` row, avoiding a second
-// whole-store scan under the lock (HOOK-SPEC §8).
+//
+// The hot index is the caller's, and is overlaid with iss. A gated mutation
+// builds it once and shares it between reference-checking and the hook `when`
+// row, avoiding a second whole-store scan under the lock (HOOK-SPEC §8).
 //
 // Like validateWrite, it refuses what the write introduces: a dangling
 // reference or a cycle in an edge list the write leaves as stored is passed
 // through, so the issue stays editable and the edge itself stays repairable.
 func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	idx[iss.ID] = iss // include the (possibly new) issue itself
-
-	// refExists reports whether an ID is resolvable: either in the hot index
-	// or in the closed/ partition (via cheap Stat, no parse).
-	//
-	// A value outside the ID grammar is in no partition and is never looked up:
-	// joined onto closed/, a "../<id>" would resolve to a file outside the
-	// partition and pass.
-	refExists := func(id string) bool {
-		if _, ok := idx[id]; ok {
-			return true
-		}
-		if !validIssueID(id) {
-			return false
-		}
-		_, statErr := s.fs.Stat(s.closedFilePath(id))
-		return statErr == nil
-	}
+	refExists := func(id string) bool { return s.refExists(idx, id) }
 
 	var violations []*ValidationError
 	if iss.Parent != "" {
@@ -1695,6 +1702,23 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 		violations = append(violations, invalid("blocked_by", "dependency cycle: %s", cycle))
 	}
 	return s.firstIntroduced(iss, violations, edgesUnchanged)
+}
+
+// refExists reports whether an ID is resolvable: either in the hot index idx or
+// in the closed/ partition (via cheap Stat, no parse).
+//
+// A value outside the ID grammar is in no partition and is never looked up:
+// joined onto closed/, a "../<id>" would resolve to a file outside the
+// partition and pass.
+func (s *Store) refExists(idx map[string]*Issue, id string) bool {
+	if _, ok := idx[id]; ok {
+		return true
+	}
+	if !validIssueID(id) {
+		return false
+	}
+	_, statErr := s.fs.Stat(s.closedFilePath(id))
+	return statErr == nil
 }
 
 // edgesUnchanged is fieldUnchanged for the reference and cycle checks. The

@@ -92,6 +92,12 @@ Rules:
   address anything outside its store. `.tasks/` is git-tracked, which puts the
   frontmatter within reach of a hand edit or a pull request, so this is the check
   that makes the derived-path guarantee real.
+- **Checked on lookup.** An ID a caller supplies to look an issue up is held to
+  the same grammar before it becomes a path. A value outside it names no issue
+  and is *not found*; it is never joined onto a store directory. Unchecked,
+  `../<id>` reaches the hot file through `closed/`, so an open issue reads as
+  closed, and `closed/<id>` reaches the closed file through the hot directory,
+  so a closed issue is edited in place (§5).
 - **Allocation:** a random base36 token. Existing IDs are scanned across **all
   partitions of the store** — the hot directory **and** `closed/` (and any future
   cold partition) — and used to reject duplicates, regenerating on the
@@ -649,6 +655,14 @@ against the issue the write proposes, and a violation that the issue **already h
 on disk, unchanged by this write**, does not refuse it. So an issue whose `creator` was
 hand-edited past its length limit can still be closed, reopened and re-linked, and a write
 that touches the offending field is refused as usual.
+
+A write that only removes entries from `labels`, `blocked_by` or `related` leaves that
+list unchanged in this sense. Taking a value away cannot break the bound, the uniqueness
+rule or the grammar of the values that stay, so the violation is still the one on disk. A
+list over its bound, or one that holds a duplicate or a value that is not a valid ID, is
+therefore repaired one removal at a time; a write that adds an entry to it is refused.
+Refusing the removal too left such a list with no repair, and cut a `related` link on one
+side only: the removal on the other side was refused for a value it did not touch.
 
 The reference and cycle rules follow the same rule, one edge field at a time. A dangling
 `parent` or a parent cycle refuses only a write that changes `parent`; a dangling blocker

@@ -41,7 +41,9 @@ type BatchEntry struct {
 
 // BatchEntryError is the refusal of one entry of a CreateBatch set. Nothing of
 // the set was written. Err is the error a single Create of that entry returns,
-// so errors.Is and errors.As see through to it.
+// so errors.Is and errors.As see through to it. The one exception is an edge
+// that names neither a ref of the set nor a valid issue ID, which only a set
+// can hold.
 type BatchEntryError struct {
 	Index int // zero-based position in the set
 	Ref   string
@@ -100,6 +102,38 @@ func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs
 		inputs[i] = in
 	}
 	return inputs, 0, nil
+}
+
+// edgeNamingNothing refuses the first edge of the set that is neither a ref of
+// the set nor a valid issue ID; failed is the index of its entry, and -1 when
+// there is none. Left to the field check, such an edge is refused as an invalid
+// ID, which does not tell a caller who misspelt a ref that no entry has that
+// name. Create has no refs and keeps the field check's message.
+func edgeNamingNothing(entries []BatchEntry) (failed int, err error) {
+	isRef := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		isRef[strings.TrimSpace(e.Ref)] = true
+	}
+	for i, e := range entries {
+		edges := []struct {
+			field  string
+			values []string
+		}{
+			{"parent", []string{e.Parent}},
+			{"blocked_by", e.BlockedBy},
+			{"related", e.Related},
+		}
+		for _, edge := range edges {
+			for _, v := range edge.values {
+				v = strings.TrimSpace(v)
+				if v == "" || isRef[v] || validIssueID(v) {
+					continue
+				}
+				return i, invalid(edge.field, "%q is neither a ref of this set nor a valid issue ID", v)
+			}
+		}
+	}
+	return -1, nil
 }
 
 // namedByRef returns a validation error of a set with each allocated ID replaced

@@ -39,7 +39,7 @@ import (
 // A blocker absent from the hot index is checked against the closed/ partition
 // via a cheap vfs.Stat: if found there it is resolved (closed); if found in
 // neither partition it is dangling — treated as unresolved to surface the
-// inconsistency (dangling refs are rejected at write time by checkRefs and
+// inconsistency (dangling refs are rejected at write time by checkRefsWith and
 // should not arise during ordinary ready/blocked computation). This satisfies
 // TASK-STORAGE-SPEC §9: "A blocker that exists in closed/ counts as resolved."
 func openBlockers(idx map[string]*Issue, closedStat func(id string) bool, iss *Issue) []string {
@@ -49,7 +49,7 @@ func openBlockers(idx map[string]*Issue, closedStat func(id string) bool, iss *I
 		if !ok {
 			// Not in the hot set. If it's in closed/ it is resolved; otherwise
 			// treat as resolved too (dangling refs cannot reach here in a valid
-			// store — checkRefs prevents them at write time).
+			// store — checkRefsWith prevents them at write time).
 			if !closedStat(b) {
 				// Dangling: not in hot, not in closed. Per spec this should have
 				// been caught at write time; treat as unresolved to surface the

@@ -798,8 +798,10 @@ above under their JSON names, plus `ref`:
   256 entries, with no empty item. An unknown key, a second document after `---`, an empty list item and
   a top-level mapping are each an error. A lenient reader skips all four without a
   word, and each one is an issue or an edge the caller believes was filed.
-- **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
-  any order. A `ref` must be unique and must not carry the store prefix. A parent
+- **Edges** name a `ref` of the file or an existing issue ID. A value that is neither
+  is refused as `"<value>" is neither a ref of this set nor a valid issue ID`; a valid
+  ID that names no issue as `referenced issue "<value>" does not exist`. Entries may
+  appear in any order. A `ref` must be unique and must not carry the store prefix. A parent
   cycle or a `blocked_by` cycle between entries is refused, and the message names
   the cycle by `ref`.
 - **An empty path** (`--from ""`, what an unset shell variable gives) is misuse. It
@@ -918,11 +920,19 @@ another status, use `update --status`.)
 Record that `<dependent>` is blocked by `<blocker>`. Idempotent; rejects
 self-dependency and any edge that would create a cycle.
 
+Refused while `<dependent>` stores a blocker that names no issue (storage spec §10). The
+message names that stored value and the repair: `blocked_by: stored value "<value>" is
+not a valid issue ID; remove it with 'taskmgr dep rm -- <dependent> "<value>"'`, or
+`… references an issue that does not exist; …` for a valid ID. `rel add` does the same
+for a stored `related` value, naming `rel rm`.
+
 ### `taskmgr dep rm <dependent> <blocker>`
 
 Remove a blocking dependency. Removing one that is not present succeeds and
 writes nothing — the file is not rewritten and `updated` is not bumped
-(SDK-SPEC §4, the shared no-op contract of the four edge commands).
+(SDK-SPEC §4, the shared no-op contract of the four edge commands). A removal is never
+refused for the values that stay in the list (storage spec §10), and `<blocker>` may be
+a stored value that is not an ID.
 
 ### `taskmgr rel add <a> <b>`
 

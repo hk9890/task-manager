@@ -66,7 +66,12 @@ func TestFieldUnchanged_ComparesEveryInputTheConstraintReads(t *testing.T) {
 		{"changed title", "title", func(i *Issue) { i.Title = "other" }, false},
 		{"closed reads status too", "closed", func(i *Issue) { i.Status = StatusOpen }, false},
 		{"labels compare by value", "labels", func(i *Issue) { i.Labels = []string{"b"} }, false},
+		{"a label removed adds nothing", "labels", func(i *Issue) { i.Labels = nil }, true},
+		{"a label added", "labels", func(i *Issue) { i.Labels = []string{"a", "b"} }, false},
 		{"blocked_by reads the id too", "blocked_by", func(i *Issue) { i.ID = "tst-9" }, false},
+		{"a blocker removed adds nothing", "blocked_by", func(i *Issue) { i.BlockedBy = nil }, true},
+		{"a blocker repeated is an addition", "blocked_by", func(i *Issue) { i.BlockedBy = []string{"tst-2", "tst-2"} }, false},
+		{"a related value added", "related", func(i *Issue) { i.Related = []string{"tst-3"} }, false},
 		{"a field this build does not model", "future_field", func(i *Issue) {}, false},
 	}
 	for _, c := range cases {

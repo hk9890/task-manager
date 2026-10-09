@@ -950,9 +950,12 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   wrote the `Ref`, and the ID names an issue that was never written. The first refusal
   aborts the set: nothing is written and the error is a `*BatchEntryError` (§6) for
   that one entry, with its `Ref` trimmed. The checks run in phases, each over the whole
-  set — IDs, then refs, then field constraints, then references and cycles, then hooks —
-  so the entry it names is the first in phase order, not always the first in entry
-  order. A `*HookDeniedError` inside it carries the hints of the entries that passed
+  set — edge names, then IDs, then refs, then field constraints, then references and
+  cycles, then hooks — so the entry it names is the first in phase order, not always the
+  first in entry order. The edge-name phase refuses an edge that is neither a `Ref` of
+  the set nor a valid ID, as `"<value>" is neither a ref of this set nor a valid issue
+  ID`: the field check refuses the same value, but as an invalid ID only, which does not
+  tell a caller who misspelt a `Ref` that no entry has that name. A `*HookDeniedError` inside it carries the hints of the entries that passed
   before it, since no result will. An empty set is a `*ValidationError`, and so is a
   set of more than **256** entries: the lock is held across the hooks of every entry
   (HOOK-SPEC §8), so the bound is what caps that hold. A failure no entry owns, such
@@ -960,7 +963,8 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   are in entry order; every issue of a set shares one `Created` instant.
 
   `Create` is `CreateBatch` with one entry and returns that entry's error unwrapped,
-  so the two cannot diverge.
+  so the two cannot diverge. `Create` has no refs and skips the edge-name phase: it
+  refuses the same edge with the field check's message.
 
   The guarantee covers **refusal, not a crash**. Each file lands atomically (§7),
   but there is no multi-file transaction. The set is written **referenced-first** —
@@ -1133,6 +1137,14 @@ var (
 )
 ```
 
+`ErrNotFound` is returned by every method that takes the ID of the issue to act on —
+`Get`, `Detail`, `Details`, `Comments`, `Update`, `Close`, `Reopen`, the three comment
+mutations, and the first argument of `AddDep`, `RemoveDep`, `AddRelated` and
+`RemoveRelated` — when no issue has that ID in either partition. A value outside the ID
+grammar (storage spec §3) is not found without a lookup. The second argument of
+`RemoveDep` and `RemoveRelated` is exempt: it is matched against the stored list, never
+looked up, so it removes a stored value that is not an ID.
+
 `Resolve` returns `ErrNoStore` when neither a local store nor a registry match is
 found, and `ErrStoreNotRegistered` when an explicit `StoreName` has no entry.
 `RenameCentral` and `RelinkCentral` return `ErrStoreNotRegistered` for the store they
@@ -1153,7 +1165,7 @@ learns which entry to repair:
 type BatchEntryError struct {
     Index int    // zero-based position of the entry in the set
     Ref   string // the entry's Ref, empty when it has none
-    Err   error  // what a single Create of that entry returns
+    Err   error  // what a single Create of that entry returns, except the edge-name refusal below
 }
 func (e *BatchEntryError) Error() string // "entry 3 (ref \"schema\"): …"
 func (e *BatchEntryError) Unwrap() error
@@ -1194,14 +1206,19 @@ dangling references, dependency cycles, and field-constraint violations.
 violation already on disk — a hand edit, a restore, a build with looser rules — does not
 refuse a write that leaves that field alone, so `Close`, `Reopen` and the four edge
 mutations still work on an issue the engine would not have written. A write that touches
-the offending field is refused as usual. Without the rule an invalid field no input
+the offending field is refused as usual; a write that only removes entries from `Labels`,
+`BlockedBy` or `Related` does not touch that list in this sense, so `RemoveDep`,
+`RemoveRelated` and `UpdateInput.RemoveLabels` work on a list that is over its bound or
+holds a duplicate or a non-ID value. Without the rule an invalid field no input
 struct exposes froze its issue permanently: it could never be closed or re-linked again.
 
 The rule covers dangling references and cycles too. An `Update` that leaves `Parent`
 alone passes on a stored parent cycle or a dangling parent, and an `Update` that sets
 `Parent` to another value or to `""` repairs it. `RemoveDep` and `RemoveRelated` repair
 a stored `blocked_by` or `related` edge the same way; `AddDep` and `AddRelated` are
-refused until they have.
+refused until they have. That refusal names the stored value, not the one passed, says
+that it is stored, and names the command that removes it (`taskmgr dep rm` or
+`taskmgr rel rm`): the caller did not pass the value at fault.
 
 A malformed filter expression (`List` / `ListPage`) returns a typed parse error
 locating the failure; it is not a validation error and never reaches disk:

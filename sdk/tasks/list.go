@@ -195,7 +195,7 @@ func (s *Store) detailFrom(idx map[string]*Issue, all []*Issue, id string) (*Det
 		}
 		x, err := s.getUnresolved(refID)
 		if errors.Is(err, ErrNotFound) {
-			// Dangling: checkRefs rejects these at write time, so this is a store
+			// Dangling: checkRefsWith rejects these at write time, so this is a store
 			// edited by hand. Drop the ref rather than fail the whole read.
 			return nil, nil
 		}

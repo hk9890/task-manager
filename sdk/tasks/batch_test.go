@@ -163,6 +163,55 @@ func TestCreateBatch_UnknownEdge_WritesNothing(t *testing.T) {
 	assertStoreEmpty(t, s)
 }
 
+// An edge of a set is a ref or an ID. A misspelt ref is neither, and a message
+// about an invalid ID alone does not say that no entry has that name.
+func TestCreateBatch_EdgeNeitherRefNorID_SaysBoth(t *testing.T) {
+	for _, field := range []string{"parent", "blocked_by", "related"} {
+		t.Run(field, func(t *testing.T) {
+			in := CreateInput{Title: "uses schema"}
+			switch field {
+			case "parent":
+				in.Parent = "schemma"
+			case "blocked_by":
+				in.BlockedBy = []string{"schema", "schemma"}
+			case "related":
+				in.Related = []string{"schemma"}
+			}
+			s, _ := batchStore(t)
+			_, err := s.CreateBatch([]BatchEntry{
+				{Ref: "schema", CreateInput: CreateInput{Title: "schema"}},
+				{Ref: "b", CreateInput: in},
+			})
+			var be *BatchEntryError
+			var ve *ValidationError
+			if !errors.As(err, &be) || be.Index != 1 || be.Ref != "b" || !errors.As(err, &ve) || ve.Field != field {
+				t.Fatalf("want a %s validation error on entry index 1, got %v", field, err)
+			}
+			if want := `"schemma" is neither a ref of this set nor a valid issue ID`; ve.Message != want {
+				t.Errorf("message = %q, want %q", ve.Message, want)
+			}
+			assertStoreEmpty(t, s)
+		})
+	}
+}
+
+// A value that is a valid ID keeps the reference check's message, and Create,
+// which has no refs, keeps the field check's.
+func TestCreateBatch_EdgeNeitherRefNorID_LeavesTheOtherMessagesAlone(t *testing.T) {
+	s, _ := batchStore(t)
+	var ve *ValidationError
+
+	_, err := s.CreateBatch([]BatchEntry{{Ref: "b", CreateInput: CreateInput{Title: "b", BlockedBy: []string{"step-one"}}}})
+	if !errors.As(err, &ve) || ve.Message != `referenced issue "step-one" does not exist` {
+		t.Errorf("a valid ID that names no issue: got %v", err)
+	}
+	_, err = s.Create(CreateInput{Title: "x", BlockedBy: []string{"schemma"}})
+	if !errors.As(err, &ve) || ve.Message != `"schemma" is not a valid issue ID` {
+		t.Errorf("Create: got %v", err)
+	}
+	assertStoreEmpty(t, s)
+}
+
 func TestCreateBatch_CycleAcrossEntries_WritesNothing(t *testing.T) {
 	s, _ := batchStore(t)
 	_, err := s.CreateBatch([]BatchEntry{

@@ -234,6 +234,11 @@ func fieldViolations(iss *Issue) []*ValidationError {
 // one prev already had rather than one this write made, which is what
 // validateWrite needs to know.
 //
+// A list field also counts as unchanged when the write only removes entries from
+// it. No list constraint can be broken by taking a value away, so the violation
+// is still the one prev had — and the removal is how an over-long list, a
+// duplicate or a value outside the ID grammar gets repaired.
+//
 // A field this function does not model is reported changed: a constraint added
 // later must fail closed here rather than be grandfathered by default.
 func fieldUnchanged(field string, prev, next *Issue) bool {
@@ -257,15 +262,31 @@ func fieldUnchanged(field string, prev, next *Issue) bool {
 	case "session":
 		return prev.Session == next.Session
 	case "labels":
-		return slices.Equal(prev.Labels, next.Labels)
+		return addsNothing(prev.Labels, next.Labels)
 	case "blocked_by":
-		return prev.ID == next.ID && slices.Equal(prev.BlockedBy, next.BlockedBy)
+		return prev.ID == next.ID && addsNothing(prev.BlockedBy, next.BlockedBy)
 	case "related":
-		return slices.Equal(prev.Related, next.Related)
+		return addsNothing(prev.Related, next.Related)
 	case "parent":
 		return prev.ID == next.ID && prev.Parent == next.Parent
 	}
 	return false
+}
+
+// addsNothing reports whether next holds no value more often than prev does:
+// the lists are equal, or next is prev with entries removed.
+func addsNothing(prev, next []string) bool {
+	left := make(map[string]int, len(prev))
+	for _, v := range prev {
+		left[v]++
+	}
+	for _, v := range next {
+		if left[v] == 0 {
+			return false
+		}
+		left[v]--
+	}
+	return true
 }
 
 func invalidIssueID(id string) bool { return !validIssueID(id) }

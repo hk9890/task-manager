@@ -17,7 +17,7 @@
 // L2 tests for ref resolution + ready/blocked across partitions (at-zib.2.3).
 //
 // Covers:
-//   - Create/Update with parent/blocker in closed/ succeeds (checkRefs falls through)
+//   - Create/Update with parent/blocker in closed/ succeeds (checkRefsWith falls through)
 //   - A dangling ref (neither hot nor closed) still fails validation
 //   - Ready() treats a blocker in closed/ as resolved
 //   - Detail resolves parent and blocker refs that live in closed/
