@@ -160,7 +160,7 @@ Create a new store for the current project — locally by default, or centrally 
   `"."` and take the `task` fallback — into a prefix that is then immutable — and `-C ..`
   a name the store-name grammar rejects.
 - **Output:** the store path and chosen prefix (`{"dir","prefix"}` in JSON; with
-  `--central`, also the registry `name`).
+  `--central`, also `store`, the registry name).
 
 ---
 
@@ -467,7 +467,7 @@ A directory already at that path exits `1` rather than being overwritten: it is 
 this repository, which `repo update` refreshes, or another one that took the derived name,
 and clobbering either deletes packages some config still names.
 
-- **Output:** the repository and the packages it provides (`repoDTO` in JSON, §6). A
+- **Output:** the repository and the packages it provides (`repoAddedDTO` in JSON, §6). A
   repository whose top-level directories hold no manifest is installed and reported with a
   warning — it is a clone that succeeded, and what is wrong with it is the reader's to fix
   upstream.
@@ -496,6 +496,9 @@ the caller asked for. A name that is not installed exits `1`.
 Nothing about the `use:` lists changes. A store that uses one of the updated packages is
 gated by the new version at its next write.
 
+- **Output (JSON):** array of `repoAddedDTO` (§6), one per repository pulled, without
+  `packages`. Printed only when every pull succeeded.
+
 ### `taskmgr package repo rm <name>`
 
 Delete one installed repository from `<taskmgr home>/packages`.
@@ -506,7 +509,7 @@ removed it reports `missing` and fails every mutation in the store that names it
 the state this warning exists to make visible rather than silent.
 
 - **Output:** the repository that was removed, and the packages a config still uses
-  (`repoDTO` in JSON, §6).
+  (`repoAddedDTO` in JSON, §6).
 
 ---
 
@@ -741,7 +744,8 @@ The envelope is a JSON object (timestamps RFC3339):
   characters, bad enums, or dangling edges reject the record wholesale. The adapter
   is responsible for sanitizing source data to fit the model.
 - **Output:** `{"source_id", "id", "store"}` for a single import; with `--batch`, a
-  JSON array of `{"source_id", "id", "store", "error"}` (one per record) and a
+  JSON array of `{"source_id", "id", "store", "error"}` (one per record, `[]` for an
+  empty stream) and a
   **non-zero exit if any record failed** (the others still land). `store` is the
   registry name the records landed in, omitted for a local store (§6), so the
   source-ID → taskmgr-ID map an adapter builds says which store it maps into.
@@ -867,7 +871,7 @@ Idempotent.
 | `taskmgr statuses` | The valid status values, in display order. |
 | `taskmgr types` | The valid issue types, in display order. |
 | `taskmgr version` | Version, commit, build date (`{"version","commit","date"}` in JSON). |
-| `taskmgr commands` | Machine-readable catalog of every command — name, purpose, flags, a usage example, and the shape of its `--json` output (§5.2) — derived from the live command tree (never drifts). YAML by default; `--json` for JSON. Intended for agents. |
+| `taskmgr commands [name...]` | Machine-readable catalog of every command: name, purpose, flags and a usage example, derived from the live command tree (never drifts), and the shape of its `--json` output (§5.2). With names, only those entries (§5.2). YAML by default; `--json` for JSON. Intended for agents. |
 | `taskmgr guide [topic...]` | A workflow-shaped how-to in named parts: the issue model, the everyday command loop, the filter language, and what this store adds. Bare, it prints the **overview** — the roster and where to go next, not the whole guide. Owned and emitted by the binary; hand-maintained prose (unlike the derived `commands`), with conformance tests keeping its model lists and the flags it names in step with the live tree. Plain text to stdout; `--json` wraps it as `{"guide": "..."}`. The prose companion to `commands` — both are kept. Topics: §5.1 below. |
 
 ### 5.1 Guide topics
@@ -956,7 +960,12 @@ A field carries `name`, `type` (`string` \| `integer` \| `boolean` \| `array` \|
 `object`), `items` for an array, `optional: true` when the field is omitted while
 empty, and its own `fields` when it is an object or an array of objects — so a nested
 `refDTO` or `commentDTO` is listed where it occurs. A timestamp is a `string`
-(RFC 3339).
+(RFC 3339). An array that is not `optional` is printed as `[]` when it is empty, never
+as `null`.
+
+`recursive: true` replaces `fields` on a field whose object, or whose every element,
+has the fields of the object the field itself is in. `children` of `tree` is the one:
+each child is a tree node again, to any depth.
 
 ```yaml
 - name: create
@@ -969,15 +978,28 @@ empty, and its own `fields` when it is an object or an array of objects — so a
       - {name: warnings, type: array, items: string, optional: true}
 ```
 
-The shapes are those of §6, which stays the home of what each field **means**; the
-catalog carries only names and types. It exists because a caller in another project
-has the binary and not this document, and a guessed field name fails silently: `jq`
-prints nothing and exits `0`.
+**With arguments the catalog carries only the entries named**, in catalog order under
+the same top-level keys, so one command's fields cost one entry and not the whole
+catalog. A name is the entry's `name`, which makes a subcommand one quoted argument:
+`taskmgr commands show "comment add"`. An unknown name exits `1` as a misuse and names
+the entries it is a word of or a prefix of — `add` suggests `comment add`, `dep add`
+and the rest.
 
-Two things keep it from drifting. The field list is reflected from the Go type the
-command encodes, never written by hand. The link from a command to that type is one
-table (`jsonOutputs` in `cmd/commands_output.go`), and a test reads the command
-sources and fails when a command that prints JSON is missing from it.
+§6 is the home of what each field **means**; the catalog carries only names and types.
+It exists because a caller in another project has the binary and not this document,
+and a guessed field name fails silently: `jq` prints nothing and exits `0`.
+
+Two things hold the catalog to the output. The field list, its order and `optional`
+are reflected from the Go type, never written by hand. The link from a command to
+that type is one table (`jsonOutputs` in `cmd/commands_output.go`), and a wrong or
+missing row fails a test rather than being impossible:
+`TestCommands_Output_EveryCommandPrintsItsDeclaredType` runs every command of the
+catalog against a store and compares the type each one prints with its row, under
+each flag of `with_flag`.
+
+That test sees one invocation per row. A shape that changes with anything else — a
+second flag, the number of arguments — is not in the catalog until it has a row of its
+own, and `with_flag` is the only such key today.
 
 Not carried: the `hook_denied` error object of §6, which is printed at exit `1`, and
 the `output` of `commands` itself.
@@ -1027,8 +1049,8 @@ it was read from the content sidecar rather than the `.md`
 (TASK-STORAGE-SPEC §4.6). `issueDTO` carries no description, so list-shaped
 output is unaffected by body size.
 
-**`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`). Emitted by
-`blocked`.
+**`blockedDTO`** — `issueDTO` plus `blocked_by_refs` (`refDTO[]`, always present).
+Emitted by `blocked`. The array is empty for an issue whose open blockers cannot be read.
 
 **`treeDTO`** — `issueDTO` plus `ready` and `blocked` (both bool, always present) and
 `children` (`treeDTO[]`, omitted when empty). Emitted by `tree`.
@@ -1080,13 +1102,18 @@ omitted for a `name:` entry, `scope` is `store` | `global`, and `config` is the 
 entry left. It is deliberately not a `packageDTO`: `status`, `hooks` and `guide` describe
 a package a configuration uses, and this one no longer does.
 
-**`repoDTO`** — emitted by `package repo list` (an array) and, as a single object, by
-`package repo add`, `update` and `rm`: `{name, path, url, packages, used, detail}`. `name`
-is the repository's directory name under `<taskmgr home>/packages` and `path` that
-directory; `url` is the clone's `origin` and is omitted when git cannot report one;
-`packages` names what it provides, sorted; `used` names those the per-user config already
-uses, and on `repo rm` those a config still uses after the removal; `detail` explains a
-repository that provides nothing (§2.4).
+**`repoDTO`** — emitted by `package repo list` (an array):
+`{name, path, url, packages, used, detail}`. `name` is the repository's directory name
+under `<taskmgr home>/packages` and `path` that directory; `url` is the clone's `origin`
+and is omitted when git cannot report one; `packages` names what it provides, sorted, and
+is always present; `used` names those the per-user config already uses; `detail` explains
+a repository that provides nothing (§2.4).
+
+**`repoAddedDTO`** — emitted by `package repo add` and `rm` (one object) and `update` (an
+array): `{name, path, url, packages}`, with `name`, `path` and `url` as in `repoDTO`.
+`packages` is omitted when empty, and its meaning follows the command: on `add` what the
+repository provides, on `rm` the packages of the removed repository that the per-user
+config still uses, and `update` never carries it. `rm` carries no `url`.
 
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
@@ -1174,7 +1201,7 @@ taskmgr comment  edit <id> <comment-id> [body] [--author --agent --session --fil
 taskmgr comment  rm   <id> <comment-id> [--author --agent --session]
 taskmgr labels | statuses | types
 taskmgr version
-taskmgr commands                             # machine catalog (YAML/JSON)
+taskmgr commands [name...]                   # machine catalog (YAML/JSON), or the named entries
 taskmgr guide    [topic...] [--list]         # workflow how-to (start here)
 
 Global: --json, -C/--dir <path>, --store-name <name>

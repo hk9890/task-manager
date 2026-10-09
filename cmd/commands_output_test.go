@@ -15,30 +15,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tests for the `output` entry of the command catalog — the JSON shape each
-// command prints (CLI-SPEC §5).
+// command prints (CLI-SPEC §5.2).
 //
 // Coverage:
 //   - The entry is served in both formats and names the fields of show, list
 //     and create.
-//   - Every command whose source reaches printJSON declares its type, and
-//     nothing is declared that does not print.
+//   - Every command is run against a store, and each prints the type that
+//     jsonOutputs declares for it, under each flag that changes the shape.
 //   - The reflected shape of every declared type equals what encoding/json
-//     prints for it, field for field.
+//     prints for it: field for field, in print order, with `optional` on
+//     exactly the fields the encoder omits.
+//   - A type that contains itself is served as `recursive`.
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -114,166 +115,168 @@ func TestCommands_Output_NamesTheFieldsOfShowListAndCreate(t *testing.T) {
 	}
 }
 
-// sourceCommand is one `var xCmd = &cobra.Command{...}` as the source spells it.
-type sourceCommand struct {
-	use string
-	run ast.Expr
+// declaredOutput returns what jsonOutputs declares for c as it was last invoked:
+// the declaration's name — the catalog name, or "name --flag" when a flag of
+// with_flag was set — and the type, nil for a command that declares none.
+func declaredOutput(c *cobra.Command) (string, reflect.Type) {
+	name := displayName(c)
+	decl, ok := jsonOutputs[name]
+	if !ok {
+		return name, nil
+	}
+	for flag, v := range decl.withFlag {
+		if c.Flags().Changed(flag) {
+			return name + " --" + flag, reflect.TypeOf(v)
+		}
+	}
+	return name, reflect.TypeOf(decl.prints)
 }
 
-// A command that prints JSON and is absent from jsonOutputs would be served
-// without an `output` entry, and nothing at run time can notice: the map is the
-// only link between a command and its type. So this reads the source — every
-// RunE that reaches printJSON, directly or through the functions it calls, must
-// be declared, and nothing may be declared that does not print.
-func TestCommands_EveryJSONPrinterDeclaresItsOutput(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
+// assertPrintsDeclaredType is the link between the catalog and the output: the
+// type the invocation handed printJSON must be the one jsonOutputs declares for
+// the command and its flags. run calls it after every successful invocation, so
+// each in-process CLI test is a guard for the commands it runs.
+func assertPrintsDeclaredType(t *testing.T, args []string, stdout []byte) {
+	t.Helper()
+	c, _, err := rootCmd.Find(args)
+	// The catalog is the one command that describes itself by being read.
+	if err != nil || displayName(c) == "commands" {
+		return
+	}
+	if printedType == nil {
+		if flagJSON && json.Valid(stdout) {
+			t.Errorf("%q printed JSON without printJSON, so the catalog cannot describe it", displayName(c))
+		}
+		return
+	}
+	declaration, want := declaredOutput(c)
+	switch {
+	case want == nil:
+		t.Errorf("%q printed a %s, but jsonOutputs declares no output for it", declaration, printedType)
+	case printedType != want:
+		t.Errorf("%q printed a %s, but jsonOutputs declares %s", declaration, printedType, want)
+	}
+}
+
+// Every command of the catalog is run here under --json, and run compares what
+// each printed with jsonOutputs. A command added without an invocation below
+// fails, as does a declaration no invocation exercised, so the table cannot
+// name a type the command does not print.
+func TestCommands_Output_EveryCommandPrintsItsDeclaredType(t *testing.T) {
+	isolatedHome(t)
+	root, _ := treeStore(t)
+	ran := map[string]bool{}
+	printed := map[string]bool{}
+	invoke := func(args ...string) string {
+		t.Helper()
+		args = append([]string{"--json"}, args...)
+		out, errOut, code := run(t, args...)
+		if code != 0 {
+			t.Fatalf("%v: exit %d, stderr %q", args, code, errOut)
+		}
+		c, _, err := rootCmd.Find(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ran[displayName(c)] = true
+		if printedType != nil {
+			declaration, _ := declaredOutput(c)
+			printed[declaration] = true
+		}
+		return out
+	}
+	inStore := func(args ...string) string {
+		t.Helper()
+		return invoke(append([]string{"--dir", root}, args...)...)
+	}
+	idOf := func(out string) string {
+		t.Helper()
+		var d struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(out), &d); err != nil || d.ID == "" {
+			t.Fatalf("no id in %q: %v", out, err)
+		}
+		return d.ID
+	}
+
+	invoke("version")
+	invoke("statuses")
+	invoke("types")
+	invoke("guide")
+	invoke("guide", "--list")
+	invoke("config", "keys")
+
+	invoke("--dir", t.TempDir(), "init")
+	central := t.TempDir()
+	invoke("--dir", central, "init", "--central", "--store-name", "central")
+	invoke("store", "list")
+	invoke("--dir", central, "store", "move", "--rename", "--to", "renamed")
+
+	inStore("where")
+	inStore("config", "list")
+	inStore("config", "set", "hook_timeout", "5s")
+	inStore("config", "get", "hook_timeout")
+	inStore("config", "unset", "hook_timeout")
+
+	inStore("create", "--title", "created")
+	inStore("show", "tst-0001")
+	inStore("list")
+	inStore("search", "schema")
+	inStore("ready")
+	inStore("blocked")
+	inStore("tree")
+	inStore("labels")
+	inStore("update", "tst-0004", "--title", "retitled")
+	inStore("dep", "add", "tst-0004", "tst-0002")
+	inStore("dep", "rm", "tst-0004", "tst-0002")
+	inStore("rel", "add", "tst-0004", "tst-0002")
+	inStore("rel", "rm", "tst-0004", "tst-0002")
+	comment := idOf(inStore("comment", "add", "tst-0004", "a note"))
+	comment = idOf(inStore("comment", "edit", "tst-0004", comment, "an edited note"))
+	inStore("comment", "rm", "tst-0004", comment)
+	inStore("close", "tst-0004", "--reason", "done")
+	inStore("reopen", "tst-0004")
+
+	envelope := filepath.Join(t.TempDir(), "envelope.json")
+	if err := os.WriteFile(envelope, []byte(`{"title": "imported"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	funcs := map[string]*ast.BlockStmt{}
-	commands := map[string]sourceCommand{}
-	parent := map[string]string{}
-	fset := token.NewFileSet()
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, e.Name(), nil, 0)
+	inStore("import", "--file", envelope)
+	inStore("import", "--batch", "--file", envelope)
+
+	origin := originRepo(t, "task-writing")
+	invoke("package", "repo", "add", origin)
+	invoke("package", "repo", "list")
+	invoke("package", "repo", "update")
+	inStore("package", "add", "task-writing")
+	inStore("package", "list")
+	inStore("hook", "list")
+	inStore("package", "rm", "task-writing")
+	invoke("package", "repo", "rm", filepath.Base(origin))
+
+	for _, entry := range buildCatalog(rootCmd).Commands {
+		c, _, err := rootCmd.Find(strings.Fields(entry.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.FuncDecl:
-				if n.Recv == nil {
-					funcs[n.Name.Name] = n.Body
-				}
-			case *ast.ValueSpec:
-				if len(n.Names) == 1 && len(n.Values) == 1 {
-					if c, ok := parseCommandLiteral(n.Values[0]); ok {
-						commands[n.Names[0].Name] = c
-					}
-				}
-			case *ast.CallExpr:
-				sel, ok := n.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "AddCommand" {
-					break
-				}
-				for _, arg := range n.Args {
-					parent[arg.(*ast.Ident).Name] = sel.X.(*ast.Ident).Name
-				}
-			}
-			return true
-		})
-	}
-
-	var reachesPrintJSON func(n ast.Node, seen map[string]bool) bool
-	reachesPrintJSON = func(n ast.Node, seen map[string]bool) bool {
-		found := false
-		ast.Inspect(n, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || found {
-				return !found
-			}
-			callee, ok := call.Fun.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if callee.Name == "printJSON" {
-				found = true
-			} else if body, known := funcs[callee.Name]; known && !seen[callee.Name] {
-				seen[callee.Name] = true
-				found = reachesPrintJSON(body, seen)
-			}
-			return !found
-		})
-		return found
-	}
-
-	var catalogName func(varName string) string
-	catalogName = func(varName string) string {
-		if varName == "rootCmd" {
-			return ""
-		}
-		return strings.TrimSpace(catalogName(parent[varName]) + " " + commands[varName].use)
-	}
-
-	served := map[string]bool{}
-	for _, c := range buildCatalog(rootCmd).Commands {
-		served[c.Name] = c.Output != nil
-	}
-	checked := 0
-	for varName, c := range commands {
-		name := catalogName(varName)
-		hasOutput, inCatalog := served[name]
-		// The catalog is the one command that describes itself by being read.
-		if !inCatalog || name == "commands" {
+		if c.HasAvailableSubCommands() || entry.Name == "commands" {
 			continue
 		}
-		checked++
-		prints := false
-		switch run := c.run.(type) {
-		case *ast.Ident:
-			prints = reachesPrintJSON(funcs[run.Name], map[string]bool{})
-		case *ast.FuncLit:
-			prints = reachesPrintJSON(run, map[string]bool{})
-		}
-		switch {
-		case prints && !hasOutput:
-			t.Errorf("%q (%s) prints JSON but jsonOutputs does not declare its type", name, varName)
-		case !prints && hasOutput:
-			t.Errorf("%q (%s) is declared in jsonOutputs but never reaches printJSON", name, varName)
+		if !ran[entry.Name] {
+			t.Errorf("%q is not run here, so nothing compares what it prints with jsonOutputs", entry.Name)
 		}
 	}
-	if checked < len(jsonOutputs) {
-		t.Errorf("read %d commands from the source, fewer than the %d declared", checked, len(jsonOutputs))
-	}
-
 	for name, decl := range jsonOutputs {
-		if _, ok := served[name]; !ok {
-			t.Errorf("jsonOutputs declares %q, which is not a command in the catalog", name)
-			continue
-		}
-		c, _, err := rootCmd.Find(strings.Fields(name))
-		if err != nil {
-			t.Fatal(err)
+		if !printed[name] {
+			t.Errorf("jsonOutputs declares %q, and no invocation printed JSON for it", name)
 		}
 		for flag := range decl.withFlag {
-			if c.Flags().Lookup(flag) == nil {
-				t.Errorf("jsonOutputs declares a shape for %q --%s, which is not a flag of it", name, flag)
+			if declaration := name + " --" + flag; !printed[declaration] {
+				t.Errorf("jsonOutputs declares %q, and no invocation printed JSON for it", declaration)
 			}
 		}
 	}
-}
-
-// parseCommandLiteral reads the name and the RunE of a `&cobra.Command{...}`.
-func parseCommandLiteral(e ast.Expr) (sourceCommand, bool) {
-	addr, ok := e.(*ast.UnaryExpr)
-	if !ok {
-		return sourceCommand{}, false
-	}
-	lit, ok := addr.X.(*ast.CompositeLit)
-	if !ok {
-		return sourceCommand{}, false
-	}
-	if typ, ok := lit.Type.(*ast.SelectorExpr); !ok || typ.Sel.Name != "Command" {
-		return sourceCommand{}, false
-	}
-	var c sourceCommand
-	for _, elt := range lit.Elts {
-		kv := elt.(*ast.KeyValueExpr)
-		switch kv.Key.(*ast.Ident).Name {
-		case "Use":
-			use, err := strconv.Unquote(kv.Value.(*ast.BasicLit).Value)
-			if err != nil {
-				return sourceCommand{}, false
-			}
-			c.use = strings.Fields(use)[0]
-		case "RunE":
-			c.run = kv.Value
-		}
-	}
-	return c, true
 }
 
 // The catalog reflects each shape out of the declared type, and this checks the
@@ -292,22 +295,136 @@ func TestCommands_Output_CarriesEveryFieldTheTypeEncodes(t *testing.T) {
 			t.Errorf("%q: declared in jsonOutputs but the catalog carries no output", name)
 			continue
 		}
-		assertShapeMatchesJSON(t, name, out.shapeDoc, encodeFilled(t, decl.prints))
+		assertShapeMatchesJSON(t, name, out.shapeDoc, encodeFilled(t, reflect.TypeOf(decl.prints)))
 		if len(out.WithFlag) != len(decl.withFlag) {
 			t.Errorf("%q: catalog carries %d flag shapes, declared %d", name, len(out.WithFlag), len(decl.withFlag))
 		}
 		for _, v := range out.WithFlag {
-			assertShapeMatchesJSON(t, name+" --"+v.Flag, v.shapeDoc, encodeFilled(t, decl.withFlag[v.Flag]))
+			assertShapeMatchesJSON(t, name+" --"+v.Flag, v.shapeDoc, encodeFilled(t, reflect.TypeOf(decl.withFlag[v.Flag])))
 		}
 	}
 }
 
-// encodeFilled returns what encoding/json makes of a value of prototype's type
-// in which every field, at every depth, is non-empty.
-func encodeFilled(t *testing.T, prototype any) any {
+// A tree node holds tree nodes. The catalog says so with `recursive` in place of
+// the fields, where walking the type again would never end.
+func TestCommands_Output_ATypeThatContainsItselfIsRecursive(t *testing.T) {
+	out := outputFor("tree")
+	if out == nil || out.Type != "array" || out.Items != "object" {
+		t.Fatalf("tree output is %+v, want an array of objects", out)
+	}
+	i := slices.IndexFunc(out.Fields, func(f fieldDoc) bool { return f.Name == "children" })
+	if i < 0 {
+		t.Fatalf("tree output has no children field: %+v", out.Fields)
+	}
+	want := fieldDoc{Name: "children", Type: "array", Items: "object", Recursive: true, Optional: true}
+	if got := out.Fields[i]; !reflect.DeepEqual(got, want) {
+		t.Errorf("children = %+v, want %+v", got, want)
+	}
+}
+
+// optionalProbe carries the tag forms no DTO uses yet, so the two tests below
+// hold the reflection to the encoder on them as well.
+type optionalProbe struct {
+	Always    time.Time  `json:"always,omitempty"`
+	Zero      time.Time  `json:"zero,omitzero"`
+	Pointer   *time.Time `json:"pointer,omitempty"`
+	Omitempty string     `json:"omitempty"`
+}
+
+// printedStructs returns every struct a declared output is made of, each once.
+func printedStructs() []reflect.Type {
+	structs := []reflect.Type{reflect.TypeOf(optionalProbe{})}
+	var collect func(t reflect.Type)
+	collect = func(t reflect.Type) {
+		switch t.Kind() {
+		case reflect.Pointer, reflect.Slice:
+			collect(t.Elem())
+		case reflect.Struct:
+			if t == timeType || slices.Contains(structs, t) {
+				return
+			}
+			structs = append(structs, t)
+			for i := range t.NumField() {
+				collect(t.Field(i).Type)
+			}
+		}
+	}
+	for _, decl := range jsonOutputs {
+		collect(reflect.TypeOf(decl.prints))
+		for _, v := range decl.withFlag {
+			collect(reflect.TypeOf(v))
+		}
+	}
+	return structs
+}
+
+// `optional` promises that a field is absent while it is empty, so it is held to
+// what the encoder does with a zero value rather than to how the tag reads.
+func TestCommands_Output_OptionalIsWhatTheEncoderOmits(t *testing.T) {
+	for _, typ := range printedStructs() {
+		raw, err := json.Marshal(reflect.Zero(typ).Interface())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var encoded map[string]any
+		if err := json.Unmarshal(raw, &encoded); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range fieldsOf(typ, []reflect.Type{typ}) {
+			if _, present := encoded[f.Name]; present == f.Optional {
+				t.Errorf("%s.%s: catalog says optional=%v, the encoder printed a zero value as %s", typ, f.Name, f.Optional, raw)
+			}
+		}
+	}
+}
+
+func TestCommands_Output_FieldsAreInPrintOrder(t *testing.T) {
+	for _, typ := range printedStructs() {
+		v := reflect.New(typ)
+		fill(v.Elem(), nil)
+		raw, err := json.Marshal(v.Interface())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, f := range fieldsOf(typ, []reflect.Type{typ}) {
+			names = append(names, f.Name)
+		}
+		if printed := objectKeys(t, raw); !slices.Equal(names, printed) {
+			t.Errorf("%s: catalog fields %v, the encoder prints %v", typ, names, printed)
+		}
+	}
+}
+
+// objectKeys returns the keys of an encoded object in the order they were
+// written, which decoding into a map loses.
+func objectKeys(t *testing.T, raw []byte) []string {
 	t.Helper()
-	v := reflect.New(reflect.TypeOf(prototype))
-	fill(v.Elem())
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key.(string))
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return keys
+}
+
+// encodeFilled returns what encoding/json makes of a value of type typ in which
+// every field, at every depth, is non-empty.
+func encodeFilled(t *testing.T, typ reflect.Type) any {
+	t.Helper()
+	v := reflect.New(typ)
+	fill(v.Elem(), nil)
 	raw, err := json.Marshal(v.Interface())
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +436,10 @@ func encodeFilled(t *testing.T, prototype any) any {
 	return decoded
 }
 
-func fill(v reflect.Value) {
+// fill makes v non-empty at every depth. enclosing holds the structs v is nested
+// in: a struct that contains itself is filled one level down and left empty
+// below that, which is where the walk ends.
+func fill(v reflect.Value, enclosing []reflect.Type) {
 	switch v.Kind() {
 	case reflect.String:
 		v.SetString("x")
@@ -328,22 +448,37 @@ func fill(v reflect.Value) {
 	case reflect.Int:
 		v.SetInt(1)
 	case reflect.Pointer:
-		v.Set(reflect.New(v.Type().Elem()))
-		fill(v.Elem())
+		if !filledTwice(enclosing, v.Type().Elem()) {
+			v.Set(reflect.New(v.Type().Elem()))
+			fill(v.Elem(), enclosing)
+		}
 	case reflect.Slice:
-		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
-		fill(v.Index(0))
+		if !filledTwice(enclosing, v.Type().Elem()) {
+			v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+			fill(v.Index(0), enclosing)
+		}
 	case reflect.Struct:
 		if v.Type() == timeType {
 			v.Set(reflect.ValueOf(time.Unix(1, 0)))
 			return
 		}
+		enclosing = append(slices.Clip(enclosing), v.Type())
 		for i := range v.NumField() {
-			fill(v.Field(i))
+			fill(v.Field(i), enclosing)
 		}
 	default:
 		panic("fill: no value for " + v.Type().String())
 	}
+}
+
+func filledTwice(enclosing []reflect.Type, t reflect.Type) bool {
+	n := 0
+	for _, e := range enclosing {
+		if e == t {
+			n++
+		}
+	}
+	return n >= 2
 }
 
 func assertShapeMatchesJSON(t *testing.T, path string, shape shapeDoc, got any) {
@@ -358,9 +493,18 @@ func assertShapeMatchesJSON(t *testing.T, path string, shape shapeDoc, got any) 
 	case map[string]any:
 		var names []string
 		for _, f := range shape.Fields {
+			value, ok := got[f.Name]
+			fields := f.Fields
+			if f.Recursive {
+				// fill leaves the field empty one level down, and it is optional.
+				if !ok {
+					continue
+				}
+				fields = shape.Fields
+			}
 			names = append(names, f.Name)
-			if value, ok := got[f.Name]; ok {
-				assertShapeMatchesJSON(t, path+"."+f.Name, shapeDoc{Type: f.Type, Items: f.Items, Fields: f.Fields}, value)
+			if ok {
+				assertShapeMatchesJSON(t, path+"."+f.Name, shapeDoc{Type: f.Type, Items: f.Items, Fields: fields}, value)
 			}
 		}
 		var encoded []string

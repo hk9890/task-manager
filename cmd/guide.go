@@ -272,7 +272,7 @@ Pick the job, run its command, then act.
 
 // guideOverviewTail closes the overview with the surfaces that are not jobs.
 const guideOverviewTail = `
-  taskmgr commands          every command, its flags and its --json fields
+  taskmgr commands [name]   every command or the named ones: flags and --json fields
   taskmgr <command> --help  one command
   taskmgr guide --list      every topic, as data (--json)
 `

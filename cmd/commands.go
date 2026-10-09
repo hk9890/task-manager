@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -57,20 +58,32 @@ type catalogDoc struct {
 }
 
 var commandsCmd = &cobra.Command{
-	Use:   "commands",
-	Short: "Print a YAML catalog of every command (for agents)",
-	Long: `Print a structured catalog of the entire CLI surface — one entry per
-command with its purpose, flags, and a usage example. The catalog is derived
-from the live command tree, so it never drifts from the actual CLI.
+	Use:   "commands [name...]",
+	Short: "Print a YAML catalog of every command, or of the ones named (for agents)",
+	Long: `Print a structured catalog of the CLI surface — one entry per command with
+its purpose, flags, and a usage example. The catalog is derived from the live
+command tree, so it never drifts from the actual CLI.
+
+With no arguments it prints every command. Name commands to print only their
+entries; a name is what the catalog calls the command, so a subcommand is one
+quoted argument: taskmgr commands show "comment add".
 
 A command that prints JSON under --json also carries "output": whether the
 result is an object or an array, and each field with its JSON type. A field
-marked optional is absent when it is empty.
+marked optional is absent when it is empty, and one marked recursive holds
+objects with the fields of the object it is in.
 
 Output is YAML by default (compact and agent-friendly); pass --json for JSON.`,
-	Args: cobra.NoArgs,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cat := buildCatalog(rootCmd)
+		if len(args) > 0 {
+			selected, misuse := selectCommands(cat.Commands, args)
+			if misuse != "" {
+				return &usageError{cmd: cmd, msg: misuse}
+			}
+			cat.Commands = selected
+		}
 		if flagJSON {
 			return printJSON(cat)
 		}
@@ -81,6 +94,35 @@ Output is YAML by default (compact and agent-friendly); pass --json for JSON.`,
 		_, _ = fmt.Fprint(stdout, string(out))
 		return nil
 	},
+}
+
+// selectCommands returns the entries with the given catalog names, in catalog
+// order. An unknown name yields a misuse message instead, naming the entries it
+// could have meant: the ones it is a word of ("add" for "comment add"), or the
+// ones it starts.
+func selectCommands(all []commandDoc, names []string) (selected []commandDoc, misuse string) {
+	for _, name := range names {
+		if slices.ContainsFunc(all, func(c commandDoc) bool { return c.Name == name }) {
+			continue
+		}
+		misuse = fmt.Sprintf("unknown command %q", name)
+		var near []string
+		for _, c := range all {
+			if slices.Contains(strings.Fields(c.Name), name) || strings.HasPrefix(c.Name, name) {
+				near = append(near, fmt.Sprintf("%q", c.Name))
+			}
+		}
+		if len(near) > 0 {
+			misuse += ": did you mean " + strings.Join(near, " or ") + "?"
+		}
+		return nil, misuse + "\n\nRun taskmgr commands for every name. A subcommand is one quoted argument."
+	}
+	for _, c := range all {
+		if slices.Contains(names, c.Name) {
+			selected = append(selected, c)
+		}
+	}
+	return selected, ""
 }
 
 // buildCatalog walks the command tree rooted at root and returns its catalog.

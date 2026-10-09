@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -39,8 +40,14 @@ var (
 	stderr io.Writer = os.Stderr
 )
 
+// printedType is the type of the value printJSON was last handed. Nothing in a
+// command reads it: the tests compare it with what jsonOutputs declares for the
+// command that ran, which is what ties the catalog's `output` to the output.
+var printedType reflect.Type
+
 // printJSON writes v as indented JSON to the command's stdout.
 func printJSON(v any) error {
+	printedType = reflect.TypeOf(v)
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)

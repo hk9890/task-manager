@@ -200,7 +200,11 @@ var blockedCmd = &cobra.Command{
 		if flagJSON {
 			out := make([]blockedDTO, len(blocked))
 			for i, b := range blocked {
-				out[i] = blockedDTO{issueDTO: toIssueDTO(s.Name(), b.Issue), BlockedBy: toRefDTOs(b.BlockedBy)}
+				refs := make([]refDTO, len(b.BlockedBy))
+				for j, r := range b.BlockedBy {
+					refs[j] = toRefDTO(r)
+				}
+				out[i] = blockedDTO{issueDTO: toIssueDTO(s.Name(), b.Issue), BlockedBy: refs}
 			}
 			return printJSON(out)
 		}

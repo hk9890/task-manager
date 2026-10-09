@@ -19,6 +19,7 @@ package cmd
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,9 +37,11 @@ type jsonOutput struct {
 
 // jsonOutputs is the one place a command is tied to the type it prints, keyed by
 // the command's catalog name. The catalog reflects the field list out of the
-// type, so a declared command cannot drift from its DTO; what a map cannot
-// enforce is that a command is declared at all, and
-// TestCommands_EveryJSONPrinterDeclaresItsOutput reads the source for that.
+// type, so a declared type cannot drift from its fields. What a map cannot
+// enforce is that the declaration names the type the command prints, or that a
+// command is declared at all: printJSON records the type it is handed, and
+// TestCommands_Output_EveryCommandPrintsItsDeclaredType runs every command and
+// compares the two.
 //
 // A pre-hook denial (hookDeniedDTO) is an error shape printed at exit 1 and is
 // not declared here.
@@ -78,6 +81,7 @@ var jsonOutputs = map[string]jsonOutput{
 	"statuses":            {prints: []string{}},
 	"store list":          {prints: []storeEntryDTO{}},
 	"store move":          {prints: storeMoveDTO{}},
+	"tree":                {prints: []treeDTO{}},
 	"types":               {prints: []string{}},
 	"update":              {prints: mutationDTO{}},
 	"version":             {prints: versionDTO{}},
@@ -85,21 +89,25 @@ var jsonOutputs = map[string]jsonOutput{
 }
 
 // shapeDoc is the JSON shape of a value: its JSON type, the element type of an
-// array, and the fields of an object or of each object in an array.
+// array, and the fields of an object or of each object in an array. Recursive
+// stands in for the fields where they are those of the object the value is a
+// field of, as with the children of a tree node.
 type shapeDoc struct {
-	Type   string     `yaml:"type" json:"type"`
-	Items  string     `yaml:"items,omitempty" json:"items,omitempty"`
-	Fields []fieldDoc `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Type      string     `yaml:"type" json:"type"`
+	Items     string     `yaml:"items,omitempty" json:"items,omitempty"`
+	Recursive bool       `yaml:"recursive,omitempty" json:"recursive,omitempty"`
+	Fields    []fieldDoc `yaml:"fields,omitempty" json:"fields,omitempty"`
 }
 
-// fieldDoc is one field of a printed object. Optional marks a field the encoder
-// omits when it is empty.
+// fieldDoc is one field of a printed object: a name, the keys of a shapeDoc,
+// and Optional, which marks a field the encoder omits when it is empty.
 type fieldDoc struct {
-	Name     string     `yaml:"name" json:"name"`
-	Type     string     `yaml:"type" json:"type"`
-	Items    string     `yaml:"items,omitempty" json:"items,omitempty"`
-	Optional bool       `yaml:"optional,omitempty" json:"optional,omitempty"`
-	Fields   []fieldDoc `yaml:"fields,omitempty" json:"fields,omitempty"`
+	Name      string     `yaml:"name" json:"name"`
+	Type      string     `yaml:"type" json:"type"`
+	Items     string     `yaml:"items,omitempty" json:"items,omitempty"`
+	Recursive bool       `yaml:"recursive,omitempty" json:"recursive,omitempty"`
+	Optional  bool       `yaml:"optional,omitempty" json:"optional,omitempty"`
+	Fields    []fieldDoc `yaml:"fields,omitempty" json:"fields,omitempty"`
 }
 
 // MarshalYAML prints a field without nested fields on one line. The catalog
@@ -135,9 +143,9 @@ func outputFor(name string) *outputDoc {
 	if !ok {
 		return nil
 	}
-	out := &outputDoc{shapeDoc: shapeOf(reflect.TypeOf(decl.prints))}
+	out := &outputDoc{shapeDoc: shapeOf(reflect.TypeOf(decl.prints), nil)}
 	for flag, v := range decl.withFlag {
-		out.WithFlag = append(out.WithFlag, flagOutputDoc{Flag: flag, shapeDoc: shapeOf(reflect.TypeOf(v))})
+		out.WithFlag = append(out.WithFlag, flagOutputDoc{Flag: flag, shapeDoc: shapeOf(reflect.TypeOf(v), nil)})
 	}
 	sort.Slice(out.WithFlag, func(i, j int) bool { return out.WithFlag[i].Flag < out.WithFlag[j].Flag })
 	return out
@@ -145,8 +153,10 @@ func outputFor(name string) *outputDoc {
 
 var timeType = reflect.TypeOf(time.Time{})
 
-// shapeOf maps a Go type to the JSON shape encoding/json gives it.
-func shapeOf(t reflect.Type) shapeDoc {
+// shapeOf maps a Go type to the JSON shape encoding/json gives it. enclosing
+// holds the structs the type is nested in, innermost last: a struct that
+// contains itself is reported as recursive instead of being walked again.
+func shapeOf(t reflect.Type, enclosing []reflect.Type) shapeDoc {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -161,33 +171,48 @@ func shapeOf(t reflect.Type) shapeDoc {
 	case reflect.Int:
 		return shapeDoc{Type: "integer"}
 	case reflect.Slice:
-		elem := shapeOf(t.Elem())
-		return shapeDoc{Type: "array", Items: elem.Type, Fields: elem.Fields}
+		elem := shapeOf(t.Elem(), enclosing)
+		return shapeDoc{Type: "array", Items: elem.Type, Recursive: elem.Recursive, Fields: elem.Fields}
 	case reflect.Struct:
-		return shapeDoc{Type: "object", Fields: fieldsOf(t)}
+		if n := len(enclosing); n > 0 && enclosing[n-1] == t {
+			return shapeDoc{Type: "object", Recursive: true}
+		}
+		if slices.Contains(enclosing, t) {
+			panic(fmt.Sprintf("commands catalog: %s contains itself through another type, which `recursive` cannot express", t))
+		}
+		return shapeDoc{Type: "object", Fields: fieldsOf(t, append(slices.Clip(enclosing), t))}
 	}
 	panic(fmt.Sprintf("commands catalog: no JSON shape for %s", t))
 }
 
 // fieldsOf lists the fields of a struct as encoding/json names them. An
 // embedded struct contributes its fields to the object that embeds it.
-func fieldsOf(t reflect.Type) []fieldDoc {
+func fieldsOf(t reflect.Type, enclosing []reflect.Type) []fieldDoc {
 	var out []fieldDoc
 	for i := range t.NumField() {
 		f := t.Field(i)
-		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
+		name, options, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if f.Anonymous && name == "" {
-			out = append(out, fieldsOf(f.Type)...)
+			out = append(out, fieldsOf(f.Type, enclosing)...)
 			continue
 		}
-		shape := shapeOf(f.Type)
+		shape := shapeOf(f.Type, enclosing)
 		out = append(out, fieldDoc{
-			Name:     name,
-			Type:     shape.Type,
-			Items:    shape.Items,
-			Optional: strings.Contains(opts, "omitempty"),
-			Fields:   shape.Fields,
+			Name:      name,
+			Type:      shape.Type,
+			Items:     shape.Items,
+			Recursive: shape.Recursive,
+			Optional:  omittedWhenEmpty(f.Type, strings.Split(options, ",")),
+			Fields:    shape.Fields,
 		})
 	}
 	return out
+}
+
+// omittedWhenEmpty reports whether encoding/json leaves a field of type t out
+// under the given tag options. omitempty never omits a struct, so a time.Time
+// that carries it is always printed.
+func omittedWhenEmpty(t reflect.Type, options []string) bool {
+	return slices.Contains(options, "omitzero") ||
+		slices.Contains(options, "omitempty") && t.Kind() != reflect.Struct
 }
