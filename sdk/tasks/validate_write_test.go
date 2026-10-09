@@ -18,6 +18,7 @@ package tasks
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -79,20 +80,33 @@ func TestFieldUnchanged_ComparesEveryInputTheConstraintReads(t *testing.T) {
 
 // ── the rule, through the store (L2) ────────────────────────────────────────
 
-// seedInvalidCreator hand-edits an issue's frontmatter to carry a creator past
-// its length limit — a value `UpdateInput` has no field for, so no command can
-// rewrite it. It is the shape a restore or an older build leaves behind.
-func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+// seedStored hand-edits a stored issue, the way a restore, a merge or an older
+// build leaves a value the engine would refuse to write.
+func seedStored(t *testing.T, fs vfs.FS, s *Store, id string, edit func(*Issue)) {
 	t.Helper()
 	path := filepath.Join(s.dir, id+FileExt)
 	data, err := fs.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read issue: %v", err)
 	}
-	raw := strings.Replace(string(data), "---\n", "---\ncreator: "+strings.Repeat("n", maxCreatorLen+1)+"\n", 1)
-	if err := fs.WriteAtomic(path, []byte(raw), 0o644); err != nil {
+	iss, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("parse issue: %v", err)
+	}
+	edit(iss)
+	if data, err = Marshal(iss); err != nil {
+		t.Fatalf("marshal issue: %v", err)
+	}
+	if err := fs.WriteAtomic(path, data, 0o644); err != nil {
 		t.Fatalf("seed issue: %v", err)
 	}
+}
+
+// seedInvalidCreator stores a creator past its length limit — a value
+// `UpdateInput` has no field for, so no command can rewrite it.
+func seedInvalidCreator(t *testing.T, fs vfs.FS, s *Store, id string) {
+	t.Helper()
+	seedStored(t, fs, s, id, func(iss *Issue) { iss.Creator = strings.Repeat("n", maxCreatorLen+1) })
 }
 
 func TestClose_AnInvalidStoredFieldDoesNotFreezeTheIssue(t *testing.T) {
@@ -166,3 +180,105 @@ func TestLogIOError_ValidationRefusalIsNotAnIOError(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// ── the same rule for the graph checks (L2) ─────────────────────────────────
+
+func TestUpdate_AStoredGraphViolationDoesNotFreezeTheIssue(t *testing.T) {
+	cases := map[string]func(a, b *Issue){
+		"own parent":       func(a, b *Issue) { a.Parent = a.ID },
+		"parent cycle":     func(a, b *Issue) { a.Parent = b.ID },
+		"dangling parent":  func(a, b *Issue) { a.Parent = "tst-gone00" },
+		"dangling blocker": func(a, b *Issue) { a.BlockedBy = []string{"tst-gone00"} },
+		"dangling related": func(a, b *Issue) { a.Related = []string{"tst-gone00"} },
+		"dependency cycle": func(a, b *Issue) { a.BlockedBy = []string{b.ID} },
+	}
+	for name, violate := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, fs := chainStore(t)
+			a := mustCreate(t, s, CreateInput{Title: "a"})
+			b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID, BlockedBy: []string{a.ID}})
+			seedStored(t, fs, s, a.ID, func(stored *Issue) { violate(stored, b) })
+
+			if _, err := s.Update(a.ID, UpdateInput{Title: strPtr("renamed")}); err != nil {
+				t.Fatalf("a title edit must not be refused by an edge it does not touch: %v", err)
+			}
+			closed := StatusClosed
+			if _, err := s.Update(a.ID, UpdateInput{Status: &closed}); err != nil {
+				t.Errorf("a close through Update must not be refused either: %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdate_AStoredParentCycle_IsRepairedThroughTheParent(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b", Parent: a.ID})
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.Parent = b.ID })
+
+	if _, err := s.Update(a.ID, UpdateInput{Parent: strPtr("")}); err != nil {
+		t.Fatalf("clearing the parent must break the cycle: %v", err)
+	}
+	_, err := s.Update(a.ID, UpdateInput{Parent: &b.ID})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "parent" || !strings.Contains(ve.Message, "parent cycle") {
+		t.Errorf("writing the cycle back must be refused, got %v", err)
+	}
+}
+
+func TestAddDep_AStoredDanglingBlocker_IsRefusedUntilItIsRemoved(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	b := mustCreate(t, s, CreateInput{Title: "b"})
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = []string{"tst-gone00"} })
+
+	err := s.AddDep(a.ID, b.ID)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "blocked_by" {
+		t.Fatalf("a write to blocked_by must still check the whole list, got %v", err)
+	}
+	if err := s.RemoveDep(a.ID, "tst-gone00"); err != nil {
+		t.Fatalf("removing the dangling blocker is the repair and must work: %v", err)
+	}
+	if err := s.AddDep(a.ID, b.ID); err != nil {
+		t.Errorf("the list is valid again, got %v", err)
+	}
+}
+
+func TestRemoveDep_AnotherStoredDanglingBlocker_DoesNotRefuseTheRemoval(t *testing.T) {
+	s, fs := chainStore(t)
+	a := mustCreate(t, s, CreateInput{Title: "a"})
+	gone := []string{"tst-gone00", "tst-gone01"}
+	seedStored(t, fs, s, a.ID, func(stored *Issue) { stored.BlockedBy = gone })
+
+	for _, id := range gone {
+		if err := s.RemoveDep(a.ID, id); err != nil {
+			t.Fatalf("each removal is a repair, also while another bad edge stays: %v", err)
+		}
+	}
+}
+
+// The cycle walks end at closed/, so a cycle through a closed issue is on disk
+// without ever being refused. The reopen is the write that brings it into the
+// graph, although it changes no edge.
+func TestUpdate_ReopenIntoADependencyCycle_IsRefused(t *testing.T) {
+	s, _ := chainStore(t)
+	b := mustCreate(t, s, CreateInput{Title: "b"})
+	a := mustCreate(t, s, CreateInput{Title: "a", BlockedBy: []string{b.ID}})
+	if _, err := s.Close(a.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddDep(b.ID, a.ID); err != nil {
+		t.Fatalf("an edge to a closed issue closes no cycle yet: %v", err)
+	}
+
+	open := StatusOpen
+	_, err := s.Update(a.ID, UpdateInput{Status: &open})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "blocked_by" || !strings.Contains(ve.Message, "dependency cycle") {
+		t.Fatalf("want the dependency-cycle validation error, got %v", err)
+	}
+	if got, err := s.Get(a.ID); err != nil || !got.Status.IsClosed() {
+		t.Errorf("a must stay closed, got %+v (err %v)", got, err)
+	}
+}
