@@ -1598,6 +1598,11 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 
 		// Inverse side: best-effort. Absent or closed → leave it (a closed issue
 		// is immutable, and the active view never derives inverses from closed/).
+		// A value outside the ID grammar names no issue, so it has no inverse
+		// side, and it is never joined onto a store directory to look for one.
+		if !validIssueID(otherID) {
+			return nil
+		}
 		other, err := s.Get(otherID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
@@ -1653,9 +1658,16 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 
 	// refExists reports whether an ID is resolvable: either in the hot index
 	// or in the closed/ partition (via cheap Stat, no parse).
+	//
+	// A value outside the ID grammar is in no partition and is never looked up:
+	// joined onto closed/, a "../<id>" would resolve to a file outside the
+	// partition and pass.
 	refExists := func(id string) bool {
 		if _, ok := idx[id]; ok {
 			return true
+		}
+		if !validIssueID(id) {
+			return false
 		}
 		_, statErr := s.fs.Stat(s.closedFilePath(id))
 		return statErr == nil

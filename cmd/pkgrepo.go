@@ -51,13 +51,23 @@ type repoDTO struct {
 	Detail   string   `json:"detail,omitempty"`
 }
 
-// repoAddedDTO is what `package repo add` and `package repo rm` print, and each
-// element of what `package repo update` prints.
+// repoAddedDTO is what `package repo add` prints, and each element of what
+// `package repo update` prints.
 type repoAddedDTO struct {
 	Name     string   `json:"name"`
 	Path     string   `json:"path"`
 	URL      string   `json:"url,omitempty"`
 	Packages []string `json:"packages,omitempty"`
+}
+
+// repoRemovedDTO is what `package repo rm` prints. StillUsed names the packages
+// of the removed repository that the per-user config still uses — references
+// the removal broke, not packages it cleaned up, which is why they do not share
+// a key with what `package repo add` provides.
+type repoRemovedDTO struct {
+	Name      string   `json:"name"`
+	Path      string   `json:"path"`
+	StillUsed []string `json:"still_used,omitempty"`
 }
 
 var packageRepoCmd = &cobra.Command{
@@ -334,7 +344,7 @@ what to reinstall rather than silently ungating a store.`,
 			return err
 		}
 		if flagJSON {
-			return printJSON(repoAddedDTO{Name: name, Path: dir, Packages: orphaned})
+			return printJSON(repoRemovedDTO{Name: name, Path: dir, StillUsed: orphaned})
 		}
 		_, _ = fmt.Fprintf(stdout, "Removed package repository %s from %s\n", name, dir)
 		for _, p := range orphaned {

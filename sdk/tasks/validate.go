@@ -194,6 +194,19 @@ func fieldViolations(iss *Issue) []*ValidationError {
 		add("related", "too many related references: %d (max %d)", len(iss.Related), maxRelated)
 	}
 
+	// parent, blocked_by, related: each value a valid ID (§3). The reference
+	// check joins a value onto a store directory, so one outside the grammar —
+	// a "../<id>" — must be refused before it gets there.
+	if iss.Parent != "" && !validIssueID(iss.Parent) {
+		add("parent", "%q is not a valid issue ID", iss.Parent)
+	}
+	if i := slices.IndexFunc(iss.BlockedBy, invalidIssueID); i >= 0 {
+		add("blocked_by", "%q is not a valid issue ID", iss.BlockedBy[i])
+	}
+	if i := slices.IndexFunc(iss.Related, invalidIssueID); i >= 0 {
+		add("related", "%q is not a valid issue ID", iss.Related[i])
+	}
+
 	if iss.Parent == iss.ID {
 		add("parent", "issue cannot be its own parent")
 	}
@@ -254,6 +267,8 @@ func fieldUnchanged(field string, prev, next *Issue) bool {
 	}
 	return false
 }
+
+func invalidIssueID(id string) bool { return !validIssueID(id) }
 
 func firstDuplicate(ids []string) string {
 	seen := make(map[string]struct{}, len(ids))

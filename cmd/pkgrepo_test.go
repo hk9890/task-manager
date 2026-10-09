@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -253,6 +254,79 @@ func TestPackageRepoRm_RemovesTheCloneAndWarnsAboutUsedPackages(t *testing.T) {
 	if !strings.Contains(out, "missing") {
 		t.Errorf("package list = %q, want the orphaned entry reported missing", out)
 	}
+}
+
+// The orphans are references the removal broke, so they print under their own
+// key: under `packages` a caller reads them as what was removed.
+func TestPackageRepoRm_JSON_NamesUsedPackagesUnderStillUsed(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	origin := originRepo(t, "task-writing")
+
+	if _, _, code := run(t, "package", "repo", "add", origin); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, _, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+
+	name := filepath.Base(origin)
+	got := repoRmJSON(t, name)
+	if want := []any{"task-writing"}; !reflect.DeepEqual(got["still_used"], want) {
+		t.Errorf("still_used = %v, want %v", got["still_used"], want)
+	}
+	if _, ok := got["packages"]; ok {
+		t.Errorf("output = %v, want no packages key", got)
+	}
+	if path, _ := got["path"].(string); got["name"] != name || filepath.Base(path) != name {
+		t.Errorf("output = %v, want the name and path of the removed repository", got)
+	}
+}
+
+func TestPackageRepoRm_JSON_NothingUsedOmitsStillUsed(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	origin := originRepo(t, "task-writing")
+
+	if _, _, code := run(t, "package", "repo", "add", origin); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+
+	got := repoRmJSON(t, filepath.Base(origin))
+	for _, key := range []string{"still_used", "packages"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("output = %v, want no %s key", got, key)
+		}
+	}
+}
+
+func TestPackageRepoAdd_JSON_NamesProvidedPackagesUnderPackages(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	origin := originRepo(t, "task-writing")
+
+	out, errOut, code := run(t, "package", "repo", "add", origin, "--json")
+	if code != 0 {
+		t.Fatalf("repo add: exit %d, stderr %q", code, errOut)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo add --json: %v\n%s", err, out)
+	}
+	if want := []any{"task-writing"}; !reflect.DeepEqual(got["packages"], want) {
+		t.Errorf("packages = %v, want %v", got["packages"], want)
+	}
+}
+
+// repoRmJSON removes one installed repository and returns what it printed.
+func repoRmJSON(t *testing.T, name string) map[string]any {
+	t.Helper()
+	out, errOut, code := run(t, "package", "repo", "rm", name, "--json")
+	if code != 0 {
+		t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo rm --json: %v\n%s", err, out)
+	}
+	return got
 }
 
 func TestPackageRepoRm_AnUninstalledNameIsAnError(t *testing.T) {
