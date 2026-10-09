@@ -17,6 +17,7 @@
 package tasks
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1530,6 +1531,28 @@ func (s *Store) Labels() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// Watch signals each change to the store, from any process and from this
+// handle alike: an issue, a comment, a body sidecar or the configuration that
+// is written, moved or removed, by the engine or by hand.
+//
+// A value on the channel says "the store changed since your last receive, read
+// it again". It carries nothing else. Changes that arrive close together give
+// one signal, and a signal that is not received yet absorbs the next one, so a
+// slow consumer never falls behind. A signal can be redundant: it reports that
+// files changed, not that any query now answers differently.
+//
+// The channel closes when ctx is done, or when the store directory is removed
+// or renamed. Call Watch again on a new handle to follow a moved store. A
+// rename of a directory above the store is not reported: the channel stays
+// open, and a read through this handle fails.
+func (s *Store) Watch(ctx context.Context) (<-chan struct{}, error) {
+	changes, err := s.fs.Watch(ctx, s.dir, []string{closedDirName, commentsDirName, contentDirName})
+	if err != nil {
+		return nil, fmt.Errorf("watch store: %w", err)
+	}
+	return mergeChanges(changes), nil
 }
 
 func dedupe(in []string) []string {
