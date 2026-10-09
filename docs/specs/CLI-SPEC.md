@@ -567,12 +567,32 @@ Every ID resolves before anything prints: one that does not exist fails the whol
 command with `issue not found: <id>` and an empty stdout, so a caller never parses
 a partial result.
 
+| Flag | Meaning |
+|---|---|
+| `--fields <name,...>` | Print only the named fields. A name is a top-level key of `detailDTO` (§6); an unknown one is misuse, and the message lists the valid names. |
+
+A name selects a **line of the human block**, and with it every key that line is
+rendered from: `type` and `priority`, `agent` and `session`, `closed` and
+`close_reason`, and an edge with its `_refs` twin (`parent`, `blocked_by`, `related`).
+Human output prints the header line (ID and title) and the selected lines. JSON
+carries `id` and the selected keys, in `detailDTO` order; a key that is empty stays
+omitted, as in the full object. Selecting by line is what makes one name mean the
+same in both modes: `related` is stored on one side of a link only, so the bare key
+is absent on the other side while the line — and `related_refs` — shows the link.
+
+`store`, `creator` and `body_external` have no human line. Each selects only itself,
+and naming one without `--json` is misuse — a header with nothing under it would read
+as "this issue has none". Names are trimmed and empty ones dropped (`status, created`
+works); a `--fields` value that names nothing is misuse and never falls back to the
+full output.
+
 A body larger than 4096 bytes is **truncated in human output**, followed by a
 notice giving its full size and, when the body lives in the content sidecar
 (TASK-STORAGE-SPEC §4.6), its path. Truncation is a display choice only: `--json`
 always carries the complete body, because a script or an agent asked for all of
-it. Bodies are unbounded, so a doc holding a generated page would otherwise flood
-a terminal on every `show`.
+it, and so does human output when `--fields` names `description`. Bodies are
+unbounded, so a doc holding a generated page would otherwise flood a terminal on
+every `show`.
 
 - **Output (JSON):** an array of `detailDTO` (§6), one element per ID in argument
   order — an array of one for a single ID. Never truncated. Until v0.10.0 `show`
@@ -1165,7 +1185,7 @@ taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
-taskmgr show     <id> [more ids...]
+taskmgr show     <id> [more ids...] [--fields]
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
 taskmgr ready    [--limit]

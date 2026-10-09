@@ -43,8 +43,8 @@ EOF
 `taskmgr show <id> --json` and resubmit the full modified text.
 
 A body of any size is accepted. A very large one is stored in a file beside the issue
-rather than inside it; `show` truncates it on screen and says so, while `--json` always
-returns the whole thing.
+rather than inside it; `show` truncates it on screen and says so, while `--json` and
+`show <id> --fields description` always return the whole thing.
 
 ## Comments
 
