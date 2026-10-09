@@ -97,3 +97,135 @@ func TestShow_SeveralIDs_OneMissing_PrintsNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestShow_Fields_JSONKeepsIDAndNamedKeysInDTOOrder(t *testing.T) {
+	root := newStore(t)
+	blocker := createIssue(t, root)
+	a := createIssue(t, root, "--blocked-by", blocker, "--description", "<body>")
+
+	out, errOut, code := run(t, "--dir", root, "--json", "show", a, "--fields", "blocked_by,status")
+	if code != 0 {
+		t.Fatalf("show: exit %d, stderr %q", code, errOut)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if len(got) != 3 || got["id"] == nil || got["status"] == nil || got["blocked_by"] == nil {
+		t.Errorf("want exactly id, status, blocked_by; got:\n%s", out)
+	}
+	if id, status, blocked := strings.Index(out, `"id"`), strings.Index(out, `"status"`), strings.Index(out, `"blocked_by"`); id >= status || status >= blocked {
+		t.Errorf("keys must keep the order of the full object (id, status, blocked_by); got:\n%s", out)
+	}
+}
+
+func TestShow_Fields_EmptyOptionalFieldStaysOmitted(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+
+	out, _, code := run(t, "--dir", root, "--json", "show", a, "--fields", "blocked_by")
+	if code != 0 {
+		t.Fatalf("show: exit %d", code)
+	}
+	if strings.Contains(out, "blocked_by") {
+		t.Errorf("an issue with no blockers must not gain a blocked_by key; got:\n%s", out)
+	}
+}
+
+func TestShow_Fields_JSONDoesNotEscapeHTML(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--description", "a <b> & c")
+
+	out, _, code := run(t, "--dir", root, "--json", "show", a, "--fields", "description")
+	if code != 0 {
+		t.Fatalf("show: exit %d", code)
+	}
+	if !strings.Contains(out, "a <b> & c") {
+		t.Errorf("a selected field must print like the full object, HTML unescaped; got:\n%s", out)
+	}
+}
+
+func TestShow_Fields_SeveralIDs_SelectsInEachObject(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+	b := createIssue(t, root)
+
+	out, _, code := run(t, "--dir", root, "--json", "show", a, b, "--fields", "status")
+	if code != 0 {
+		t.Fatalf("show: exit %d", code)
+	}
+	var got []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("parse: %v\n%s", err, out)
+	}
+	if len(got) != 2 || len(got[0]) != 2 || len(got[1]) != 2 {
+		t.Errorf("want two objects of id and status; got:\n%s", out)
+	}
+}
+
+func TestShow_Fields_NamedDescription_PrintsCompleteBody(t *testing.T) {
+	root := newStore(t)
+	body := strings.Repeat("a", 10000)
+	a := createIssue(t, root, "--description", body)
+
+	out, _, code := run(t, "--dir", root, "show", a, "--fields", "description")
+	if code != 0 {
+		t.Fatalf("show: exit %d", code)
+	}
+	if !strings.Contains(out, body) || strings.Contains(out, "body is") {
+		t.Errorf("a description named in --fields must print complete and without a notice; got %d bytes", len(out))
+	}
+	if strings.Contains(out, "status:") {
+		t.Errorf("only the named field prints below the header; got:\n%.200s", out)
+	}
+}
+
+func TestShow_Fields_Comments_OmitsDescription(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root, "--description", "the-body")
+	if _, errOut, code := run(t, "--dir", root, "comment", "add", a, "the-comment"); code != 0 {
+		t.Fatalf("comment add: exit %d, stderr %q", code, errOut)
+	}
+
+	out, _, code := run(t, "--dir", root, "show", a, "--fields", "comments")
+	if code != 0 {
+		t.Fatalf("show: exit %d", code)
+	}
+	if !strings.Contains(out, "the-comment") || strings.Contains(out, "the-body") {
+		t.Errorf("want the comments and no description; got:\n%s", out)
+	}
+}
+
+func TestShow_Fields_UnknownName_IsMisuseListingTheNames(t *testing.T) {
+	root := newStore(t)
+	a := createIssue(t, root)
+
+	out, errOut, code := run(t, "--dir", root, "show", a, "--fields", "nope")
+	if code != 1 || out != "" {
+		t.Fatalf("exit %d, stdout %q; want 1 and empty", code, out)
+	}
+	for _, want := range []string{`unknown field "nope"`, "description", "blocked_by_refs", "usage:"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+}
+
+// A detailDTO field no section renders would be accepted by --fields and print
+// nothing in human output, with no test noticing.
+func TestDetailSections_RenderEveryDetailField(t *testing.T) {
+	rendered := map[string]bool{
+		"id": true, "title": true, // the header line
+		"store": true, "creator": true, // --json only: the human block has never shown them
+	}
+	for _, sec := range detailSections {
+		for _, f := range sec.fields {
+			rendered[f] = true
+		}
+	}
+	for _, name := range detailFieldNames() {
+		if !rendered[name] {
+			t.Errorf("detailDTO field %q has no detailSection", name)
+		}
+	}
+}

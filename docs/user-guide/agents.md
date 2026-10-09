@@ -107,7 +107,8 @@ the environment does.
 
 A mutation's `--json` echoes the issue's scalar fields, not its description or comments —
 run `show` to confirm what landed. `show` takes several IDs in one call; its `--json` is
-then an array, and an object for a single ID.
+then an array, and an object for a single ID. `--fields status,blocked_by` cuts either
+output down to the named fields.
 
 ## The loop worth prescribing
 

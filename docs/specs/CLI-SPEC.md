@@ -524,12 +524,24 @@ Every ID resolves before anything prints: one that does not exist fails the whol
 command with `issue not found: <id>` and an empty stdout, so a caller never parses
 a partial result.
 
+| Flag | Meaning |
+|---|---|
+| `--fields <name,...>` | Print only the named fields. A name is a top-level key of `detailDTO` (§6); an unknown one is misuse, and the message lists the valid names. |
+
+With `--fields`, the JSON object carries `id` and the named keys, in `detailDTO`
+order; a named key that is empty stays omitted, as in the full object. Human output
+prints the header line (ID and title) and the lines that render a named field. Two
+keys that share a line select it together — `type` and `priority`, `agent` and
+`session`, `closed` and `close_reason`, an edge and its `_refs` twin. `store` and
+`creator` have no human line.
+
 A body larger than 4096 bytes is **truncated in human output**, followed by a
 notice giving its full size and, when the body lives in the content sidecar
 (TASK-STORAGE-SPEC §4.6), its path. Truncation is a display choice only: `--json`
 always carries the complete body, because a script or an agent asked for all of
-it. Bodies are unbounded, so a doc holding a generated page would otherwise flood
-a terminal on every `show`.
+it, and so does human output when `--fields` names `description`. Bodies are
+unbounded, so a doc holding a generated page would otherwise flood a terminal on
+every `show`.
 
 - **Output (JSON):** one ID → a `detailDTO` object (§6); two or more → an array of
   `detailDTO`. Never truncated. The shape follows the argument count because the
@@ -1121,7 +1133,7 @@ taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
-taskmgr show     <id> [more ids...]
+taskmgr show     <id> [more ids...] [--fields]
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]
 taskmgr search   <text> [--all --sort --reverse --limit]
 taskmgr ready    [--limit]
