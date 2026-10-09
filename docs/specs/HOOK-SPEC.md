@@ -567,6 +567,14 @@ Notes:
   deny). Advisory hints from every hook that ran are gathered and surfaced together.
 - **No partial state.** A denied transition (step 4) leaves the store byte-for-byte
   unchanged.
+- **A set is gated as a whole.** `CreateBatch` (SDK-SPEC §4; `create --from` in the
+  CLI) runs steps 2–4 for **every** entry before step 5 for any: each entry is a
+  `pre-create` with its own payload, in entry order, and the first deny aborts the
+  set with nothing written. `new` carries the entry's allocated `id` and its edges
+  as resolved IDs, which may name issues of the same set that are not on disk yet;
+  `when` evaluates against the set as if all of it existed. The `post-create`
+  hooks then run per issue, in entry order, after the whole set is written. A hook
+  cannot tell a set from single creates, and does not need to.
 - **"Fire-and-forget" = non-vetoing, not asynchronous.** Post-hooks run synchronously
   after the write so their hints and warnings can be surfaced; they simply cannot change
   the outcome. With the 2-second default the added wait is small.
@@ -798,7 +806,9 @@ model.
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
 block until it returns. The worst case is `hook_timeout` + the 2-second SIGKILL grace
 (§3.1, §7.1) — ~4s at the default. **If you raise `hook_timeout` to run a test suite on
-close, you serialize all writes for that duration.**
+close, you serialize all writes for that duration.** A set (`CreateBatch`, §4) holds
+the lock across the `pre-create` chains of all its entries — the same total as filing
+them one by one, but in one stretch, which is what makes the set all-or-nothing.
 Post-hooks avoid this by running outside the lock. The cost is not hidden: every hook's
 wall-clock duration is logged (§4, [MONITORING.md](../MONITORING.md)), so a
 project can see exactly how long its gates hold the lock and decide whether to raise

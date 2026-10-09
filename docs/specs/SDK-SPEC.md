@@ -858,6 +858,7 @@ type Page struct {
 
 ```go
 func (s *Store) Create(in CreateInput) (*MutationResult, error)
+func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) // a set with local refs, all or nothing
 func (s *Store) Import(in ImportInput) (*MutationResult, error)   // direct write of a complete end-state
 func (s *Store) Update(id string, in UpdateInput) (*MutationResult, error)
 func (s *Store) Close(id, reason string) (*MutationResult, error)   // idempotent; moves to closed/
@@ -875,7 +876,8 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   the project lock. Configured lifecycle hooks ([HOOK-SPEC.md](HOOK-SPEC.md)) run on the
   transition: pre-hooks gate the write under the lock, post-hooks notify after it. A
   pre-hook denial returns `*HookDeniedError` (§6) and writes nothing.
-- **All five writes (`Create`/`Update`/`Close`/`Reopen`/`Import`) return a `*MutationResult`** —
+- **All five writes (`Create`/`Update`/`Close`/`Reopen`/`Import`) return a `*MutationResult`**,
+  and `CreateBatch` one per entry —
   the resulting `Issue` plus the advisory hook output (HOOK-SPEC §6.2): `Hints`, aggregated
   from every pre- and post-hook that allowed, and `Warnings`, the post-hook failures (which
   never fail the write). Both are nil when no hooks ran or none had anything to say. A no-op
@@ -894,6 +896,40 @@ func (s *Store) RemoveRelated(a, b string) error           // severs both sides
   `StatusOpen`), de-duplicates labels/edges, and validates. A non-empty
   `CreateInput.ID` is honoured verbatim instead (import/migration) when it is
   well-formed, carries the store prefix, and is not already in use.
+- **`CreateBatch`** creates a set of issues that reference each other, **all or
+  nothing**. Each entry is a `CreateInput` plus an optional `Ref`, a name local to
+  the set that is never stored:
+
+  ```go
+  type BatchEntry struct {
+      Ref string
+      CreateInput
+  }
+  ```
+
+  `Parent`, `BlockedBy` and `Related` of an entry accept the `Ref` of another entry
+  or the ID of an existing issue; a value that is no `Ref` of the set is treated as
+  an ID. Entries may reference each other in any order. A `Ref` must be unique in
+  the set and must not carry the store prefix, so it can never equal an issue ID.
+
+  Under **one** lock the engine allocates every ID, validates every entry against
+  the store *as it will be once the whole set exists* — so a forward reference
+  resolves and a cycle through several entries is found — and runs every entry's
+  `pre-create` hooks, all before the first write (HOOK-SPEC §4). The first entry
+  that is refused aborts the set: nothing is written and the error is a
+  `*BatchEntryError` carrying the entry's zero-based `Index`, its `Ref`, and as `Err`
+  the error a single `Create` of that entry returns, so `errors.Is` / `errors.As`
+  see through to `*ValidationError`, `*HookDeniedError` or a sentinel. An empty set
+  is a `*ValidationError`. The results are in entry order; every issue of a set
+  shares one `Created` instant.
+
+  The guarantee covers **refusal, not a crash**. Each file lands atomically (§7),
+  but there is no multi-file transaction: a write that fails midway removes the
+  issues already written and reports any it could not remove, while a process
+  killed between two writes leaves the earlier issues filed. A journal that closed
+  that gap was rejected — it would be the store's only recovery path, exercised
+  almost never, for a failure that leaves valid issues behind rather than a
+  corrupt store.
 - **`Import`** is a direct write of a complete issue **end-state** from an external
   system — not a `Create`→`Update`→`Close` replay. Unlike `Create` it takes the
   final `Status` (including `closed`) and the original `Created`/`Updated`/`Closed`

@@ -689,8 +689,54 @@ Create a new issue and allocate its ID.
 | `--blocked-by <id>` | — | Blocker issue ID; repeatable. |
 | `--related <id>` | — | Related issue ID; repeatable. |
 
+| `--from <path>` | — | Create a set of issues from a YAML file (`-` = stdin). Replaces every option above except `--creator`, `--agent` and `--session`; see below. |
+
 - **Output:** the new ID (`{"id", "store"}` in JSON; `store` is the registry name of
   the store it landed in, omitted for a local store — §6).
+
+#### `taskmgr create --from <path>`
+
+File a set of issues that reference each other, **all or nothing** (SDK-SPEC §4,
+`CreateBatch`). The file is a YAML list; each entry takes the fields of the options
+above under their JSON names, plus `ref`:
+
+```yaml
+- ref: epic                 # optional; a name local to this file, never stored
+  title: Sign-out ends every session
+  type: epic
+  description: |
+    ## Context
+    ...
+- ref: schema
+  title: Add the revocation table
+  parent: epic              # a ref of this file, or the ID of an existing issue
+  labels: [area:auth]
+- title: Check revocation in verifyToken
+  priority: 1
+  parent: epic
+  blocked_by: [schema]
+  related: [at-0042ab]
+```
+
+- **Keys:** `ref`, `title`, `type`, `priority`, `assignee`, `labels`, `description`,
+  `parent`, `blocked_by`, `related`. Any other key is an error: a misspelt
+  `blocked-by` would otherwise file the issue without its edge.
+- **Edges** name a `ref` of the file or an existing issue ID. Entries may appear in
+  any order. A `ref` must be unique and must not carry the store prefix.
+- **All or nothing.** Every entry is validated and passes its `pre-create` hooks
+  before the first issue is written. A refusal exits `1`, writes nothing, and names
+  the entry: `taskmgr: entry 3 (ref "schema"): …`. Without this, a set refused at its
+  third `create` leaves two issues filed and the caller's shell variables empty.
+- **Who files:** `--creator`, `--agent` and `--session` apply to every issue of the
+  set. Any other `create` option beside `--from` is misuse.
+- **Output:** one `Created <id>` line per issue in file order, with `(<ref>)` after
+  the ID where the entry has one. JSON: an array of `{"ref", "id", "store", "hints",
+  "warnings"}` in file order — the map from the file's names to the new IDs.
+- A denied set under `--json` prints the `hook_denied` object (§6) with `entry` (the
+  1-based position) and `ref` in place of `issue_id`, since the issue never existed.
+
+`import --batch` is not this: it writes verbatim end-states, skips hooks by default,
+needs edges that already exist, and lands each record independently.
 
 ### `taskmgr import [--file <path>] [--batch] [--run-hooks]`
 
@@ -1091,6 +1137,9 @@ prints a structured error:
   "hints": ["run `make fmt` before retrying"] }
 ```
 
+A set refused by `create --from` carries `"entry"` (the 1-based position in the file)
+and `"ref"` (omitted when the entry has none) instead of `"issue_id"`.
+
 ---
 
 ## 7. Command summary
@@ -1112,6 +1161,7 @@ taskmgr hook     list                        # the effective chain, in run order
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]
+taskmgr create   --from <path> [--creator --agent --session]   # a set, all or nothing
 taskmgr import   [--file <path>] [--batch] [--run-hooks]   # JSON envelope on stdin/file
 taskmgr show     <id>
 taskmgr list     [-q <expr>] [--all --sort --reverse --limit]

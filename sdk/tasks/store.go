@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -719,12 +720,18 @@ func (s *Store) allClosed() ([]*Issue, error) {
 // vfs seam and passes the union to newIDFromNames, which retries against those
 // existing names as defence in depth so an ID never collides within one store.
 // If closed/ does not yet exist, it is treated as empty (TASK-STORAGE-SPEC §3).
-func (s *Store) nextID() (string, error) {
+//
+// taken lists IDs that are allocated but not on disk yet — the earlier entries of
+// a CreateBatch set.
+func (s *Store) nextID(taken ...string) (string, error) {
 	hotEntries, err := s.fs.ReadDir(s.dir)
 	if err != nil {
 		return "", err
 	}
-	names := make([]string, 0, len(hotEntries))
+	names := make([]string, 0, len(hotEntries)+len(taken))
+	for _, id := range taken {
+		names = append(names, id+".md")
+	}
 	for _, e := range hotEntries {
 		names = append(names, e.Name())
 	}
@@ -763,14 +770,18 @@ func (s *Store) validateNewID(id string) error {
 
 // resolveID returns the issue ID to use: a freshly allocated one when raw is
 // empty (after trimming), or raw itself once validated as a usable new ID.
-// Caller holds the lock.
-func (s *Store) resolveID(raw string) (string, error) {
+// taken lists the IDs already given to earlier entries of the same CreateBatch
+// set, which neither a fresh nor a supplied ID may repeat. Caller holds the lock.
+func (s *Store) resolveID(raw string, taken ...string) (string, error) {
 	id := strings.TrimSpace(raw)
 	if id == "" {
-		return s.nextID()
+		return s.nextID(taken...)
 	}
 	if err := s.validateNewID(id); err != nil {
 		return "", err
+	}
+	if slices.Contains(taken, id) {
+		return "", fmt.Errorf("%w: %s", ErrAlreadyExists, id)
 	}
 	return id, nil
 }
@@ -915,20 +926,7 @@ func (s *Store) Create(in CreateInput) (*MutationResult, error) {
 			return err
 		}
 		now := s.now()
-		iss := buildIssue(id, issueFields{
-			Title:       in.Title,
-			Description: in.Description,
-			Type:        in.Type,
-			Priority:    in.Priority,
-			Assignee:    in.Assignee,
-			Creator:     in.Creator,
-			Agent:       in.Agent,
-			Session:     in.Session,
-			Labels:      in.Labels,
-			Parent:      in.Parent,
-			BlockedBy:   in.BlockedBy,
-			Related:     in.Related,
-		}, StatusOpen, now, now)
+		iss := buildIssue(id, in.fields(), StatusOpen, now, now)
 		idx, err := s.validateAndIndex(iss)
 		if err != nil {
 			return err
@@ -944,6 +942,124 @@ func (s *Store) Create(in CreateInput) (*MutationResult, error) {
 		return nil, err
 	}
 	return s.postFinish(hs, true, transCreate, nil, created, preHints), nil
+}
+
+func (in CreateInput) fields() issueFields {
+	return issueFields{
+		Title:       in.Title,
+		Description: in.Description,
+		Type:        in.Type,
+		Priority:    in.Priority,
+		Assignee:    in.Assignee,
+		Creator:     in.Creator,
+		Agent:       in.Agent,
+		Session:     in.Session,
+		Labels:      in.Labels,
+		Parent:      in.Parent,
+		BlockedBy:   in.BlockedBy,
+		Related:     in.Related,
+	}
+}
+
+// CreateBatch creates a set of issues that may reference each other, all or
+// nothing. An entry's Parent, BlockedBy and Related accept the Ref of another
+// entry as well as the ID of an existing issue, in any order.
+//
+// Under one lock it allocates every ID, validates every entry against the store
+// as it will be once the whole set exists, and runs every entry's pre-create
+// hooks — all before the first write. A refusal of any entry returns a
+// *BatchEntryError and writes nothing. Post-create hooks run after the set is on
+// disk, one issue at a time, in entry order. The results are in entry order.
+//
+// The guarantee covers refusal, not a crash: each file lands atomically, but a
+// process killed between two of them leaves the earlier issues filed.
+func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
+	if len(entries) == 0 {
+		return nil, invalid("entries", "the set is empty")
+	}
+	hs, err := s.hooks()
+	if err != nil {
+		return nil, err
+	}
+	issues := make([]*Issue, len(entries))
+	preHints := make([][]string, len(entries))
+	refused := func(i int, err error) error { return &BatchEntryError{Index: i, Ref: entries[i].Ref, Err: err} }
+	err = s.withLock(func() error {
+		ids := make([]string, len(entries))
+		for i, e := range entries {
+			id, err := s.resolveID(e.ID, ids[:i]...)
+			if err != nil {
+				return refused(i, err)
+			}
+			ids[i] = id
+		}
+		inputs, err := resolveBatchRefs(s.cfg.Prefix, entries, ids)
+		if err != nil {
+			return err
+		}
+		idx, _, err := s.index()
+		if err != nil {
+			return err
+		}
+		now := s.now()
+		for i, in := range inputs {
+			issues[i] = buildIssue(in.ID, in.fields(), StatusOpen, now, now)
+			if err := s.validateWrite(issues[i]); err != nil {
+				return refused(i, err)
+			}
+			idx[in.ID] = issues[i]
+		}
+		// The index now holds the whole set, so an edge to a later entry resolves
+		// and a cycle that runs through several entries is found.
+		for i, iss := range issues {
+			if err := s.checkRefsWith(iss, idx); err != nil {
+				return refused(i, err)
+			}
+		}
+		for i, iss := range issues {
+			hints, denial, err := s.runPre(hs, transCreate.preEvent(), nil, iss, idx)
+			if err != nil {
+				return refused(i, err)
+			}
+			if denial != nil {
+				return refused(i, denial)
+			}
+			preHints[i] = hints
+		}
+		for i, iss := range issues {
+			if err := s.writeIssue(iss); err != nil {
+				s.logIOError(string(transCreate), iss.ID, err)
+				return errors.Join(refused(i, err), s.removeCreated(issues[:i+1]))
+			}
+		}
+		for _, iss := range issues {
+			s.logWrite(transCreate, iss.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]*MutationResult, len(issues))
+	for i, iss := range issues {
+		results[i] = s.postFinish(hs, true, transCreate, nil, iss, preHints[i])
+	}
+	return results, nil
+}
+
+// removeCreated deletes the files of issues a failed CreateBatch already wrote,
+// the last of which may be half-written (a sidecar without its .md). It returns
+// what it could not remove, so the caller's error names every issue left behind.
+func (s *Store) removeCreated(issues []*Issue) error {
+	var left []error
+	for _, iss := range issues {
+		for _, path := range []string{s.filePath(iss.ID), s.contentPath(iss.ID)} {
+			if err := s.fs.Remove(path); err != nil && !vfs.IsNotExist(err) {
+				left = append(left, fmt.Errorf("%s was written and could not be removed: %w", iss.ID, err))
+			}
+		}
+	}
+	return errors.Join(left...)
 }
 
 // UpdateInput holds partial changes. Nil pointer fields are left unchanged.

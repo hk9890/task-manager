@@ -100,7 +100,8 @@ the environment does.
 
 - **Capture IDs; there is no way to derive one.** They are random tokens, so
   `--json | jq -r .id` is the only source ([Getting started](getting-started.md#file-a-task)
-  has the pattern).
+  has the pattern). For a set that depends on itself, `create --from <file>` removes the
+  capture: entries name each other by `ref`, and its `--json` returns the `ref` to ID map.
 - **Write bodies through `--description-file -`, not `--description`,** which stores a
   literal backslash-n ([Concepts](concepts.md#the-description-body)). `comment add --file -`
   reads standard input the same way.

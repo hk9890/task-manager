@@ -97,6 +97,13 @@ type createResultDTO struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
+// createFromResultDTO is one element of the --json array of `create --from`:
+// createResultDTO plus the entry's ref, so a caller maps its own names to IDs.
+type createFromResultDTO struct {
+	Ref string `json:"ref,omitempty"`
+	createResultDTO
+}
+
 // The operation names carried in the "op" field of the five DTOs below. They
 // are the SDK's own log op values (MONITORING.md § What `write` covers), copied
 // rather than imported because they are unexported there — a mismatch is caught
@@ -141,13 +148,18 @@ type commentDeleteDTO struct {
 // hookDeniedDTO is the --json error printed when a pre-hook denies a transition
 // (HOOK-SPEC §6.2). "error" is always "hook_denied".
 type hookDeniedDTO struct {
-	Error   string   `json:"error"`
-	Event   string   `json:"event"`
-	Hook    string   `json:"hook"`
-	IssueID string   `json:"issue_id,omitempty"`
-	Exit    int      `json:"exit"`
-	Reason  string   `json:"reason"`
-	Hints   []string `json:"hints,omitempty"`
+	Error   string `json:"error"`
+	Event   string `json:"event"`
+	Hook    string `json:"hook"`
+	IssueID string `json:"issue_id,omitempty"`
+	// Entry and Ref locate the denied issue in a `create --from` file: the
+	// 1-based position and the entry's ref. IssueID is of no use there, since
+	// the issue was never written.
+	Entry  int      `json:"entry,omitempty"`
+	Ref    string   `json:"ref,omitempty"`
+	Exit   int      `json:"exit"`
+	Reason string   `json:"reason"`
+	Hints  []string `json:"hints,omitempty"`
 }
 
 type commentDTO struct {
