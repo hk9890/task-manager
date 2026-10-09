@@ -55,6 +55,23 @@ taskmgr create --title "Wire the export button" --blocked-by "$id"
 The second task cannot be worked on until the first is closed. That is what makes the next
 command useful.
 
+To file several tasks that depend on each other, write them to one YAML file and name each
+other by `ref` instead of capturing IDs:
+
+```yaml
+- ref: schema
+  title: Define the export schema
+- title: Wire the export button
+  blocked_by: [schema]
+```
+
+```bash
+taskmgr create --from tasks.yaml
+```
+
+The set is filed completely or not at all: if one entry is refused, no task is created and
+the error names the entry.
+
 ## Find what to work on
 
 ```bash

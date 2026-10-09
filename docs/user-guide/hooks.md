@@ -316,7 +316,14 @@ nothing is written; hints from the ones that already ran are still passed along.
   that writes to this store waits. `hook_timeout` (default `2s`) bounds that wait — plus a
   fixed 2-second grace for a hook that ignores the first signal, so the real ceiling is
   ~4s at the default. Raising it to run a test suite on close serializes all writes for
-  that long; a slow check is usually better as a post-hook, or left to CI.
+  that long; a slow check is usually better as a post-hook, or left to CI. A set filed
+  with `taskmgr create --from` holds the lock for the `pre-create` hooks of all its
+  issues in one stretch, so its ceiling is that figure times the number of issues.
+- **In a set, a `pre-create` hook sees issues that do not exist yet.** `create --from`
+  runs every gate before it writes anything, so the `parent` or `blocked_by` of the
+  issue in the payload can name another issue of the same set. `taskmgr show` on that
+  ID answers *not found*. A gate that looks a referenced issue up must allow when it is
+  not there, or it denies every set.
 - **Pre-hooks fail closed.** A missing script, a bad command, a timeout — all deny. This is
   the point: a gate you can skip is not a gate, and **there is no bypass flag**. To relax
   one, edit the package, or `taskmgr package rm` it.

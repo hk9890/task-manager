@@ -100,8 +100,23 @@ guess one, so capture it from --json and reuse it:
 
   id=$(taskmgr create --title "Schema" --type task --json | jq -r .id)
 
-Filing a set that depends on itself: create in dependency order, because an id
-does not exist until its issue does.
+Filing a set that depends on itself: put it in one YAML file and file it in one
+call. Entries name each other by ref, in any order, and one refused entry files
+none of them:
+
+  taskmgr create --from set.yaml --json     # prints [{ref, id}, ...]
+
+  - ref: schema
+    title: Schema
+  - title: Export endpoint
+    type: feature
+    blocked_by: [schema]          # a ref of this file, or an existing id
+    description: |
+      ## Acceptance criteria
+      - [ ] UTF-8 with BOM
+
+The keys are ref, title, type, priority, assignee, labels, description, parent,
+blocked_by and related.
 
 ## The description body
 
