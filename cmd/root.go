@@ -153,7 +153,7 @@ func Run(args []string, stdoutW, stderrW io.Writer) int {
 	case errors.As(err, &ue):
 		// Misinvocation: render the compact help block (purpose, usage, example,
 		// flags/subcommands, --help pointer) instead of the bare one-liner.
-		renderUsageError(ue)
+		renderUsageError(ue, args)
 	case errors.As(err, &se):
 		// Output already emitted to stdout (e.g. a hook_denied JSON object).
 	default:
@@ -161,7 +161,7 @@ func Run(args []string, stdoutW, stderrW io.Writer) int {
 		// plain error; detect them structurally and render as misuse-help too,
 		// naming the flags. Anything else is a genuine runtime error: stay terse.
 		if missing := missingRequiredFlags(cmd); len(missing) > 0 {
-			renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)})
+			renderUsageError(&usageError{cmd: cmd, msg: requiredFlagsMsg(missing)}, args)
 		} else {
 			_, _ = fmt.Fprintln(stderr, "taskmgr: "+err.Error())
 		}

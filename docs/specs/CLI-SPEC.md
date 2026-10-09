@@ -103,6 +103,36 @@ Mistyped commands are corrected, not dead-ended: an unknown top-level command or
 unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
 group with no subcommand prints its help and exits `0`).
 
+**A filter field guessed as a flag is answered with the expression.** Filtering has one
+surface, `-q` (§3.1), and no flag per field. When a command that takes `-q/--query`
+(`list`, `search`) rejects an unknown flag whose name is a comparison field of
+[QUERY-SPEC](QUERY-SPEC.md) §2, one line follows the error line, before the blank line
+that opens the rest of the help block:
+
+```text
+taskmgr: unknown flag: --status
+To filter by status: taskmgr list -q 'status == "in_progress"'
+```
+
+- **The command** is the one that was run, with its required positionals as
+  placeholders: `taskmgr search <text> -q '…'`.
+- **The value** is the one given, as `--status in_progress` or `--status=in_progress`.
+  With none — the flag is last, or the next argument starts with `-` — it is the
+  placeholder `<value>`. It is printed as a quoted string, escaped for the expression
+  and for a single-quoted shell word.
+- **The operator** is `==`, with two exceptions: `text` takes `~`, the only operator it
+  has, and `created` / `updated` / `closed` take `>=`, because `==` on a date compares
+  one instant and matches nothing a caller means by `--created 2026-01-01`.
+- **`priority`** is printed bare, as the integer it must be; a missing or non-integer
+  value prints the placeholder `<0-4>`.
+- The value is not validated: `--status wip` prints `status == "wip"`, and running that
+  returns the engine's own error, which names the legal values.
+
+Any other unknown flag, and a field name on a command without `-q` (`show <id> --status
+open`), prints the help block unchanged. A flag per field was rejected: it would be a
+second filter surface to keep in step with the grammar, and could not express `!=`, `~`
+or `||`.
+
 ### Store resolution
 
 The store a command operates on is resolved by the engine (the same logic every

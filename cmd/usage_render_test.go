@@ -103,6 +103,96 @@ func flagsSection(t *testing.T, stderr string) string {
 	return block
 }
 
+// TestMisuse_FilterFieldFlag_HintsQueryExpression: a filter field guessed as a
+// flag gets the working -q expression right under the headline, built from the
+// value in either spelling, or from a placeholder when there is none.
+func TestMisuse_FilterFieldFlag_HintsQueryExpression(t *testing.T) {
+	root := newStore(t)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"list", "--status", "in_progress"}, `To filter by status: taskmgr list -q 'status == "in_progress"'`},
+		{[]string{"list", "--parent=at-abc123"}, `To filter by parent: taskmgr list -q 'parent == "at-abc123"'`},
+		{[]string{"list", "--label", "area:x"}, `To filter by label: taskmgr list -q 'label == "area:x"'`},
+		{[]string{"list", "--priority", "1"}, `To filter by priority: taskmgr list -q 'priority == 1'`},
+		{[]string{"list", "--priority", "high"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+		{[]string{"list", "--text", `it's "x"`}, `To filter by text: taskmgr list -q 'text ~ "it'\''s \"x\""'`},
+		{[]string{"list", "--closed", "2026-01-01"}, `To filter by closed: taskmgr list -q 'closed >= "2026-01-01"'`},
+		{[]string{"list", "--status"}, `To filter by status: taskmgr list -q 'status == "<value>"'`},
+		{[]string{"list", "--status", "--all"}, `To filter by status: taskmgr list -q 'status == "<value>"'`},
+		{[]string{"search", "drill", "--type", "bug"}, `To filter by type: taskmgr search <text> -q 'type == "bug"'`},
+	} {
+		stdout, stderr, code := run(t, append([]string{"--dir", root}, tc.args...)...)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", tc.args, code)
+		}
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("%v: misuse must leave stdout empty; got %q", tc.args, stdout)
+		}
+		lines := strings.Split(stderr, "\n")
+		if len(lines) < 3 || !strings.HasPrefix(lines[0], "taskmgr: unknown flag: --") || lines[1] != tc.want || lines[2] != "" {
+			t.Errorf("%v: want the headline, then %q, then a blank line\n---\n%s", tc.args, tc.want, stderr)
+		}
+		if !strings.Contains(stderr, "usage:") {
+			t.Errorf("%v: the hint must not replace the help block\n---\n%s", tc.args, stderr)
+		}
+	}
+}
+
+// TestMisuse_UnknownFlag_NoFilterHint: the hint is for a filter field on a command
+// that takes -q. Any other unknown flag, and a field name on a command that cannot
+// filter, keep the block as it was — the headline, then a blank line.
+func TestMisuse_UnknownFlag_NoFilterHint(t *testing.T) {
+	root := newStore(t)
+	for _, tc := range []struct {
+		args     []string
+		headline string
+	}{
+		{[]string{"list", "--nope"}, "taskmgr: unknown flag: --nope\n\n"},
+		{[]string{"show", "tst-0001", "--status", "open"}, "taskmgr: unknown flag: --status\n\n"},
+	} {
+		_, stderr, code := run(t, append([]string{"--dir", root}, tc.args...)...)
+		if code != 1 {
+			t.Errorf("%v: expected exit 1, got %d", tc.args, code)
+		}
+		if !strings.HasPrefix(stderr, tc.headline) || strings.Contains(stderr, "To filter by") {
+			t.Errorf("%v: want the bare headline %q and no filter hint\n---\n%s", tc.args, tc.headline, stderr)
+		}
+	}
+}
+
+// TestFilterFieldOps_EveryHintIsAnAcceptedQuery keeps filterFieldOps honest. cmd/
+// cannot import the query engine's field table, so the list is a copy; this runs
+// the hint printed for every entry back through `list -q`, which fails on a name
+// that is not a field and on an operator or value form the field does not take.
+func TestFilterFieldOps_EveryHintIsAnAcceptedQuery(t *testing.T) {
+	samples := map[string]string{
+		"status": "in_progress", "type": "bug", "priority": "1",
+		"assignee": "ada", "creator": "ada", "agent": "claude-code", "session": "s-1",
+		"parent": "tst-0001", "label": "area:x", "text": "drill",
+		"created": "2026-01-01", "updated": "2026-01-01", "closed": "2026-01-01T09:00:00Z",
+	}
+	root := newStore(t)
+	for field := range filterFieldOps {
+		sample, ok := samples[field]
+		if !ok {
+			t.Errorf("no sample value for filter field %q", field)
+			continue
+		}
+		_, hint, _ := run(t, "--dir", root, "list", "--"+field, sample)
+		_, quoted, found := strings.Cut(strings.SplitN(hint, "\n", 3)[1], " -q '")
+		if !found {
+			t.Errorf("--%s: no filter hint under the headline\n---\n%s", field, hint)
+			continue
+		}
+		expr := strings.TrimSuffix(quoted, "'")
+		if _, stderr, code := run(t, "--dir", root, "list", "-q", expr); code != 0 {
+			t.Errorf("--%s: list -q %q exited %d: %s", field, expr, code, stderr)
+		}
+	}
+}
+
 // hiddenFlagNames returns the names of the flags the named command marks Hidden,
 // so the assertion above names real flags rather than a guess that would pass
 // once someone unhid one.

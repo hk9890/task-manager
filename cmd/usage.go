@@ -17,7 +17,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,6 +35,9 @@ import (
 type usageError struct {
 	cmd *cobra.Command
 	msg string
+	// unknownFlag is the name, without dashes, of the flag the command does not
+	// have; empty for every other kind of misuse.
+	unknownFlag string
 }
 
 func (e *usageError) Error() string { return e.msg }
@@ -45,7 +50,12 @@ func installUsageErrors(root *cobra.Command) {
 	// FlagErrorFunc is inherited by subcommands, so setting it on the root covers
 	// the whole tree.
 	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
-		return &usageError{cmd: cmd, msg: err.Error()}
+		ue := &usageError{cmd: cmd, msg: err.Error()}
+		var unknown *pflag.NotExistError
+		if errors.As(err, &unknown) {
+			ue.unknownFlag = unknown.GetSpecifiedName()
+		}
+		return ue
 	})
 
 	var walk func(c *cobra.Command)
@@ -149,6 +159,70 @@ func requiredFlagsMsg(missing []string) string {
 	return "missing required flags " + strings.Join(missing, ", ")
 }
 
+// filterFieldOps is every comparison field of the filter language (QUERY-SPEC §2)
+// with the operator a caller who guessed it as a flag most likely meant. A date
+// gets ">=" because "==" compares one instant, which is never what
+// "--created 2026-01-01" asks for.
+var filterFieldOps = map[string]string{
+	"status":   "==",
+	"type":     "==",
+	"priority": "==",
+	"assignee": "==",
+	"creator":  "==",
+	"agent":    "==",
+	"session":  "==",
+	"parent":   "==",
+	"label":    "==",
+	"text":     "~",
+	"created":  ">=",
+	"updated":  ">=",
+	"closed":   ">=",
+}
+
+// filterHint is the line that follows the headline when a command that filters
+// through --query rejected a flag named after a filter field: the same filter as a
+// -q expression, carrying the value the caller gave. It is empty for any other
+// misuse.
+func filterHint(e *usageError, args []string) string {
+	op, isField := filterFieldOps[e.unknownFlag]
+	if !isField || e.cmd.Flags().Lookup("query") == nil {
+		return ""
+	}
+	value, given := flagValue(args, e.unknownFlag)
+	if e.unknownFlag == "priority" {
+		if _, err := strconv.ParseUint(value, 10, 0); err != nil {
+			value = "<0-4>"
+		}
+	} else {
+		if !given {
+			value = "<value>"
+		}
+		value = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	}
+	expr := e.unknownFlag + " " + op + " " + value
+	required, _ := positionalPlaceholders(e.cmd)
+	invocation := strings.Join(append([]string{e.cmd.CommandPath()}, required...), " ")
+	return fmt.Sprintf("To filter by %s: %s -q '%s'\n", e.unknownFlag, invocation, strings.ReplaceAll(expr, `'`, `'\''`))
+}
+
+// flagValue finds the value the caller gave to --name in the raw arguments, as
+// "--name=value" or as the argument after "--name". Cobra reports an unknown flag
+// by name only, so the value has to be read back from here.
+func flagValue(args []string, name string) (value string, given bool) {
+	for i, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if value, given = strings.CutPrefix(arg, "--"+name+"="); given {
+			return value, true
+		}
+		if arg == "--"+name && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
 // positionalPlaceholders splits a command's Use line into its required (<...>) and
 // optional ([...]) positional placeholders, skipping the command word itself.
 func positionalPlaceholders(cmd *cobra.Command) (req, opt []string) {
@@ -170,11 +244,12 @@ func positionalPlaceholders(cmd *cobra.Command) (req, opt []string) {
 // renderUsageError prints the compact misuse-help block to stderr. It mirrors the
 // discipline of runtime errors (stderr, "taskmgr:" prefix, nothing on stdout): the
 // error, a one-line purpose, the usage and a synthesised example, the command's own
-// flags (or, for a group, its subcommands), and a pointer to --help.
-func renderUsageError(e *usageError) {
+// flags (or, for a group, its subcommands), and a pointer to --help. args is the
+// invocation's raw argument list, which filterHint reads a flag's value from.
+func renderUsageError(e *usageError, args []string) {
 	c := e.cmd
 	var b strings.Builder
-	fmt.Fprintf(&b, "taskmgr: %s\n\n", e.msg)
+	fmt.Fprintf(&b, "taskmgr: %s\n%s\n", e.msg, filterHint(e, args))
 	if short := strings.TrimSpace(c.Short); short != "" {
 		fmt.Fprintf(&b, "%s\n\n", short)
 	}
