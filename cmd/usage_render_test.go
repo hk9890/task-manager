@@ -26,6 +26,12 @@
 package cmd
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -103,25 +109,102 @@ func flagsSection(t *testing.T, stderr string) string {
 	return block
 }
 
+// commandFlags is the flag set a command parses with — its own flags and the
+// root's persistent ones — without running it.
+func commandFlags(c *cobra.Command) *pflag.FlagSet {
+	c.InheritedFlags()
+	return c.Flags()
+}
+
+// TestQueryInvocation_RewritesTheCallersOwnCommand: every guessed field flag and
+// the -q already given become one -q expression, and everything else the caller
+// typed stays in place.
+func TestQueryInvocation_RewritesTheCallersOwnCommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		// Several fields, and a query the caller already gave.
+		{[]string{"list", "--status", "open", "--type", "bug"}, `To filter by status and type: taskmgr list -q 'status == "open" && type == "bug"'`},
+		{[]string{"list", "--label", "a", "--label", "b"}, `To filter by label: taskmgr list -q 'label == "a" && label == "b"'`},
+		{[]string{"list", "-q", "priority <= 1", "--status", "open"}, `To filter by status: taskmgr list -q 'priority <= 1 && status == "open"'`},
+		{[]string{"list", "--status", "open", "--query=ready || priority == 0"}, `To filter by status: taskmgr list -q '(ready || priority == 0) && status == "open"'`},
+		{[]string{"list", "-qready", "--type", "bug"}, `To filter by type: taskmgr list -q 'ready && type == "bug"'`},
+		{[]string{"list", "-q=ready", "--type", "bug"}, `To filter by type: taskmgr list -q 'ready && type == "bug"'`},
+		{[]string{"list", "-q", "", "--type", "bug"}, `To filter by type: taskmgr list -q 'type == "bug"'`},
+
+		// The rest of the invocation is kept, quoted where a shell needs it.
+		{[]string{"-C", "/x", "--json", "list", "--all", "--type", "bug"}, `To filter by type: taskmgr -C /x --json list --all -q 'type == "bug"'`},
+		{[]string{"--store-name", "my store", "list", "--type", "bug", "--sort", "created", "--limit=5", "--reverse"}, `To filter by type: taskmgr --store-name 'my store' list -q 'type == "bug"' --sort created --limit=5 --reverse`},
+		{[]string{"list", "--sort", "--status", "--type", "bug"}, `To filter by type: taskmgr list --sort --status -q 'type == "bug"'`},
+		{[]string{"search", "drill", "--type", "bug"}, `To filter by type: taskmgr search drill -q 'type == "bug"'`},
+		{[]string{"search", "it's here", "--type", "bug", "more"}, `To filter by type: taskmgr search 'it'\''s here' -q 'type == "bug"' more`},
+		{[]string{"list", "--status", "open", "--", "--type", "bug"}, `To filter by status: taskmgr list -q 'status == "open"' -- --type bug`},
+
+		// The value: both spellings, an empty one, a missing one.
+		{[]string{"list", "--parent=at-abc123"}, `To filter by parent: taskmgr list -q 'parent == "at-abc123"'`},
+		{[]string{"list", "--parent="}, `To filter by parent: taskmgr list -q 'parent == ""'`},
+		{[]string{"list", "--assignee="}, `To filter by assignee: taskmgr list -q 'assignee == ""'`},
+		{[]string{"list", "--status"}, `To filter by status: taskmgr list -q 'status == "<value>"'`},
+		{[]string{"list", "--assignee"}, `To filter by assignee: taskmgr list -q 'assignee == "<value>"'`},
+		{[]string{"list", "--status", "wip"}, `To filter by status: taskmgr list -q 'status == "wip"'`},
+
+		// What ends a value: a flag of the command or another field, not any dash.
+		{[]string{"list", "--status", "--all"}, `To filter by status: taskmgr list -q 'status == "<value>"' --all`},
+		{[]string{"list", "--status", "-C", "/x"}, `To filter by status: taskmgr list -q 'status == "<value>"' -C /x`},
+		{[]string{"list", "--status", "--type", "bug"}, `To filter by status and type: taskmgr list -q 'status == "<value>" && type == "bug"'`},
+		{[]string{"list", "--status", "--"}, `To filter by status: taskmgr list -q 'status == "<value>"' --`},
+		{[]string{"list", "--label", "-wontfix"}, `To filter by label: taskmgr list -q 'label == "-wontfix"'`},
+		{[]string{"list", "--label", "--wontfix"}, `To filter by label: taskmgr list -q 'label == "--wontfix"'`},
+
+		// Priority is a bare integer, in either form the tool prints.
+		{[]string{"list", "--priority", "1"}, `To filter by priority: taskmgr list -q 'priority == 1'`},
+		{[]string{"list", "--priority", "P1"}, `To filter by priority: taskmgr list -q 'priority == 1'`},
+		{[]string{"list", "--priority=p0"}, `To filter by priority: taskmgr list -q 'priority == 0'`},
+		{[]string{"list", "--priority"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+		{[]string{"list", "--priority="}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+		{[]string{"list", "--priority", "high"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+		{[]string{"list", "--priority", "-1"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+		{[]string{"list", "--priority", "99999999999999999999"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
+
+		// Dates, and --closed alone, which asks for the closed issues.
+		{[]string{"list", "--created", "2026-01-01"}, `To filter by created: taskmgr list -q 'created >= "2026-01-01"'`},
+		{[]string{"list", "--closed=2026-01-01T09:00:00Z"}, `To filter by closed: taskmgr list -q 'closed >= "2026-01-01T09:00:00Z"'`},
+		{[]string{"list", "--created"}, `To filter by created: taskmgr list -q 'created >= "<YYYY-MM-DD>"'`},
+		{[]string{"list", "--updated="}, `To filter by updated: taskmgr list -q 'updated >= "<YYYY-MM-DD>"'`},
+		{[]string{"list", "--closed"}, `To filter by closed: taskmgr list --all -q 'status == "closed"'`},
+		{[]string{"list", "--all", "--closed", "--type", "bug"}, `To filter by closed and type: taskmgr list --all -q 'status == "closed" && type == "bug"'`},
+
+		// The two escapes of the expression, inside the one of the shell.
+		{[]string{"list", "--text", `it's "x"`}, `To filter by text: taskmgr list -q 'text ~ "it'\''s \"x\""'`},
+		{[]string{"list", "--assignee", `a\b`}, `To filter by assignee: taskmgr list -q 'assignee == "a\\b"'`},
+		{[]string{"list", "--created", `a\"b`}, `To filter by created: taskmgr list -q 'created >= "a\\\"b"'`},
+
+		// Nothing to fold.
+		{[]string{"list", "--nope"}, ""},
+		{[]string{"list", "--", "--status", "open"}, ""},
+	} {
+		cmd := listCmd
+		if slices.Contains(tc.args, "search") {
+			cmd = searchCmd
+		}
+		if got := queryInvocation(commandFlags(cmd), tc.args); got != tc.want {
+			t.Errorf("%q:\n got %s\nwant %s", tc.args, got, tc.want)
+		}
+	}
+}
+
 // TestMisuse_FilterFieldFlag_HintsQueryExpression: a filter field guessed as a
-// flag gets the working -q expression right under the headline, built from the
-// value in either spelling, or from a placeholder when there is none.
+// flag puts the rewritten command right under the headline, and the help block
+// still follows.
 func TestMisuse_FilterFieldFlag_HintsQueryExpression(t *testing.T) {
 	root := newStore(t)
 	for _, tc := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"list", "--status", "in_progress"}, `To filter by status: taskmgr list -q 'status == "in_progress"'`},
-		{[]string{"list", "--parent=at-abc123"}, `To filter by parent: taskmgr list -q 'parent == "at-abc123"'`},
-		{[]string{"list", "--label", "area:x"}, `To filter by label: taskmgr list -q 'label == "area:x"'`},
-		{[]string{"list", "--priority", "1"}, `To filter by priority: taskmgr list -q 'priority == 1'`},
-		{[]string{"list", "--priority", "high"}, `To filter by priority: taskmgr list -q 'priority == <0-4>'`},
-		{[]string{"list", "--text", `it's "x"`}, `To filter by text: taskmgr list -q 'text ~ "it'\''s \"x\""'`},
-		{[]string{"list", "--closed", "2026-01-01"}, `To filter by closed: taskmgr list -q 'closed >= "2026-01-01"'`},
-		{[]string{"list", "--status"}, `To filter by status: taskmgr list -q 'status == "<value>"'`},
-		{[]string{"list", "--status", "--all"}, `To filter by status: taskmgr list -q 'status == "<value>"'`},
-		{[]string{"search", "drill", "--type", "bug"}, `To filter by type: taskmgr search <text> -q 'type == "bug"'`},
+		{[]string{"list", "--status", "in_progress"}, `To filter by status: taskmgr --dir ` + root + ` list -q 'status == "in_progress"'`},
+		{[]string{"search", "drill", "--type", "bug", "--parent=at-abc123"}, `To filter by type and parent: taskmgr --dir ` + root + ` search drill -q 'type == "bug" && parent == "at-abc123"'`},
 	} {
 		stdout, stderr, code := run(t, append([]string{"--dir", root}, tc.args...)...)
 		if code != 1 {
@@ -150,6 +233,7 @@ func TestMisuse_UnknownFlag_NoFilterHint(t *testing.T) {
 		headline string
 	}{
 		{[]string{"list", "--nope"}, "taskmgr: unknown flag: --nope\n\n"},
+		{[]string{"list", "--nope", "--status", "open"}, "taskmgr: unknown flag: --nope\n\n"},
 		{[]string{"show", "tst-0001", "--status", "open"}, "taskmgr: unknown flag: --status\n\n"},
 	} {
 		_, stderr, code := run(t, append([]string{"--dir", root}, tc.args...)...)
@@ -162,13 +246,29 @@ func TestMisuse_UnknownFlag_NoFilterHint(t *testing.T) {
 	}
 }
 
-// TestFilterFieldOps_EveryHintIsAnAcceptedQuery keeps filterFieldOps honest. cmd/
-// cannot import the query engine's field table, so the list is a copy; this runs
-// the hint printed for every entry back through `list -q`, which fails on a name
-// that is not a field and on an operator or value form the field does not take.
+// hintedQuery runs a rejected invocation and returns the arguments that follow
+// "list" in the command its hint prints.
+func hintedQuery(t *testing.T, root string, args ...string) []string {
+	t.Helper()
+	_, stderr, _ := run(t, append([]string{"--dir", root}, args...)...)
+	lines := strings.Split(stderr, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("%v: no line under the headline\n---\n%s", args, stderr)
+	}
+	_, after, found := strings.Cut(lines[1], " list ")
+	flags, quoted, isQuery := strings.Cut(after, "-q '")
+	if !found || !isQuery {
+		t.Fatalf("%v: no filter hint under the headline\n---\n%s", args, stderr)
+	}
+	return append(strings.Fields(flags), "-q", strings.TrimSuffix(quoted, "'"))
+}
+
+// TestFilterFieldOps_EveryHintIsAnAcceptedQuery runs the hint printed for every
+// entry of filterFieldOps back through `list`, which fails on a name that is not a
+// field and on an operator or value form the field does not take.
 func TestFilterFieldOps_EveryHintIsAnAcceptedQuery(t *testing.T) {
 	samples := map[string]string{
-		"status": "in_progress", "type": "bug", "priority": "1",
+		"status": "in_progress", "type": "bug", "priority": "P1",
 		"assignee": "ada", "creator": "ada", "agent": "claude-code", "session": "s-1",
 		"parent": "tst-0001", "label": "area:x", "text": "drill",
 		"created": "2026-01-01", "updated": "2026-01-01", "closed": "2026-01-01T09:00:00Z",
@@ -180,16 +280,60 @@ func TestFilterFieldOps_EveryHintIsAnAcceptedQuery(t *testing.T) {
 			t.Errorf("no sample value for filter field %q", field)
 			continue
 		}
-		_, hint, _ := run(t, "--dir", root, "list", "--"+field, sample)
-		_, quoted, found := strings.Cut(strings.SplitN(hint, "\n", 3)[1], " -q '")
-		if !found {
-			t.Errorf("--%s: no filter hint under the headline\n---\n%s", field, hint)
-			continue
+		query := hintedQuery(t, root, "list", "--"+field, sample)
+		if _, stderr, code := run(t, append([]string{"--dir", root, "list"}, query...)...); code != 0 {
+			t.Errorf("--%s: list %q exited %d: %s", field, query, code, stderr)
 		}
-		expr := strings.TrimSuffix(quoted, "'")
-		if _, stderr, code := run(t, "--dir", root, "list", "-q", expr); code != 0 {
-			t.Errorf("--%s: list -q %q exited %d: %s", field, expr, code, stderr)
+	}
+}
+
+// TestMisuse_ClosedFlagWithoutValue_HintListsClosedIssues: the command printed
+// for a bare --closed is the one that returns the closed issues.
+func TestMisuse_ClosedFlagWithoutValue_HintListsClosedIssues(t *testing.T) {
+	root := newStore(t)
+	open, closed := createIssue(t, root), createIssue(t, root)
+	if _, stderr, code := run(t, "--dir", root, "close", closed); code != 0 {
+		t.Fatalf("close: exit %d, stderr %q", code, stderr)
+	}
+	query := hintedQuery(t, root, "list", "--closed")
+	stdout, stderr, code := run(t, append([]string{"--dir", root, "list"}, query...)...)
+	if code != 0 {
+		t.Fatalf("list %q exited %d: %s", query, code, stderr)
+	}
+	if !strings.Contains(stdout, closed) || strings.Contains(stdout, open) {
+		t.Errorf("list %q: want %s and not %s\n---\n%s", query, closed, open, stdout)
+	}
+}
+
+// TestFilterFieldOps_MatchesTheEngineFields reads the engine's field table from
+// its source, because cmd/ can import neither the package nor a public list of
+// the fields. A field added to the engine fails here until it has an operator in
+// filterFieldOps.
+func TestFilterFieldOps_MatchesTheEngineFields(t *testing.T) {
+	const source = "../sdk/tasks/internal/query/parse.go"
+	file, err := parser.ParseFile(token.NewFileSet(), source, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", source, err)
+	}
+	var engine []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, isSpec := n.(*ast.ValueSpec)
+		if !isSpec || len(spec.Names) != 1 || spec.Names[0].Name != "knownFields" || len(spec.Values) != 1 {
+			return true
 		}
+		for _, elt := range spec.Values[0].(*ast.CompositeLit).Elts {
+			name, err := strconv.Unquote(elt.(*ast.KeyValueExpr).Key.(*ast.BasicLit).Value)
+			if err != nil {
+				t.Fatalf("knownFields key: %v", err)
+			}
+			engine = append(engine, name)
+		}
+		return false
+	})
+	hinted := slices.Sorted(maps.Keys(filterFieldOps))
+	slices.Sort(engine)
+	if !slices.Equal(engine, hinted) {
+		t.Errorf("filterFieldOps is out of step with knownFields in %s\nengine: %v\nhinted: %v", source, engine, hinted)
 	}
 }
 

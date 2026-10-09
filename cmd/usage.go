@@ -19,11 +19,14 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // usageError marks a misinvocation — wrong positional args, a bad/unknown flag, or
@@ -38,6 +41,8 @@ type usageError struct {
 	// unknownFlag is the name, without dashes, of the flag the command does not
 	// have; empty for every other kind of misuse.
 	unknownFlag string
+	// hint is one more line for the headline; Run sets it from the arguments.
+	hint string
 }
 
 func (e *usageError) Error() string { return e.msg }
@@ -159,10 +164,11 @@ func requiredFlagsMsg(missing []string) string {
 	return "missing required flags " + strings.Join(missing, ", ")
 }
 
-// filterFieldOps is every comparison field of the filter language (QUERY-SPEC §2)
-// with the operator a caller who guessed it as a flag most likely meant. A date
-// gets ">=" because "==" compares one instant, which is never what
-// "--created 2026-01-01" asks for.
+// filterFieldOps is the filter fields (QUERY-SPEC §2) that get a hint when guessed
+// as a flag, each with the operator the caller most likely meant. A date gets ">="
+// because "==" compares one instant, which is never what "--created 2026-01-01"
+// asks for. The map is a hand copy: cmd/ cannot import the engine's field table,
+// and TestFilterFieldOps_MatchesTheEngineFields fails when the two differ.
 var filterFieldOps = map[string]string{
 	"status":   "==",
 	"type":     "==",
@@ -180,48 +186,206 @@ var filterFieldOps = map[string]string{
 }
 
 // filterHint is the line that follows the headline when a command that filters
-// through --query rejected a flag named after a filter field: the same filter as a
-// -q expression, carrying the value the caller gave. It is empty for any other
-// misuse.
+// through --query rejected a flag named after a filter field: the caller's own
+// invocation, with every such flag and any -q it already carried folded into one
+// -q expression. It is empty for any other misuse.
 func filterHint(e *usageError, args []string) string {
-	op, isField := filterFieldOps[e.unknownFlag]
-	if !isField || e.cmd.Flags().Lookup("query") == nil {
+	flags := e.cmd.Flags()
+	if _, isField := filterFieldOps[e.unknownFlag]; !isField || flags.Lookup("query") == nil {
 		return ""
 	}
-	value, given := flagValue(args, e.unknownFlag)
-	if e.unknownFlag == "priority" {
-		if _, err := strconv.ParseUint(value, 10, 0); err != nil {
-			value = "<0-4>"
+	return queryInvocation(flags, args)
+}
+
+// queryInvocation rewrites args, read as flags reads them, into the command that
+// filters through -q. Everything that is not a filter field or the query stays
+// where the caller put it.
+func queryInvocation(flags *pflag.FlagSet, args []string) string {
+	var (
+		kept, fields, terms []string
+		query               string
+		queryAt             = -1
+		hasAll, needsAll    bool
+	)
+	for i := 0; i < len(args); i++ {
+		arg, first := args[i], i
+		if arg == "--" {
+			kept = append(kept, args[i:]...)
+			break
 		}
-	} else {
+		var (
+			flag                 *pflag.Flag
+			name, stacked, value string
+			hasValue             bool
+		)
+		switch {
+		case strings.HasPrefix(arg, "--"):
+			name, value, hasValue = strings.Cut(arg[2:], "=")
+			flag = flags.Lookup(name)
+		case strings.HasPrefix(arg, "-"):
+			flag, stacked, value, hasValue = shorthandWithValue(flags, arg)
+		}
+		_, isField := filterFieldOps[name]
+		guessed := flag == nil && isField
+		takesNext := guessed || flag != nil && flag.NoOptDefVal == ""
+		if takesNext && !hasValue && i+1 < len(args) && (!guessed || !endsGuessedValue(flags, args[i+1])) {
+			i++
+			value, hasValue = args[i], true
+		}
+		switch {
+		case guessed:
+			term, closedStatus := filterTerm(name, value, hasValue)
+			terms = append(terms, term)
+			needsAll = needsAll || closedStatus
+			if !slices.Contains(fields, name) {
+				fields = append(fields, name)
+			}
+		case flag != nil && flag.Name == "query":
+			query = value
+			if stacked != "" {
+				kept = append(kept, "-"+stacked)
+			}
+		default:
+			hasAll = hasAll || flag != nil && flag.Name == "all"
+			kept = append(kept, args[first:i+1]...)
+			continue
+		}
+		if queryAt < 0 {
+			queryAt = len(kept)
+		}
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+
+	expr := strings.Join(terms, " && ")
+	if strings.Contains(query, "||") {
+		query = "(" + query + ")"
+	}
+	if query != "" {
+		expr = query + " && " + expr
+	}
+	filter := []string{"-q", expr}
+	if needsAll && !hasAll {
+		filter = []string{"--all", "-q", expr}
+	}
+	words := []string{"taskmgr"}
+	for _, arg := range slices.Insert(kept, queryAt, filter...) {
+		words = append(words, shellQuote(arg))
+	}
+	return fmt.Sprintf("To filter by %s: %s", strings.Join(fields, " and "), strings.Join(words, " "))
+}
+
+// shorthandWithValue reads a "-abc" group as pflag does: shorthands that take no
+// value stack, and the first one that takes a value owns the rest of the group,
+// or the next argument when nothing is left. It returns that flag and the
+// shorthands stacked before it; flag is nil when the group has none.
+func shorthandWithValue(flags *pflag.FlagSet, group string) (flag *pflag.Flag, stacked, value string, hasValue bool) {
+	for i := 1; i < len(group); i++ {
+		f := flags.ShorthandLookup(group[i : i+1])
+		if f == nil || f.NoOptDefVal != "" {
+			continue
+		}
+		rest := group[i+1:]
+		if len(rest) > 1 {
+			rest = strings.TrimPrefix(rest, "=")
+		}
+		return f, group[1:i], rest, rest != ""
+	}
+	return nil, "", "", false
+}
+
+// endsGuessedValue reports whether arg, the argument after a guessed "--field",
+// is the next flag and not the field's value. pflag would take any argument as
+// the value of a flag it knows; for a flag it does not know, only something the
+// caller clearly meant as a flag ends it — "--", a flag of the command, or another
+// filter field — so a value that merely starts with a dash ("--label -wontfix") is
+// still read as the value.
+func endsGuessedValue(flags *pflag.FlagSet, arg string) bool {
+	if long, isLong := strings.CutPrefix(arg, "--"); isLong {
+		name, _, _ := strings.Cut(long, "=")
+		_, isField := filterFieldOps[name]
+		return name == "" || isField || flags.Lookup(name) != nil
+	}
+	return len(arg) > 1 && arg[0] == '-' && flags.ShorthandLookup(arg[1:2]) != nil
+}
+
+// filterTerm is the predicate for one guessed "--field value". A field without a
+// value gets a placeholder that shows the form the value takes, except "--closed":
+// its caller wants the closed issues, which is a status and needs the cold
+// partition — closedStatus tells the caller to add --all.
+func filterTerm(field, value string, given bool) (term string, closedStatus bool) {
+	switch field {
+	case "priority":
+		n, err := strconv.Atoi(strings.TrimPrefix(strings.ToUpper(value), "P"))
+		if err != nil || n < 0 {
+			return "priority == <0-4>", false
+		}
+		return "priority == " + strconv.Itoa(n), false
+	case "created", "updated", "closed":
+		if value == "" && field == "closed" {
+			term, _ = filterTerm("status", string(tasks.StatusClosed), true)
+			return term, true
+		}
+		if value == "" {
+			value = "<YYYY-MM-DD>"
+		}
+	default:
 		if !given {
 			value = "<value>"
 		}
-		value = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 	}
-	expr := e.unknownFlag + " " + op + " " + value
-	required, _ := positionalPlaceholders(e.cmd)
-	invocation := strings.Join(append([]string{e.cmd.CommandPath()}, required...), " ")
-	return fmt.Sprintf("To filter by %s: %s -q '%s'\n", e.unknownFlag, invocation, strings.ReplaceAll(expr, `'`, `'\''`))
+	if expr, err := fieldCriteria(field, value).Build(); err == nil && expr != "" {
+		return expr, false
+	}
+	return field + " " + filterFieldOps[field] + " " + quoteFilterValue(value), false
 }
 
-// flagValue finds the value the caller gave to --name in the raw arguments, as
-// "--name=value" or as the argument after "--name". Cobra reports an unknown flag
-// by name only, so the value has to be read back from here.
-func flagValue(args []string, name string) (value string, given bool) {
-	for i, arg := range args {
-		if arg == "--" {
-			break
-		}
-		if value, given = strings.CutPrefix(arg, "--"+name+"="); given {
-			return value, true
-		}
-		if arg == "--"+name && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			return args[i+1], true
-		}
+// fieldCriteria is the Criteria that selects on one field, for the fields
+// Criteria.Build can express as "--field value" means them. It is the zero value
+// for the rest: priority, which Build only bounds, and the dates, which Build
+// rewrites to a full timestamp.
+func fieldCriteria(field, value string) tasks.Criteria {
+	switch field {
+	case "status":
+		return tasks.Criteria{Statuses: []tasks.Status{tasks.Status(value)}}
+	case "type":
+		return tasks.Criteria{Types: []tasks.Type{tasks.Type(value)}}
+	case "label":
+		return tasks.Criteria{Labels: []string{value}}
+	case "assignee":
+		return tasks.Criteria{Assignee: value}
+	case "creator":
+		return tasks.Criteria{Creator: value}
+	case "agent":
+		return tasks.Criteria{Agent: value}
+	case "session":
+		return tasks.Criteria{Session: value}
+	case "parent":
+		return tasks.Criteria{Parent: &value}
+	case "text":
+		return tasks.Criteria{Text: value}
 	}
-	return "", false
+	return tasks.Criteria{}
 }
+
+// quoteFilterValue quotes a value as a QUERY-SPEC §3 string, for the predicates
+// Criteria.Build declines: a date, an empty value, and a status or type the engine
+// does not know, which is printed as typed so that running it returns the engine's
+// own error.
+func quoteFilterValue(value string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+}
+
+// shellQuote returns arg as one POSIX shell word, quoted only when it needs it.
+func shellQuote(arg string) string {
+	if arg != "" && strings.Trim(arg, shellSafe) == "" {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+}
+
+const shellSafe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-"
 
 // positionalPlaceholders splits a command's Use line into its required (<...>) and
 // optional ([...]) positional placeholders, skipping the command word itself.
@@ -244,12 +408,15 @@ func positionalPlaceholders(cmd *cobra.Command) (req, opt []string) {
 // renderUsageError prints the compact misuse-help block to stderr. It mirrors the
 // discipline of runtime errors (stderr, "taskmgr:" prefix, nothing on stdout): the
 // error, a one-line purpose, the usage and a synthesised example, the command's own
-// flags (or, for a group, its subcommands), and a pointer to --help. args is the
-// invocation's raw argument list, which filterHint reads a flag's value from.
-func renderUsageError(e *usageError, args []string) {
+// flags (or, for a group, its subcommands), and a pointer to --help.
+func renderUsageError(e *usageError) {
 	c := e.cmd
 	var b strings.Builder
-	fmt.Fprintf(&b, "taskmgr: %s\n%s\n", e.msg, filterHint(e, args))
+	fmt.Fprintf(&b, "taskmgr: %s\n", e.msg)
+	if e.hint != "" {
+		fmt.Fprintf(&b, "%s\n", e.hint)
+	}
+	b.WriteString("\n")
 	if short := strings.TrimSpace(c.Short); short != "" {
 		fmt.Fprintf(&b, "%s\n\n", short)
 	}

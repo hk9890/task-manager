@@ -19,8 +19,9 @@ taskmgr list --all -q 'closed > "2026-01-01"'
 
 `!` binds tightest, then `&&`, then `||`. Parentheses override.
 
-There is no flag per field. `taskmgr list --status in_progress` fails, and the error
-prints the expression to run instead: `taskmgr list -q 'status == "in_progress"'`.
+There is no flag per field. `taskmgr list --all --status open --type bug` fails, and the
+error prints the command to run instead, with every such flag folded into one
+expression: `taskmgr list --all -q 'status == "open" && type == "bug"'`.
 
 ## Fields
 

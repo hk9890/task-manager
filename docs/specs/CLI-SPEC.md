@@ -103,35 +103,48 @@ Mistyped commands are corrected, not dead-ended: an unknown top-level command or
 unknown subcommand exits `1` with a `Did you mean this?` suggestion (a bare command
 group with no subcommand prints its help and exits `0`).
 
-**A filter field guessed as a flag is answered with the expression.** Filtering has one
+**A filter field guessed as a flag is answered with the command.** Filtering has one
 surface, `-q` (§3.1), and no flag per field. When a command that takes `-q/--query`
-(`list`, `search`) rejects an unknown flag whose name is a comparison field of
-[QUERY-SPEC](QUERY-SPEC.md) §2, one line follows the error line, before the blank line
-that opens the rest of the help block:
+(`list`, `search`) rejects an unknown flag whose name is a comparison
+field of [QUERY-SPEC](QUERY-SPEC.md) §2, one line follows the error line, before the
+blank line that opens the rest of the help block:
 
 ```text
+$ taskmgr -C /srv/proj list --all --status open --type bug
 taskmgr: unknown flag: --status
-To filter by status: taskmgr list -q 'status == "in_progress"'
+To filter by status and type: taskmgr -C /srv/proj list --all -q 'status == "open" && type == "bug"'
 ```
 
-- **The command** is the one that was run, with its required positionals as
-  placeholders: `taskmgr search <text> -q '…'`.
-- **The value** is the one given, as `--status in_progress` or `--status=in_progress`.
-  With none — the flag is last, or the next argument starts with `-` — it is the
-  placeholder `<value>`. It is printed as a quoted string, escaped for the expression
-  and for a single-quoted shell word.
+- **The command** is the caller's own invocation. Every argument stays where it was
+  typed — global flags, `--all`, `--sort`, the words of a `search` — and is quoted for
+  a POSIX shell where it needs it. Only the field flags, their values and a `-q`
+  already given are taken out; one `-q` goes in where the first of them stood.
+- **The expression** joins every field flag in the invocation with `&&`, not only the
+  one the error names. A `-q` already given leads it, in parentheses when it contains
+  `||`: `list -q 'ready || priority == 0' --type bug` prints
+  `-q '(ready || priority == 0) && type == "bug"'`.
+- **The value** is the one given, as `--status open` or `--status=open`. The argument
+  after `--status` is its value unless it is `--`, a flag of the command, or another
+  field flag, so `--label -wontfix` filters by `-wontfix`. A field without a value
+  prints the placeholder `"<value>"`.
 - **The operator** is `==`, with two exceptions: `text` takes `~`, the only operator it
   has, and `created` / `updated` / `closed` take `>=`, because `==` on a date compares
   one instant and matches nothing a caller means by `--created 2026-01-01`.
-- **`priority`** is printed bare, as the integer it must be; a missing or non-integer
-  value prints the placeholder `<0-4>`.
-- The value is not validated: `--status wip` prints `status == "wip"`, and running that
+- **`priority`** is printed bare, as the non-negative integer the grammar takes; `P1`,
+  the form the issue table prints, becomes `1`. Any other value, or none, prints the
+  placeholder `<0-4>`.
+- **A date without a value** prints the placeholder `"<YYYY-MM-DD>"` for `created` and
+  `updated`. A bare `--closed` asks for the closed issues, and prints
+  `--all -q 'status == "closed"'`.
+- A value is not validated: `--status wip` prints `status == "wip"`, and running that
   returns the engine's own error, which names the legal values.
 
 Any other unknown flag, and a field name on a command without `-q` (`show <id> --status
-open`), prints the help block unchanged. A flag per field was rejected: it would be a
-second filter surface to keep in step with the grammar, and could not express `!=`, `~`
-or `||`.
+open`), prints the help block unchanged. The bare predicates `ready` and `blocked` get
+no hint. The field names are a copy held by the CLI, checked against the engine's field
+table by a test, so a new query field owes an entry there. A flag per field was
+rejected: it would be a second filter surface to keep in step with the grammar, and
+could not express `!=`, `~` or `||`.
 
 ### Store resolution
 
