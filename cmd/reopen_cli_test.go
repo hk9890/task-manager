@@ -40,6 +40,7 @@ func TestL4_Reopen_Success(t *testing.T) {
 
 	// Verify via show --json.
 	out, _, code := taskmgr(t, root, "--json", "show", closedID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed (exit %d): %s", code, out)
 	}
@@ -80,6 +81,7 @@ func TestL4_UpdateStatus_ClosedMovesToClosedDir(t *testing.T) {
 	}
 
 	out, _, code := taskmgr(t, root, "--json", "show", openID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}
@@ -107,6 +109,7 @@ func TestL4_UpdateStatus_OpenReopensClosedIssue(t *testing.T) {
 	}
 
 	out, _, code := taskmgr(t, root, "--json", "show", closedID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show failed: %s", out)
 	}

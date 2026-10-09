@@ -184,6 +184,7 @@ func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	// show carries it too, so an id captured from any read command can be aimed
 	// back at the store it came from.
 	out, _, code = taskmgrCentral(t, proj, home, "--json", "show", created.ID)
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show: code=%d", code)
 	}

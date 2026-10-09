@@ -107,7 +107,9 @@ the environment does.
   reads standard input the same way.
 
 A mutation's `--json` echoes the issue's scalar fields, not its description or comments —
-run `show` to confirm what landed.
+run `show` to confirm what landed. `show` takes several IDs in one call, and its `--json` is
+always an array: read a single issue as `.[0]`. `--fields status,blocked_by` cuts either
+output down to the named fields.
 
 ## The loop worth prescribing
 

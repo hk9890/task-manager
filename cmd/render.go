@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -41,10 +42,16 @@ var (
 
 // printJSON writes v as indented JSON to the command's stdout.
 func printJSON(v any) error {
-	enc := json.NewEncoder(stdout)
+	return newJSONEncoder(stdout).Encode(v)
+}
+
+// newJSONEncoder is the one place the CLI's JSON form is set (CLI-SPEC §1):
+// indented, HTML left unescaped.
+func newJSONEncoder(w io.Writer) *json.Encoder {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
-	return enc.Encode(v)
+	return enc
 }
 
 // --- JSON DTOs: stable, snake_case shapes for agents ---
@@ -264,49 +271,96 @@ func printIssueTable(issues []*tasks.Issue) {
 	_ = w.Flush()
 }
 
-// printDetail renders a full issue for human reading.
-func printDetail(d *tasks.Detail) {
-	_, _ = fmt.Fprintf(stdout, "%s  %s\n", d.ID, d.Title)
-	_, _ = fmt.Fprintf(stdout, "  status:   %s\n", d.Status)
-	_, _ = fmt.Fprintf(stdout, "  type:     %s   priority: P%d\n", d.Type, d.Priority)
-	if d.Assignee != "" {
-		_, _ = fmt.Fprintf(stdout, "  assignee: %s\n", d.Assignee)
-	}
-	if d.Agent != "" {
-		_, _ = fmt.Fprintf(stdout, "  agent:    %s\n", agentLine(d.Agent, d.Session))
-	}
-	if len(d.Labels) > 0 {
-		_, _ = fmt.Fprintf(stdout, "  labels:   %s\n", strings.Join(d.Labels, ", "))
-	}
-	if d.ParentRef != nil {
-		_, _ = fmt.Fprintf(stdout, "  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
-	}
-	printRefLine("blocked by", d.BlockedByRefs)
-	printRefLine("blocks", d.Blocks)
-	printRefLine("related", d.RelatedRefs)
-	printRefLine("children", d.Children)
-	_, _ = fmt.Fprintf(stdout, "  created:  %s\n", d.Created.Format(time.RFC3339))
-	_, _ = fmt.Fprintf(stdout, "  updated:  %s\n", d.Updated.Format(time.RFC3339))
-	if !d.Closed.IsZero() {
+// detailSection is one part of the human detail block and the detailDTO fields it
+// renders, so `show --fields` selects the same parts in both output modes.
+type detailSection struct {
+	fields []string
+	print  func(d *tasks.Detail, full bool)
+}
+
+// jsonOnlyDetailFields are the detailDTO keys the human block has no line for.
+// `show --fields` refuses them without --json: a header with nothing under it
+// reads as "this issue has no creator".
+var jsonOnlyDetailFields = []string{"store", "creator", "body_external"}
+
+var detailSections = []detailSection{
+	{[]string{"status"}, func(d *tasks.Detail, _ bool) {
+		_, _ = fmt.Fprintf(stdout, "  status:   %s\n", d.Status)
+	}},
+	{[]string{"type", "priority"}, func(d *tasks.Detail, _ bool) {
+		_, _ = fmt.Fprintf(stdout, "  type:     %s   priority: P%d\n", d.Type, d.Priority)
+	}},
+	{[]string{"assignee"}, func(d *tasks.Detail, _ bool) {
+		if d.Assignee != "" {
+			_, _ = fmt.Fprintf(stdout, "  assignee: %s\n", d.Assignee)
+		}
+	}},
+	{[]string{"agent", "session"}, func(d *tasks.Detail, _ bool) {
+		if d.Agent != "" {
+			_, _ = fmt.Fprintf(stdout, "  agent:    %s\n", agentLine(d.Agent, d.Session))
+		}
+	}},
+	{[]string{"labels"}, func(d *tasks.Detail, _ bool) {
+		if len(d.Labels) > 0 {
+			_, _ = fmt.Fprintf(stdout, "  labels:   %s\n", strings.Join(d.Labels, ", "))
+		}
+	}},
+	{[]string{"parent", "parent_ref"}, func(d *tasks.Detail, _ bool) {
+		if d.ParentRef != nil {
+			_, _ = fmt.Fprintf(stdout, "  parent:   %s  %s\n", d.ParentRef.ID, d.ParentRef.Title)
+		}
+	}},
+	{[]string{"blocked_by", "blocked_by_refs"}, func(d *tasks.Detail, _ bool) { printRefLine("blocked by", d.BlockedByRefs) }},
+	{[]string{"blocks"}, func(d *tasks.Detail, _ bool) { printRefLine("blocks", d.Blocks) }},
+	{[]string{"related", "related_refs"}, func(d *tasks.Detail, _ bool) { printRefLine("related", d.RelatedRefs) }},
+	{[]string{"children"}, func(d *tasks.Detail, _ bool) { printRefLine("children", d.Children) }},
+	{[]string{"created"}, func(d *tasks.Detail, _ bool) {
+		_, _ = fmt.Fprintf(stdout, "  created:  %s\n", d.Created.Format(time.RFC3339))
+	}},
+	{[]string{"updated"}, func(d *tasks.Detail, _ bool) {
+		_, _ = fmt.Fprintf(stdout, "  updated:  %s\n", d.Updated.Format(time.RFC3339))
+	}},
+	{[]string{"closed", "close_reason"}, func(d *tasks.Detail, _ bool) {
+		if d.Closed.IsZero() {
+			return
+		}
 		_, _ = fmt.Fprintf(stdout, "  closed:   %s", d.Closed.Format(time.RFC3339))
 		if d.CloseReason != "" {
 			_, _ = fmt.Fprintf(stdout, "  (%s)", d.CloseReason)
 		}
 		_, _ = fmt.Fprintln(stdout)
-	}
-	printBody(d)
-	if len(d.Comments) > 0 {
-		_, _ = fmt.Fprintf(stdout, "\nComments (%d):\n", len(d.Comments))
-		for _, c := range d.Comments {
-			who := c.Author
-			if who == "" {
-				who = "?"
-			}
-			if c.Agent != "" {
-				who += " via " + c.Agent
-			}
-			_, _ = fmt.Fprintf(stdout, "  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
+	}},
+	{[]string{"description"}, printBody},
+	{[]string{"comments"}, func(d *tasks.Detail, _ bool) { printComments(d.Comments) }},
+}
+
+// printDetail renders an issue for human reading: the header line, then every
+// section, or only those that render a field in selected. A section the caller
+// named prints in full — naming the description is asking for all of it.
+func printDetail(d *tasks.Detail, selected []string) {
+	_, _ = fmt.Fprintf(stdout, "%s  %s\n", d.ID, d.Title)
+	for _, sec := range detailSections {
+		named := slices.ContainsFunc(sec.fields, func(f string) bool { return slices.Contains(selected, f) })
+		if len(selected) == 0 || named {
+			sec.print(d, named)
 		}
+	}
+}
+
+func printComments(comments []tasks.Comment) {
+	if len(comments) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(stdout, "\nComments (%d):\n", len(comments))
+	for _, c := range comments {
+		who := c.Author
+		if who == "" {
+			who = "?"
+		}
+		if c.Agent != "" {
+			who += " via " + c.Agent
+		}
+		_, _ = fmt.Fprintf(stdout, "  - %s @%s\n    %s\n", c.Created.Format(time.RFC3339), who, indent(c.Body))
 	}
 }
 
@@ -327,22 +381,22 @@ func agentLine(agent, session string) string {
 // JSON output is never truncated: a script or an agent asked for the whole thing.
 const showBodyLimit = 4096
 
-// printBody renders the issue body, truncated for humans. The truncation notice
-// says where the untruncated content is, so the output is a pointer rather than
-// a dead end.
-func printBody(d *tasks.Detail) {
+// printBody renders the issue body, truncated for humans unless full is set. The
+// truncation notice says where the untruncated content is, so the output is a
+// pointer rather than a dead end.
+func printBody(d *tasks.Detail, full bool) {
 	body := d.Description
 	if strings.TrimSpace(body) == "" {
 		return
 	}
-	if len(body) <= showBodyLimit {
+	if full || len(body) <= showBodyLimit {
 		_, _ = fmt.Fprintf(stdout, "\n%s\n", body)
 		return
 	}
 	_, _ = fmt.Fprintf(stdout, "\n%s\n", truncateRunes(body, showBodyLimit))
-	where := "--json for the full body"
+	where := "--fields description or --json for the full body"
 	if d.BodyExternal {
-		where = fmt.Sprintf("full content in %s/%s, or --json", "content", d.ID)
+		where = fmt.Sprintf("full content in %s/%s, or --fields description, or --json", "content", d.ID)
 	}
 	_, _ = fmt.Fprintf(stdout, "\n[body is %d bytes; showing the first %d — %s]\n", len(body), showBodyLimit, where)
 }

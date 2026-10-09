@@ -37,6 +37,7 @@ type detailRefs struct {
 func showDetail(t *testing.T, root, id string) detailRefs {
 	t.Helper()
 	out, errs, code := taskmgr(t, root, "show", id, "--json")
+	out = firstShown(out)
 	if code != 0 {
 		t.Fatalf("show %s exit=%d stderr=%q", id, code, errs)
 	}
