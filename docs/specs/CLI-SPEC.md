@@ -518,7 +518,10 @@ and clobbering either deletes packages some config still names.
 ### `taskmgr package repo list`
 
 List the installed repositories, sorted by name, each with the packages it provides, which
-of those the per-user config already uses, and its `origin` URL.
+of those the per-user config uses, and its `origin` URL. A package is used when a `use:`
+entry of that config resolves into the repository's directory for it. A `path:` entry of
+the same name resolves outside the repository, and a name two repositories provide
+resolves into neither (HOOK-SPEC §3.5), so neither counts.
 
 Only a directory holding `taskmgr-package.yaml` counts as a package, so a repository's
 README, licence and `.git` directory are not listed as broken ones.
@@ -922,9 +925,10 @@ self-dependency and any edge that would create a cycle.
 
 Refused while `<dependent>` stores a blocker that names no issue (storage spec §10). The
 message names that stored value and the repair: `blocked_by: stored value "<value>" is
-not a valid issue ID; remove it with 'taskmgr dep rm -- <dependent> "<value>"'`, or
-`… references an issue that does not exist; …` for a valid ID. `rel add` does the same
-for a stored `related` value, naming `rel rm`.
+not a valid issue ID; remove it with 'taskmgr dep rm'`, or
+`… references an issue that does not exist; …` for a valid ID. The message names the
+command and prints no command line: the value is stored text, not something to paste
+into a shell. `rel add` does the same for a stored `related` value, naming `rel rm`.
 
 ### `taskmgr dep rm <dependent> <blocker>`
 
@@ -1240,7 +1244,7 @@ a package a configuration uses, and this one no longer does.
 `{name, path, url, packages, used, detail}`. `name` is the repository's directory name
 under `<taskmgr home>/packages` and `path` that directory; `url` is the clone's `origin`
 and is omitted when git cannot report one; `packages` names what it provides, sorted, and
-is always present; `used` names those the per-user config already uses; `detail` explains
+is always present; `used` names those the per-user config uses (§2.4); `detail` explains
 a repository that provides nothing (§2.4).
 
 **`repoAddedDTO`** — emitted by `package repo add` (one object) and `update` (an array):

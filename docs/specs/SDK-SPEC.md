@@ -1142,8 +1142,9 @@ var (
 mutations, and the first argument of `AddDep`, `RemoveDep`, `AddRelated` and
 `RemoveRelated` — when no issue has that ID in either partition. A value outside the ID
 grammar (storage spec §3) is not found without a lookup. The second argument of
-`RemoveDep` and `RemoveRelated` is exempt: it is matched against the stored list, never
-looked up, so it removes a stored value that is not an ID.
+`RemoveDep` and `RemoveRelated` is exempt: it is matched against the stored list, so it
+removes a stored value that is not an ID. `RemoveRelated` then looks it up only to cut the
+inverse side, which it skips when no issue has that ID.
 
 `Resolve` returns `ErrNoStore` when neither a local store nor a registry match is
 found, and `ErrStoreNotRegistered` when an explicit `StoreName` has no entry.

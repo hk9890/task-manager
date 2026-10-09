@@ -1543,7 +1543,7 @@ func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, remove
 		if err != nil {
 			return err
 		}
-		stored := slices.Clone(*cur)
+		stored := *cur
 		*cur = append(*cur, target)
 		iss.Updated = s.now()
 		if err := s.checkRefsWith(iss, idx); err != nil {
@@ -1555,7 +1555,7 @@ func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, remove
 				if !validIssueID(v) {
 					reason = "is not a valid issue ID"
 				}
-				return invalid(field, "stored value %q %s; remove it with 'taskmgr %s -- %s %q'", v, reason, removeCmd, id, v)
+				return invalid(field, "stored value %q %s; remove it with 'taskmgr %s'", v, reason, removeCmd)
 			}
 			return err
 		}
@@ -1629,11 +1629,8 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 
 		// Inverse side: best-effort. Absent or closed → leave it (a closed issue
 		// is immutable, and the active view never derives inverses from closed/).
-		// A value outside the ID grammar names no issue, so it has no inverse
-		// side, and it is never joined onto a store directory to look for one.
-		if !validIssueID(otherID) {
-			return nil
-		}
+		// A value outside the ID grammar names no issue, so Get answers not-found
+		// for it and it has no inverse side.
 		other, err := s.Get(otherID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
@@ -1678,23 +1675,22 @@ func (s *Store) RemoveRelated(issueID, otherID string) error {
 // through, so the issue stays editable and the edge itself stays repairable.
 func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	idx[iss.ID] = iss // include the (possibly new) issue itself
-	refExists := func(id string) bool { return s.refExists(idx, id) }
 
 	var violations []*ValidationError
 	if iss.Parent != "" {
-		if !refExists(iss.Parent) {
+		if !s.refExists(idx, iss.Parent) {
 			violations = append(violations, invalid("parent", "referenced issue %q does not exist", iss.Parent))
 		} else if cycle := findParentCycle(idx, iss.ID); cycle != "" {
 			violations = append(violations, invalid("parent", "parent cycle: %s", cycle))
 		}
 	}
 	for _, id := range iss.BlockedBy {
-		if !refExists(id) {
+		if !s.refExists(idx, id) {
 			violations = append(violations, invalid("blocked_by", "referenced issue %q does not exist", id))
 		}
 	}
 	for _, id := range iss.Related {
-		if !refExists(id) {
+		if !s.refExists(idx, id) {
 			violations = append(violations, invalid("related", "referenced issue %q does not exist", id))
 		}
 	}
@@ -1705,20 +1701,13 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 }
 
 // refExists reports whether an ID is resolvable: either in the hot index idx or
-// in the closed/ partition (via cheap Stat, no parse).
-//
-// A value outside the ID grammar is in no partition and is never looked up:
-// joined onto closed/, a "../<id>" would resolve to a file outside the
-// partition and pass.
+// in the closed/ partition (closedStatFn: a cheap Stat, no parse, and no lookup
+// at all for a value outside the ID grammar).
 func (s *Store) refExists(idx map[string]*Issue, id string) bool {
 	if _, ok := idx[id]; ok {
 		return true
 	}
-	if !validIssueID(id) {
-		return false
-	}
-	_, statErr := s.fs.Stat(s.closedFilePath(id))
-	return statErr == nil
+	return s.closedStatFn()(id)
 }
 
 // edgesUnchanged is fieldUnchanged for the reference and cycle checks. The

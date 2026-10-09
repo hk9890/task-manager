@@ -62,6 +62,30 @@ func TestResolveBatchRefs_RefWithStorePrefix_IsRefused(t *testing.T) {
 	}
 }
 
+func TestEdgeNamingNothing_NamesTheFirstEdgeThatIsNeitherRefNorID(t *testing.T) {
+	entries := []BatchEntry{
+		{Ref: " epic "},
+		{CreateInput: CreateInput{Parent: "epic", BlockedBy: []string{"x-exists", " ", ""}}},
+		{CreateInput: CreateInput{Parent: " epic ", Related: []string{"x-exists", "epik"}}},
+		{CreateInput: CreateInput{Parent: "../x-1"}},
+	}
+	failed, err := edgeNamingNothing(entries)
+	var ve *ValidationError
+	if failed != 2 || !errors.As(err, &ve) || ve.Field != "related" || !strings.Contains(ve.Message, `"epik"`) {
+		t.Errorf("want a related validation error naming \"epik\" on entry index 2, got index %d, %v", failed, err)
+	}
+}
+
+func TestEdgeNamingNothing_RefsAndValidIDs_AreNotRefused(t *testing.T) {
+	entries := []BatchEntry{
+		{Ref: "epic"},
+		{CreateInput: CreateInput{Parent: "epic", BlockedBy: []string{"x-exists"}, Related: []string{"other-9"}}},
+	}
+	if failed, err := edgeNamingNothing(entries); failed != -1 || err != nil {
+		t.Errorf("got index %d, %v; want -1 and no error", failed, err)
+	}
+}
+
 func TestBatchWriteOrder_WritesAnIssueAfterEveryIssueItNames(t *testing.T) {
 	issues := []*Issue{
 		{ID: "child", Parent: "epic", BlockedBy: []string{"schema"}},

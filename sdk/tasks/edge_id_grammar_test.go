@@ -378,7 +378,7 @@ func TestAddEdge_StoredValueNamesNoIssue_NamesTheStoredValueAndTheRepair(t *test
 			if !errors.As(err, &ve) || ve.Field != c.field {
 				t.Fatalf("got %v, want a %s validation error", err, c.field)
 			}
-			repair := "taskmgr " + c.repair + " -- " + iss.ID + ` "` + c.stored + `"`
+			repair := "remove it with 'taskmgr " + c.repair + "'"
 			for _, want := range []string{`stored value "` + c.stored + `"`, c.reason, repair} {
 				if !strings.Contains(ve.Message, want) {
 					t.Errorf("message %q does not contain %q", ve.Message, want)
