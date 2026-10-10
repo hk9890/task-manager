@@ -1520,10 +1520,8 @@ func dropEdge(l *[]string, target string) bool {
 // succeeds. field and selfMsg name the *ValidationError for a self-edge; op is
 // the log op for an I/O failure. The caller must not hold the lock.
 //
-// A value the list already stores that names no issue refuses the add, as any
-// violation in a field the write changes does. It is reported as the stored
-// value it is, with removeCmd — the command that removes it — because the
-// caller did not pass it and cannot tell from the bare value how to go on.
+// A fault the list already stores refuses the add, as any violation in a field
+// the write changes does: storedEdgeFault rewords it, with removeCmd.
 func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, removeCmd, op string) error {
 	return s.withLock(func() error {
 		iss, err := s.getMutable(id)
@@ -1544,27 +1542,70 @@ func (s *Store) addEdge(id, target string, list edgeList, field, selfMsg, remove
 			return err
 		}
 		stored := *cur
+		refused := func(err error) error {
+			*cur = stored
+			return storedEdgeFault(err, iss, idx, target, field, selfMsg, removeCmd)
+		}
 		*cur = append(*cur, target)
 		iss.Updated = s.now()
 		if err := s.checkRefsWith(iss, idx); err != nil {
-			for _, v := range stored {
-				if s.refExists(idx, v) {
-					continue
-				}
-				reason := "references an issue that does not exist"
-				if !validIssueID(v) {
-					reason = "is not a valid issue ID"
-				}
-				return invalid(field, "stored value %q %s; remove it with 'taskmgr %s'", v, reason, removeCmd)
-			}
-			return err
+			return refused(err)
 		}
 		if err := s.writeIssue(iss); err != nil {
 			s.logIOError(op, iss.ID, err)
-			return err
+			return refused(err)
 		}
 		return nil
 	})
+}
+
+// storedEdgeFault rewords the refusal of an add when the fault is in the list
+// as stored: iss carries that list, without target, and idx holds iss. The
+// caller did not pass the value at fault and cannot tell from the bare message
+// that it is in the file, so the message says it is stored and names removeCmd,
+// the command that removes it. It names the command only: a stored value is
+// text nobody checked, and a command line built from it could be pasted into a
+// shell. A fault the add itself introduces is returned unchanged.
+//
+// A stored value that names no issue is read from the violation. Every other
+// fault is stored when the list without target has the same one, which the
+// field and cycle checks answer from memory, so the refusal adds no file access
+// to the in-lock path (docs/REVIEWING.md).
+func storedEdgeFault(err error, iss *Issue, idx map[string]*Issue, target, field, selfMsg, removeCmd string) error {
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != field {
+		return err
+	}
+	var fault string
+	switch {
+	case ve.ref != nil && *ve.ref == target:
+		return err
+	case ve.ref != nil && validIssueID(*ve.ref):
+		fault = fmt.Sprintf("value %q references an issue that does not exist", *ve.ref)
+	case ve.ref != nil:
+		fault = fmt.Sprintf("value %q is not a valid issue ID", *ve.ref)
+	case !slices.Contains(storedViolations(iss, idx), *ve):
+		return err
+	case ve.Message == selfMsg:
+		fault = fmt.Sprintf("value %q names the issue itself", iss.ID)
+	default:
+		fault = ve.Message
+	}
+	return invalid(field, "stored %s; remove it with 'taskmgr %s'", fault, removeCmd)
+}
+
+// storedViolations returns the field violations of iss and its dependency
+// cycle, the faults an edge list can carry that no file access is needed to
+// find.
+func storedViolations(iss *Issue, idx map[string]*Issue) []ValidationError {
+	var out []ValidationError
+	for _, v := range fieldViolations(iss) {
+		out = append(out, *v)
+	}
+	if cycle := findCycle(idx, iss.ID); cycle != "" {
+		out = append(out, *invalid("blocked_by", "dependency cycle: %s", cycle))
+	}
+	return out
 }
 
 // removeEdge drops target from the edge list selected by list on issue id.
@@ -1679,25 +1720,32 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 	var violations []*ValidationError
 	if iss.Parent != "" {
 		if !s.refExists(idx, iss.Parent) {
-			violations = append(violations, invalid("parent", "referenced issue %q does not exist", iss.Parent))
+			violations = append(violations, dangling("parent", iss.Parent))
 		} else if cycle := findParentCycle(idx, iss.ID); cycle != "" {
 			violations = append(violations, invalid("parent", "parent cycle: %s", cycle))
 		}
 	}
 	for _, id := range iss.BlockedBy {
 		if !s.refExists(idx, id) {
-			violations = append(violations, invalid("blocked_by", "referenced issue %q does not exist", id))
+			violations = append(violations, dangling("blocked_by", id))
 		}
 	}
 	for _, id := range iss.Related {
 		if !s.refExists(idx, id) {
-			violations = append(violations, invalid("related", "referenced issue %q does not exist", id))
+			violations = append(violations, dangling("related", id))
 		}
 	}
 	if cycle := findCycle(idx, iss.ID); cycle != "" {
 		violations = append(violations, invalid("blocked_by", "dependency cycle: %s", cycle))
 	}
 	return s.firstIntroduced(iss, violations, edgesUnchanged)
+}
+
+// dangling is the violation of an edge value that names no issue.
+func dangling(field, ref string) *ValidationError {
+	ve := invalid(field, "referenced issue %q does not exist", ref)
+	ve.ref = &ref
+	return ve
 }
 
 // refExists reports whether an ID is resolvable: either in the hot index idx or
