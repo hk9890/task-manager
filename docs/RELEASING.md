@@ -117,12 +117,38 @@ on a clean, up-to-date tree.
    `checksums.txt`, a **CycloneDX SBOM per archive**, a **keyless cosign signature
    over `checksums.txt`** (`checksums.txt.bundle`, which is why the workflow grants
    `id-token: write`), and a **draft** release named
-   `task-manager vX.Y.Z` with a grouped changelog. Open the release, edit the notes
-   if you want, and **publish**.
+   `task-manager vX.Y.Z` with a grouped changelog.
 
-   > The release is a draft by default so notes can be curated before it goes out.
-   > To publish automatically on tag push instead, set `draft: false` in
-   > `.goreleaser.yaml`.
+8. Replace the changelog with [release notes](#release-notes), then publish:
+
+   ```bash
+   gh release edit vX.Y.Z --notes-file <notes.md>
+   gh release edit vX.Y.Z --draft=false
+   ```
+
+   The release is a draft (`draft: true` in `.goreleaser.yaml`) so that it cannot
+   go out with the generated changelog.
+
+## Release notes
+
+The draft arrives with one line per merged PR. That list is the input, not the
+notes: a user reads the notes to learn what changed for them, and a commit subject
+does not say it.
+
+- Write one flat bullet list. No headings, commit hashes, PR numbers or author names.
+- Write one bullet per change a user of `taskmgr` or of `sdk/tasks` notices. Merge
+  the commits that give one change. A commit with no visible effect — a refactor,
+  the SDK pin — gets no bullet.
+- Open each bullet with a bold sentence that states what is true now:
+  ``**`taskmgr tree` prints the parent and blocker graph.**`` Then say what it was
+  before, and name the flag, JSON key or message the user needs.
+- Open a change that can break a caller with `**Action required for <who>:**`, and
+  say what to run or write in its place.
+- Take each command, key and message from the code at the tag, not from the commit
+  subject: a later commit in the range can have reworded it.
+
+The notes of [v0.12.0](https://github.com/hk9890/task-manager/releases/tag/v0.12.0)
+are the worked example.
 
 ### Validating the config locally
 
