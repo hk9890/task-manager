@@ -16,7 +16,7 @@ skippable because the change looks small.
 
 **MUST read [docs/CODING.md](docs/CODING.md) before creating or editing ANY file under
 `cmd/`, `sdk/`, or `scripts/`.** Where a change goes is not guessable from the tree: the
-storage engine is the only writer, and most changes owe an update to a spec.
+storage engine is the only writer, and a disk, process or environment call has one seam.
 
 ### Research, planning, architecture — and finding anything at all
 
@@ -46,8 +46,10 @@ repository writes to a real store.
 ### Reviewing a PR or a diff
 
 **MUST read [docs/REVIEWING.md](docs/REVIEWING.md) before your first `git diff` or
-`gh pr diff` run to judge a change, and whenever a review is requested.** It carries what
-a review must cover on top of the `code-review` skill, and what is not a finding here.
+`gh pr diff` run to judge a change, and whenever a review is requested.** It carries the
+quality rules a finished change is held to — the spec and user-guide page it owes, the
+flag structs — what a review must cover on top of the `code-review` skill, and what is not
+a finding here.
 
 ### Commit, branch, worktree, PR, merge
 

@@ -27,7 +27,7 @@ than running `git worktree` by hand:
    - **Code** → run the green gate `mise run quality:full`
      (see [TESTING.md](TESTING.md)).
    - **Behaviour change** → update the matching spec in `docs/specs/` in the same
-     change (see [CODING.md](CODING.md)).
+     change (see [REVIEWING.md](REVIEWING.md#blocking)).
 4. Commit on the branch.
 
 ## Land via pull request
@@ -38,6 +38,8 @@ gh pr create --fill
 ```
 
 - The branch must be green (`mise run quality:full`) before review.
+- Review the PR against [REVIEWING.md](REVIEWING.md) with
+  `/worktree-flow:worktree-review <pr>` before the merge.
 - Merge the PR into `main`; do not push to `main` directly.
 - Update tracker state with `taskmgr`: close finished issues and file follow-ups.
 - **Not done** until the branch is pushed, the PR is open or merged, and the
