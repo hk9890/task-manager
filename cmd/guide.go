@@ -232,8 +232,14 @@ Labels are edited by name, not by rewriting the set:
 ## Wiring edges after the fact
 
   taskmgr dep add <dependent> <blocker>   # dependent becomes blocked by blocker
+  taskmgr dep rm <dependent> <blocker>    # ...and is released from it
   taskmgr rel add <a> <b>                 # symmetric related link
+  taskmgr rel rm <a> <b>                  # cleared on both sides
   taskmgr update <id> --parent <epic-id>
+
+An add refused with a message that says "stored" found a fault already in the
+issue's file: a bad value, a duplicate, or a cycle. Remove the entry the message
+names with the rm form, as its second argument, then repeat the add.
 `,
 	},
 	{

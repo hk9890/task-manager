@@ -114,3 +114,17 @@ func TestGuideSections_HaveUniqueIDs(t *testing.T) {
 		}
 	}
 }
+
+// A refused `dep add` or `rel add` names the rm command and no arguments, so the
+// guide is where a caller finds the form to run.
+func TestGuideSections_ShowTheRemovalOfEachEdge(t *testing.T) {
+	for _, want := range []string{"taskmgr dep rm <dependent> <blocker>", "taskmgr rel rm <a> <b>"} {
+		found := false
+		for _, s := range guideSections {
+			found = found || strings.Contains(s.text, want)
+		}
+		if !found {
+			t.Errorf("no guide section shows %q", want)
+		}
+	}
+}
