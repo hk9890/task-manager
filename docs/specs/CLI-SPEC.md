@@ -1238,8 +1238,10 @@ resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `
 | `broken` (§2.3). `detail` explains a status that is not `ok` and is omitted otherwise,
 `hooks` and `guide` count the hooks and the guide fragments the package contributes
 (HOOK-SPEC §3.7), and `shadowed` marks an entry whose name or directory an earlier one
-already claimed (HOOK-SPEC §3.5). A row reporting a defect of the file's package keys
-rather than an entry carries the key as `name` and the config file as `path`.
+already claimed (HOOK-SPEC §3.5). An entry that does not resolve has no directory: its
+`path` is the `path:` as written, and empty where the entry has none. A row reporting a
+defect of the file's package keys rather than an entry carries the key as `name` and the
+config file as `path`.
 
 **`packageRemovedDTO`** — emitted by `package rm`: `{name, path, scope, config}`. `name`
 is the package name the removed entry contributed, `path` its `path:` as written and

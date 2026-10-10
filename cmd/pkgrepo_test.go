@@ -29,6 +29,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // originRepo builds a git repository whose top-level directories are packages,
@@ -568,5 +570,55 @@ func TestPackageRepoRm_APathEntryIntoTheRepository_NamesTheRemedyThatRemovesIt(t
 	}
 	if _, errOut, code := run(t, "package", "rm", "--path", "packages/first/task-writing", "--global"); code != 0 {
 		t.Errorf("the printed remedy: exit %d, stderr %q", code, errOut)
+	}
+}
+
+// One warning for each entry, each with the form that removes that entry, and
+// the package once in `still_used` (CLI-SPEC §2.4).
+func TestPackageRepoRm_TwoEntriesForOnePackage_WarnForEachAndNameThePackageOnce(t *testing.T) {
+	for _, form := range []string{"json", "human"} {
+		t.Run(form, func(t *testing.T) {
+			t.Setenv("TASKMGR_HOME", t.TempDir())
+			if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+				t.Fatal("setup: repo add")
+			}
+			if _, errOut, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+				t.Fatalf("setup: package add: %s", errOut)
+			}
+			if _, errOut, code := run(t, "package", "add", "--global", "--path", "packages/first/task-writing"); code != 0 {
+				t.Fatalf("setup: package add --path: %s", errOut)
+			}
+
+			if form == "json" {
+				got := repoRmJSON(t, "first")
+				if want := []any{"task-writing"}; !reflect.DeepEqual(got["still_used"], want) {
+					t.Errorf("still_used = %v, want %v", got["still_used"], want)
+				}
+				return
+			}
+			out, errOut, code := run(t, "package", "repo", "rm", "first")
+			if code != 0 {
+				t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+			}
+			if got := strings.Count(out, "warning:"); got != 2 {
+				t.Errorf("stdout = %q, want two warnings, got %d", out, got)
+			}
+			for _, want := range []string{
+				"still uses task-writing; remove it with 'taskmgr package rm task-writing --global'",
+				"still uses path packages/first/task-writing; remove it with 'taskmgr package rm --path packages/first/task-writing --global'",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("stdout = %q, want %q", out, want)
+				}
+			}
+		})
+	}
+}
+
+// The resolution reads a blank `path:` beside a name as a `name:` entry, so the
+// remedy for it is the name form.
+func TestRemoveArgs_ABlankPathBesideANameIsANameEntry(t *testing.T) {
+	if got := removeArgs(tasks.PackageRef{Name: "task-writing", Path: "  "}); got != "task-writing" {
+		t.Errorf("removeArgs = %q, want the name", got)
 	}
 }

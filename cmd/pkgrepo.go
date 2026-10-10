@@ -319,7 +319,7 @@ what to reinstall rather than silently ungating a store.`,
 		// Name what a removal is about to break before it breaks it: a `use:`
 		// entry that resolves into this repository keeps failing every mutation
 		// until it is removed too. The package name alone does not say that: a
-		// `path:` entry of the same name resolves elsewhere, and a name a second
+		// `path:` entry of the same name can resolve elsewhere, and a name a second
 		// repository also provides resolves into that one once this is gone.
 		var orphaned []string
 		var orphanedRefs []tasks.PackageRef
@@ -412,8 +412,8 @@ func repoURL(dir string) string {
 // usedPackageDirs maps each directory the per-user config's `use:` entries
 // resolve to onto those entries, so a listing can say which of a repository's
 // packages are live. A package name is not enough to say that: a `path:` entry
-// whose last segment is that name uses a directory outside every repository. An
-// entry that does not resolve uses nothing, however its text is spelled.
+// whose last segment is that name can use a directory outside every repository.
+// An entry that does not resolve uses nothing, however its text is spelled.
 func usedPackageDirs() (map[string][]tasks.PackageRef, error) {
 	uses, err := tasks.GlobalPackageUses()
 	if err != nil {
@@ -427,12 +427,13 @@ func usedPackageDirs() (map[string][]tasks.PackageRef, error) {
 }
 
 // removeArgs is what `package rm` takes to remove ref: its name, or --path and
-// its path as the config spells it.
+// its path as the config spells it. A blank `path:` beside a name is a `name:`
+// entry, as it is to refLabel and to the resolution.
 func removeArgs(ref tasks.PackageRef) string {
-	if ref.Path != "" {
-		return "--path " + ref.Path
+	if p := strings.TrimSpace(ref.Path); p != "" {
+		return "--path " + p
 	}
-	return ref.Name
+	return strings.TrimSpace(ref.Name)
 }
 
 // runGit runs one git command, in dir when it is not empty.

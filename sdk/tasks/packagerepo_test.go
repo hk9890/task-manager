@@ -193,8 +193,8 @@ func TestPackageRepos_NoPackagesDirectoryIsNotAnError(t *testing.T) {
 	}
 }
 
-// globalDirs writes the per-user config of /hm and resolves its `use:` list.
-func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
+// globalUses writes the per-user config of /hm and resolves its `use:` list.
+func globalUses(t *testing.T, fs vfs.FS, configYAML string) []PackageUse {
 	t.Helper()
 	if err := fs.WriteAtomic("/hm/config.yaml", []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write global config: %v", err)
@@ -203,6 +203,13 @@ func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
 	if err != nil {
 		t.Fatalf("globalPackageUses: %v", err)
 	}
+	return uses
+}
+
+// globalDirs is globalUses reduced to the directories.
+func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
+	t.Helper()
+	uses := globalUses(t, fs, configYAML)
 	dirs := make([]string, len(uses))
 	for i, u := range uses {
 		dirs[i] = u.Dir
@@ -214,14 +221,8 @@ func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
 // remove it needs the spelling the config holds.
 func TestGlobalPackageUses_CarriesTheEntryOfEachDirectory(t *testing.T) {
 	fs := repoHome(t, "first/task-writing", "first/doc-policy")
-	if err := fs.WriteAtomic("/hm/config.yaml", []byte("use:\n  - path: packages/first/doc-policy\n  - name: task-writing\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
-	uses, err := globalPackageUses(fs, env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	uses := globalUses(t, fs, "use:\n  - path: packages/first/doc-policy\n  - name: task-writing\n")
 	if len(uses) != 2 {
 		t.Fatalf("uses = %+v, want two", uses)
 	}
@@ -268,14 +269,17 @@ func TestGlobalPackageUses_APackageThatDoesNotLoadStillResolves(t *testing.T) {
 }
 
 // A fault fires once, on the first read it matches. One that is still armed
-// after the call is the proof that nothing read the manifest.
+// after the call is the proof that nothing read the manifest. The entry has to
+// resolve first: a skipped entry reads no manifest either.
 func TestGlobalPackageUses_ReadsNoManifest(t *testing.T) {
 	fs := repoHome(t, "first/task-writing")
 	manifest := "/hm/packages/first/task-writing/" + PackageManifestName
 	armed := errors.New("armed fault")
 	fs.(*vfs.Mem).FailOn("ReadFile", manifest, armed)
 
-	globalDirs(t, fs, "use:\n  - name: task-writing\n")
+	if got := globalDirs(t, fs, "use:\n  - name: task-writing\n"); len(got) != 1 {
+		t.Fatalf("dirs = %v, want the entry to resolve", got)
+	}
 	if _, err := fs.ReadFile(manifest); !errors.Is(err, armed) {
 		t.Errorf("read after the call = %v, want the fault still armed: resolving read the manifest", err)
 	}
