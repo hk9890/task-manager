@@ -15,8 +15,8 @@ respect. Where the skill and this file disagree, this file wins.
     [STORAGE](specs/TASK-STORAGE-SPEC.md), [QUERY](specs/QUERY-SPEC.md);
   - hook events, hook config or payloads → [HOOK](specs/HOOK-SPEC.md);
   - the per-user config, the central registry, or store resolution →
-    [CONFIG](specs/CONFIG-SPEC.md); the project `config.yaml` →
-    [STORAGE](specs/TASK-STORAGE-SPEC.md) §4.2;
+    [CONFIG](specs/CONFIG-SPEC.md);
+  - the project `config.yaml` → [STORAGE](specs/TASK-STORAGE-SPEC.md) §4.2;
   - a structural change (packages, a seam) →
     [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5.
 
