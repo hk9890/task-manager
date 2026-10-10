@@ -34,10 +34,7 @@ import (
 // Stat can be refused: the store directory itself (an unreadable stores/), and
 // the config.yaml inside it (a store directory at mode 000).
 func TestStores_UnreadableEntryIsBrokenAndTheRestAreListed(t *testing.T) {
-	for name, failPath := range map[string]string{
-		"directory": filepath.Join(testCentral, storesSubdir, "p2"),
-		"config":    filepath.Join(testCentral, storesSubdir, "p2", ConfigFileName),
-	} {
+	for name, failPath := range unreadableStorePaths("p2") {
 		t.Run(name, func(t *testing.T) {
 			m := vfs.NewMem()
 			for _, n := range []string{"p1", "p2", "p3"} {
@@ -105,6 +102,134 @@ func TestResolve_StatFailureIsReportedNotSkipped(t *testing.T) {
 	if errors.Is(err, ErrNoStore) {
 		t.Errorf("error = %v, want the read failure rather than ErrNoStore — the advice that comes "+
 			"with ErrNoStore creates a second, empty store beside the real one", err)
+	}
+}
+
+// unreadableStorePaths names both places the Stat of a store can be refused: the
+// store directory itself, and the config.yaml inside it (a directory at mode 000).
+func unreadableStorePaths(store string) map[string]string {
+	dir := filepath.Join(testCentral, storesSubdir, store)
+	return map[string]string{
+		"directory": dir,
+		"config":    filepath.Join(dir, ConfigFileName),
+	}
+}
+
+// twoStoresOneUnreadable registers alpha for /alpha and beta for /beta, and
+// refuses the next Stat of failPath. A Mem fault fires one time, so it stands
+// for an unreadable store only while a resolution reads each store one time.
+func twoStoresOneUnreadable(t *testing.T, failPath string) *vfs.Mem {
+	t.Helper()
+	m := vfs.NewMem()
+	for _, n := range []string{"alpha", "beta"} {
+		makeStore(t, m, "/"+n, filepath.Join(testCentral, storesSubdir, n), n)
+	}
+	writeRegistry(t, m, testCentral,
+		registryEntry{Path: "/alpha", Store: "alpha"},
+		registryEntry{Path: "/beta", Store: "beta"},
+	)
+	m.FailOn("Stat", failPath, errors.New("permission denied"))
+	return m
+}
+
+func TestResolve_UnreadableStoreOfAnotherProject_IsErrNoStore(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+			if err := m.MkdirAll("/elsewhere", 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			_, _, err := resolveWith(ResolveOptions{WorkDir: "/elsewhere"}, m, fakeEnv(nil), nil)
+			if !errors.Is(err, ErrNoStore) {
+				t.Errorf("error = %v, want ErrNoStore: beta owns another project", err)
+			}
+		})
+	}
+}
+
+func TestResolve_UnreadableStoreOfAnotherProject_OpensTheOwningStore(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+
+			s, info, err := resolveWith(ResolveOptions{WorkDir: "/alpha"}, m, fakeEnv(nil), nil)
+			if err != nil {
+				t.Fatalf("an unreadable beta must not fail the resolution of alpha: %v", err)
+			}
+			if s.Name() != "alpha" || info.Kind != ResolvedCentral {
+				t.Errorf("resolved %q as %v, want alpha as ResolvedCentral", s.Name(), info.Kind)
+			}
+		})
+	}
+}
+
+func TestResolve_UnreadableOwningStore_IsReported(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+
+			_, _, err := resolveWith(ResolveOptions{WorkDir: "/beta"}, m, fakeEnv(nil), nil)
+			if err == nil || !strings.Contains(err.Error(), "read central store") {
+				t.Errorf("error = %v, want the read failure of beta", err)
+			}
+		})
+	}
+}
+
+// nestedStoresOneUnreadable registers outer for /work and inner for /work/inner,
+// and refuses the next Stat of the store directory of unreadable.
+func nestedStoresOneUnreadable(t *testing.T, unreadable string) *vfs.Mem {
+	t.Helper()
+	m := vfs.NewMem()
+	makeStore(t, m, "/work", filepath.Join(testCentral, storesSubdir, "outer"), "outer")
+	makeStore(t, m, "/work/inner", filepath.Join(testCentral, storesSubdir, "inner"), "inner")
+	writeRegistry(t, m, testCentral,
+		registryEntry{Path: "/work", Store: "outer"},
+		registryEntry{Path: "/work/inner", Store: "inner"},
+	)
+	m.FailOn("Stat", filepath.Join(testCentral, storesSubdir, unreadable), errors.New("permission denied"))
+	return m
+}
+
+// TestResolve_UnreadableOwningStore_DoesNotFallToAShorterAncestor: the entry
+// that owns the directory answers for it, also when it cannot be read.
+func TestResolve_UnreadableOwningStore_DoesNotFallToAShorterAncestor(t *testing.T) {
+	m := nestedStoresOneUnreadable(t, "inner")
+
+	_, _, err := resolveWith(ResolveOptions{WorkDir: "/work/inner"}, m, fakeEnv(nil), nil)
+	if err == nil || !strings.Contains(err.Error(), "read central store") {
+		t.Errorf("error = %v, want the read failure of inner, not the store of /work", err)
+	}
+}
+
+// TestResolve_UnreadableShorterAncestor_OpensTheLongerOne: an ancestor entry
+// that loses the match does not own the directory, so its read failure has no
+// effect.
+func TestResolve_UnreadableShorterAncestor_OpensTheLongerOne(t *testing.T) {
+	m := nestedStoresOneUnreadable(t, "outer")
+
+	s, _, err := resolveWith(ResolveOptions{WorkDir: "/work/inner"}, m, fakeEnv(nil), nil)
+	if err != nil {
+		t.Fatalf("an unreadable outer must not fail the resolution of /work/inner: %v", err)
+	}
+	if s.Name() != "inner" {
+		t.Errorf("resolved %q, want inner", s.Name())
+	}
+}
+
+// TestResolve_NamedUnreadableStore_IsReported: --store-name names the entry, so
+// its read failure is the answer from every directory.
+func TestResolve_NamedUnreadableStore_IsReported(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+
+			_, _, err := resolveWith(ResolveOptions{StoreName: "beta", WorkDir: "/alpha"}, m, fakeEnv(nil), nil)
+			if err == nil || !strings.Contains(err.Error(), "read central store") {
+				t.Errorf("error = %v, want the read failure of beta", err)
+			}
+		})
 	}
 }
 

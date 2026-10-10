@@ -109,17 +109,17 @@ could never run is refused here rather than at the next unrelated mutation.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ref := tasks.PackageRef{Name: args[0]}
-		if packageAddPath {
+		if packageAddFlags.path {
 			ref = tasks.PackageRef{Path: args[0]}
 		}
 		return addPackage(ref, packageFlags.global)
 	},
 }
 
-// packageAddPath selects a path reference over a name one. It is a bool rather
+// packageAddFlags.path selects a path reference over a name one. It is a bool rather
 // than a string so the argument position is the same either way, which keeps the
 // "state it explicitly" rule from reading as two different commands.
-var packageAddPath bool
+var packageAddFlags struct{ path bool }
 
 // addPackage appends ref to the target file's use list.
 //
@@ -210,16 +210,16 @@ never deletes one.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ref := tasks.PackageRef{Name: args[0]}
-		if packageRmPath {
+		if packageRmFlags.path {
 			ref = tasks.PackageRef{Path: args[0]}
 		}
 		return removePackage(ref, packageFlags.global)
 	},
 }
 
-// packageRmPath mirrors packageAddPath, so an entry is removed by the same two
+// packageRmFlags.path mirrors packageAddFlags.path, so an entry is removed by the same two
 // spellings it was added by.
-var packageRmPath bool
+var packageRmFlags struct{ path bool }
 
 // removePackage drops the entry matching ref from the target file's use list.
 //
@@ -429,8 +429,8 @@ func refLabel(ref tasks.PackageRef) string {
 
 func init() {
 	packageCmd.PersistentFlags().BoolVar(&packageFlags.global, "global", false, "act on the per-user config instead of the store's")
-	packageAddCmd.Flags().BoolVar(&packageAddPath, "path", false, "treat the argument as a directory path instead of a package name")
-	packageRmCmd.Flags().BoolVar(&packageRmPath, "path", false, "treat the argument as a directory path instead of a package name")
+	packageAddCmd.Flags().BoolVar(&packageAddFlags.path, "path", false, "treat the argument as a directory path instead of a package name")
+	packageRmCmd.Flags().BoolVar(&packageRmFlags.path, "path", false, "treat the argument as a directory path instead of a package name")
 
 	packageCmd.AddCommand(packageAddCmd)
 	packageCmd.AddCommand(packageRmCmd)

@@ -161,10 +161,14 @@ dropping the entry.
 
 **A `stat` that fails is never dangling.** Only "no such file or directory" makes an
 entry dangling. A permission error or an I/O failure says nothing about whether the
-store is there, so it is reported as itself: resolution fails with it, and enumeration
-labels the entry `broken` with the failure as its detail. Reading it as "gone" labels
-intact stores `dangling` and sends the reader to the one repair that deletes their
-registry entry.
+store is there, so it is reported as itself: enumeration labels the entry `broken` with
+the failure as its detail, and resolution fails with it where the entry is the one named
+by `--store-name` or the one that wins the match of §4 step 3. An entry that cannot be
+read and does not own the working directory has no effect on resolution: failing there
+would refuse every directory that has no local store for one store that tracks none of
+them, and stop a front end that resolves at start-up before it reaches the listing that
+names the fault. Reading a failed `stat` as "gone" labels intact stores `dangling` and
+sends the reader to the one repair that deletes their registry entry.
 
 **Enumeration** classifies without opening: `Stores` labels every entry `ok`,
 `dangling` or `broken` from a `stat` (SDK-SPEC §1, surfaced by `store list`,
@@ -210,9 +214,10 @@ caller-provided resolution origin — for the CLI, `--dir`/`-C` if given, else t
    resolution stops. This is why a local store always beats a central one.
 3. **Central fallback** — no local store: canonicalize `W` and pick the registry entry
    whose canonical `path` is the **longest** ancestor-of-or-equal-to `W`; open its
-   store. Dangling entries (§3) are skipped before the match. The winning entry is then
-   required to be a finished store: a broken one is reported, not skipped past to a
-   shorter ancestor — the entry that owns the directory is the one that answers for it.
+   store. Dangling entries (§3) are skipped before the match; an entry whose folder
+   cannot be read is not. The winning entry is then required to be a finished store: a
+   broken or unreadable one is reported, not skipped past to a shorter ancestor — the
+   entry that owns the directory is the one that answers for it.
 4. **None** → `ErrNoStore` (the CLI renders this actionably; `taskmgr where` shows the
    outcome).
 

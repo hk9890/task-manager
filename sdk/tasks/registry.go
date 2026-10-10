@@ -333,25 +333,31 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 		return nil, ResolveInfo{}, err
 	}
 	canonW := canonicalize(fs, start, home, start)
+	// A candidate keeps the outcome of its own read. A folder that could not be
+	// read fails the resolution only when it wins the match below: returning from
+	// the loop fails every directory with no local store for one store that owns
+	// none of them (CONFIG-SPEC §3).
+	type candidate struct {
+		entry   registryEntry
+		state   storeState
+		readErr error
+	}
 	var canonPaths []string
-	var kept []registryEntry
+	var candidates []candidate
 	for _, en := range entries {
-		dir := filepath.Join(croot, storesSubdir, en.Store)
-		st, err := storeStateOf(fs, dir)
-		if err != nil {
-			return nil, ResolveInfo{}, err
-		}
-		if st == storeMissing {
+		st, err := storeStateOf(fs, filepath.Join(croot, storesSubdir, en.Store))
+		if err == nil && st == storeMissing {
 			continue // dangling: the folder is gone — skip (CONFIG-SPEC §3)
 		}
 		canonPaths = append(canonPaths, canonicalize(fs, en.Path, home, croot))
-		kept = append(kept, en)
+		candidates = append(candidates, candidate{entry: en, state: st, readErr: err})
 	}
 	idx := longestAncestorIndex(canonW, canonPaths)
 	if idx < 0 {
 		return nil, ResolveInfo{}, ErrNoStore
 	}
-	en := kept[idx]
+	won := candidates[idx]
+	en := won.entry
 	dir := filepath.Join(croot, storesSubdir, en.Store)
 	// The entry that owns this directory is the one that answers for it, so a
 	// folder that is present but unusable is reported rather than skipped. A
@@ -359,9 +365,10 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 	// every issue file intact; skipping it hands the project a shorter ancestor's
 	// store or ErrNoStore, and the advice that comes with the latter creates a
 	// second, empty store beside the real one.
-	if done, err := storeComplete(fs, dir); err != nil {
-		return nil, ResolveInfo{}, err
-	} else if !done {
+	if won.readErr != nil {
+		return nil, ResolveInfo{}, won.readErr
+	}
+	if won.state != storeFinished {
 		return nil, ResolveInfo{}, errPartialStore(en.Store, dir)
 	}
 	project := canonPaths[idx]

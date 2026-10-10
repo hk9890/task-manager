@@ -54,7 +54,7 @@ Each row of `store list` carries a health:
 |---|---|
 | `ok` | a usable store |
 | `dangling` | the entry is registered, its store directory is gone — commands resolve past it |
-| `broken` | the directory is there without its `config.yaml`, or could not be read — commands stop and say so |
+| `broken` | the directory is there without its `config.yaml`, or could not be read — commands that resolve to it stop and say so |
 
 A `dangling` or `broken` row is an entry to repair or delete by hand, not a store to
 select. Both are what a half-finished move leaves behind.
