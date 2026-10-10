@@ -29,6 +29,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 // originRepo builds a git repository whose top-level directories are packages,
@@ -166,6 +168,74 @@ func TestPackageRepoList_APathEntryOfTheSameNameIsNotUsed(t *testing.T) {
 	}
 	if _, ok := got[0]["used"]; ok {
 		t.Errorf("repo list = %v, want no used key", got)
+	}
+}
+
+// useAbsolutePath writes a per-user config whose only `use:` entry is the
+// absolute path of a repository's package: an entry that is refused, and so
+// resolves to nothing, while its text equals a directory the repository holds.
+func useAbsolutePath(t *testing.T, home, repo, pkg string) {
+	t.Helper()
+	body := "use:\n  - path: " + filepath.Join(home, "packages", repo, pkg) + "\n"
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPackageRepoList_AnEntryThatDoesNotResolveIsNotUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	useAbsolutePath(t, home, "first", "task-writing")
+
+	out, errOut, code := run(t, "package", "repo", "list", "--json")
+	if code != 0 {
+		t.Fatalf("repo list: exit %d, stderr %q", code, errOut)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo list --json: %v\n%s", err, out)
+	}
+	if len(got) != 1 {
+		t.Fatalf("repo list = %v, want one repository", got)
+	}
+	if _, ok := got[0]["used"]; ok {
+		t.Errorf("repo list = %v, want no used key", got)
+	}
+	if out, _, _ := run(t, "package", "list", "--global", "--json"); !strings.Contains(out, `"status": "broken"`) {
+		t.Errorf("package list = %s, want the entry still reported broken", out)
+	}
+}
+
+// `used` asks where an entry resolves, not whether the package loads.
+func TestPackageRepoList_APackageThatDoesNotLoadIsStillUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, _, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+	manifest := filepath.Join(home, "packages", "first", "task-writing", "taskmgr-package.yaml")
+	if err := os.WriteFile(manifest, []byte("hooks: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "package", "repo", "list", "--json")
+	if code != 0 {
+		t.Fatalf("repo list: exit %d, stderr %q", code, errOut)
+	}
+	var got []struct {
+		Used []string `json:"used"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo list --json: %v\n%s", err, out)
+	}
+	if len(got) != 1 || strings.Join(got[0].Used, ",") != "task-writing" {
+		t.Errorf("repo list = %s, want task-writing used", out)
 	}
 }
 
@@ -361,6 +431,35 @@ func TestPackageRepoRm_JSON_APathEntryOfTheSameNameIsNotStillUsed(t *testing.T) 
 	}
 }
 
+// An entry that does not resolve was broken before the removal, so the removal
+// orphans nothing and the human form offers no remedy for it.
+func TestPackageRepoRm_AnEntryThatDoesNotResolveIsNotStillUsed(t *testing.T) {
+	for _, form := range []string{"json", "human"} {
+		t.Run(form, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("TASKMGR_HOME", home)
+			if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+				t.Fatal("setup: repo add")
+			}
+			useAbsolutePath(t, home, "first", "task-writing")
+
+			if form == "json" {
+				if got := repoRmJSON(t, "first"); got["still_used"] != nil {
+					t.Errorf("output = %v, want no still_used key", got)
+				}
+				return
+			}
+			out, errOut, code := run(t, "package", "repo", "rm", "first")
+			if code != 0 {
+				t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+			}
+			if strings.Contains(out+errOut, "warning:") {
+				t.Errorf("stdout %q, stderr %q, want no warning", out, errOut)
+			}
+		})
+	}
+}
+
 // With a second repository that provides the same name, the entry resolves into
 // neither while both are installed, and into the one that stays afterwards.
 func TestPackageRepoRm_JSON_APackageAnotherRepositoryProvidesIsNotStillUsed(t *testing.T) {
@@ -446,5 +545,80 @@ func TestPackageRepoList_NothingInstalled(t *testing.T) {
 	}
 	if !strings.Contains(out, "no package repository is installed") {
 		t.Errorf("stdout = %q, want it to say nothing is installed", out)
+	}
+}
+
+// `package rm` takes a `path:` entry by its path, so the remedy for one names
+// --path: the name form exits 1 for it.
+func TestPackageRepoRm_APathEntryIntoTheRepository_NamesTheRemedyThatRemovesIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, errOut, code := run(t, "package", "add", "--global", "--path", "packages/first/task-writing"); code != 0 {
+		t.Fatalf("setup: package add --path: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "package", "repo", "rm", "first")
+	if code != 0 {
+		t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+	}
+	want := "remove it with 'taskmgr package rm --path packages/first/task-writing --global'"
+	if !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if _, errOut, code := run(t, "package", "rm", "--path", "packages/first/task-writing", "--global"); code != 0 {
+		t.Errorf("the printed remedy: exit %d, stderr %q", code, errOut)
+	}
+}
+
+// One warning for each entry, each with the form that removes that entry, and
+// the package once in `still_used` (CLI-SPEC §2.4).
+func TestPackageRepoRm_TwoEntriesForOnePackage_WarnForEachAndNameThePackageOnce(t *testing.T) {
+	for _, form := range []string{"json", "human"} {
+		t.Run(form, func(t *testing.T) {
+			t.Setenv("TASKMGR_HOME", t.TempDir())
+			if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+				t.Fatal("setup: repo add")
+			}
+			if _, errOut, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+				t.Fatalf("setup: package add: %s", errOut)
+			}
+			if _, errOut, code := run(t, "package", "add", "--global", "--path", "packages/first/task-writing"); code != 0 {
+				t.Fatalf("setup: package add --path: %s", errOut)
+			}
+
+			if form == "json" {
+				got := repoRmJSON(t, "first")
+				if want := []any{"task-writing"}; !reflect.DeepEqual(got["still_used"], want) {
+					t.Errorf("still_used = %v, want %v", got["still_used"], want)
+				}
+				return
+			}
+			out, errOut, code := run(t, "package", "repo", "rm", "first")
+			if code != 0 {
+				t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+			}
+			if got := strings.Count(out, "warning:"); got != 2 {
+				t.Errorf("stdout = %q, want two warnings, got %d", out, got)
+			}
+			for _, want := range []string{
+				"still uses task-writing; remove it with 'taskmgr package rm task-writing --global'",
+				"still uses path packages/first/task-writing; remove it with 'taskmgr package rm --path packages/first/task-writing --global'",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("stdout = %q, want %q", out, want)
+				}
+			}
+		})
+	}
+}
+
+// The resolution reads a blank `path:` beside a name as a `name:` entry, so the
+// remedy for it is the name form.
+func TestRemoveArgs_ABlankPathBesideANameIsANameEntry(t *testing.T) {
+	if got := removeArgs(tasks.PackageRef{Name: "task-writing", Path: "  "}); got != "task-writing" {
+		t.Errorf("removeArgs = %q, want the name", got)
 	}
 }

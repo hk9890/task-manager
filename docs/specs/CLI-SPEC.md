@@ -519,9 +519,11 @@ and clobbering either deletes packages some config still names.
 
 List the installed repositories, sorted by name, each with the packages it provides, which
 of those the per-user config uses, and its `origin` URL. A package is used when a `use:`
-entry of that config resolves into the repository's directory for it. A `path:` entry of
-the same name resolves outside the repository, and a name two repositories provide
-resolves into neither (HOOK-SPEC §3.5), so neither counts.
+entry of that config resolves into the repository's directory for it, by `name:` or by a
+`path:` that leads there. A `path:` entry of the same name that resolves elsewhere does
+not count. Neither does an entry that does not resolve: a name two repositories provide
+resolves into neither (HOOK-SPEC §3.5), and a refused `path:` resolves nowhere, even where
+its text spells that directory.
 
 Only a directory holding `taskmgr-package.yaml` counts as a package, so a repository's
 README, licence and `.git` directory are not listed as broken ones.
@@ -553,6 +555,11 @@ The `use:` entries naming its packages are left alone — `package rm` is the ve
 — and each one that stops resolving is named in the output. Until such an entry is
 removed it reports `missing` and fails every mutation in the store that names it, which is
 the state this warning exists to make visible rather than silent.
+
+The warning names the `package rm` form that removes the entry: `package rm <name> --global`
+for a `name:` entry, `package rm --path <path> --global` for a `path:` one, because the
+name form refuses a `path:` entry. Two entries that resolve to one package give two
+warnings and one name in `still_used`.
 
 - **Output:** the repository that was removed, and the packages a config still uses
   (`repoRemovedDTO` in JSON, §6).
@@ -1245,8 +1252,10 @@ resolves to on this machine; `scope` is `store` | `global`; `status` is `ok` | `
 | `broken` (§2.3). `detail` explains a status that is not `ok` and is omitted otherwise,
 `hooks` and `guide` count the hooks and the guide fragments the package contributes
 (HOOK-SPEC §3.7), and `shadowed` marks an entry whose name or directory an earlier one
-already claimed (HOOK-SPEC §3.5). A row reporting a defect of the file's package keys
-rather than an entry carries the key as `name` and the config file as `path`.
+already claimed (HOOK-SPEC §3.5). An entry that does not resolve has no directory: its
+`path` is the `path:` as written, and empty where the entry has none. A row reporting a
+defect of the file's package keys rather than an entry carries the key as `name` and the
+config file as `path`.
 
 **`packageRemovedDTO`** — emitted by `package rm`: `{name, path, scope, config}`. `name`
 is the package name the removed entry contributed, `path` its `path:` as written and

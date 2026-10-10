@@ -195,7 +195,7 @@ one you want into the store and name it by path.`,
 				d.Packages = []string{}
 			}
 			for _, p := range r.Packages {
-				if used[filepath.Join(r.Path, p)] {
+				if len(used[filepath.Join(r.Path, p)]) > 0 {
 					d.Used = append(d.Used, p)
 				}
 			}
@@ -319,9 +319,10 @@ what to reinstall rather than silently ungating a store.`,
 		// Name what a removal is about to break before it breaks it: a `use:`
 		// entry that resolves into this repository keeps failing every mutation
 		// until it is removed too. The package name alone does not say that: a
-		// `path:` entry of the same name resolves elsewhere, and a name a second
+		// `path:` entry of the same name can resolve elsewhere, and a name a second
 		// repository also provides resolves into that one once this is gone.
 		var orphaned []string
+		var orphanedRefs []tasks.PackageRef
 		repos, err := tasks.PackageRepos()
 		if err != nil {
 			return err
@@ -335,8 +336,9 @@ what to reinstall rather than silently ungating a store.`,
 				continue
 			}
 			for _, p := range r.Packages {
-				if used[filepath.Join(r.Path, p)] {
+				if refs := used[filepath.Join(r.Path, p)]; len(refs) > 0 {
 					orphaned = append(orphaned, p)
+					orphanedRefs = append(orphanedRefs, refs...)
 				}
 			}
 		}
@@ -349,8 +351,8 @@ what to reinstall rather than silently ungating a store.`,
 			return printJSON(repoRemovedDTO{Name: name, Path: dir, StillUsed: orphaned})
 		}
 		_, _ = fmt.Fprintf(stdout, "Removed package repository %s from %s\n", name, dir)
-		for _, p := range orphaned {
-			_, _ = fmt.Fprintf(stdout, "warning: the per-user config still uses %s; remove it with 'taskmgr package rm %s --global'\n", p, p)
+		for _, ref := range orphanedRefs {
+			_, _ = fmt.Fprintf(stdout, "warning: the per-user config still uses %s; remove it with 'taskmgr package rm %s --global'\n", refLabel(ref), removeArgs(ref))
 		}
 		return nil
 	},
@@ -407,20 +409,31 @@ func repoURL(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// usedPackageDirs is the set of directories the per-user config's `use:` entries
-// resolve to, so a listing can say which of a repository's packages are live. A
-// package name is not enough to say that: a `path:` entry whose last segment is
-// that name uses a directory outside every repository.
-func usedPackageDirs() (map[string]bool, error) {
-	infos, err := tasks.GlobalPackages()
+// usedPackageDirs maps each directory the per-user config's `use:` entries
+// resolve to onto those entries, so a listing can say which of a repository's
+// packages are live. A package name is not enough to say that: a `path:` entry
+// whose last segment is that name can use a directory outside every repository.
+// An entry that does not resolve uses nothing, however its text is spelled.
+func usedPackageDirs() (map[string][]tasks.PackageRef, error) {
+	uses, err := tasks.GlobalPackageUses()
 	if err != nil {
 		return nil, err
 	}
-	used := make(map[string]bool, len(infos))
-	for _, in := range infos {
-		used[in.Path] = true
+	used := make(map[string][]tasks.PackageRef, len(uses))
+	for _, u := range uses {
+		used[u.Dir] = append(used[u.Dir], u.Ref)
 	}
 	return used, nil
+}
+
+// removeArgs is what `package rm` takes to remove ref: its name, or --path and
+// its path as the config spells it. A blank `path:` beside a name is a `name:`
+// entry, as it is to refLabel and to the resolution.
+func removeArgs(ref tasks.PackageRef) string {
+	if p := strings.TrimSpace(ref.Path); p != "" {
+		return "--path " + p
+	}
+	return strings.TrimSpace(ref.Name)
 }
 
 // runGit runs one git command, in dir when it is not empty.
