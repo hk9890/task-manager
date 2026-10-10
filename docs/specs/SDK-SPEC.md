@@ -1217,9 +1217,11 @@ The rule covers dangling references and cycles too. An `Update` that leaves `Par
 alone passes on a stored parent cycle or a dangling parent, and an `Update` that sets
 `Parent` to another value or to `""` repairs it. `RemoveDep` and `RemoveRelated` repair
 a stored `blocked_by` or `related` edge the same way; `AddDep` and `AddRelated` are
-refused until they have. That refusal names the stored value, not the one passed, says
-that it is stored, and names the command that removes it (`taskmgr dep rm` or
-`taskmgr rel rm`): the caller did not pass the value at fault.
+refused until they have. A refusal for a fault the list already stores — a value that
+names no issue, a duplicate, a self-edge, a dependency cycle — says that the fault is
+stored and names the command that removes it (`taskmgr dep rm` or `taskmgr rel rm`): the
+caller did not pass the value at fault. A fault the add itself introduces keeps its bare
+message. CLI-SPEC `dep add` lists the messages.
 
 A malformed filter expression (`List` / `ListPage`) returns a typed parse error
 locating the failure; it is not a validation error and never reaches disk:

@@ -1012,7 +1012,8 @@ func (s *Store) CreateBatch(entries []BatchEntry) ([]*MutationResult, error) {
 		results, failed, err = s.createSet(entries)
 	}
 	if failed >= 0 {
-		return nil, &BatchEntryError{Index: failed, Ref: strings.TrimSpace(entries[failed].Ref), Err: err}
+		refs, _ := batchRefs(entries)
+		return nil, &BatchEntryError{Index: failed, Ref: refs[failed], Err: err}
 	}
 	return results, err
 }
@@ -1584,7 +1585,7 @@ func storedEdgeFault(err error, iss *Issue, idx map[string]*Issue, target, field
 		fault = fmt.Sprintf("value %q references an issue that does not exist", *ve.ref)
 	case ve.ref != nil:
 		fault = fmt.Sprintf("value %q is not a valid issue ID", *ve.ref)
-	case !slices.Contains(storedViolations(iss, idx), *ve):
+	case !storedHas(iss, idx, ve):
 		return err
 	case ve.Message == selfMsg:
 		fault = fmt.Sprintf("value %q names the issue itself", iss.ID)
@@ -1594,18 +1595,12 @@ func storedEdgeFault(err error, iss *Issue, idx map[string]*Issue, target, field
 	return invalid(field, "stored %s; remove it with 'taskmgr %s'", fault, removeCmd)
 }
 
-// storedViolations returns the field violations of iss and its dependency
-// cycle, the faults an edge list can carry that no file access is needed to
-// find.
-func storedViolations(iss *Issue, idx map[string]*Issue) []ValidationError {
-	var out []ValidationError
-	for _, v := range fieldViolations(iss) {
-		out = append(out, *v)
-	}
-	if cycle := findCycle(idx, iss.ID); cycle != "" {
-		out = append(out, *invalid("blocked_by", "dependency cycle: %s", cycle))
-	}
-	return out
+// storedHas reports whether iss carries the violation ve: one of its field
+// violations, or its dependency cycle. Neither needs a file access, and the
+// graph is walked only for a violation the field checks do not have.
+func storedHas(iss *Issue, idx map[string]*Issue, ve *ValidationError) bool {
+	same := func(v *ValidationError) bool { return v != nil && *v == *ve }
+	return slices.ContainsFunc(fieldViolations(iss), same) || same(cycleViolation(idx, iss.ID))
 }
 
 // removeEdge drops target from the edge list selected by list on issue id.
@@ -1735,8 +1730,8 @@ func (s *Store) checkRefsWith(iss *Issue, idx map[string]*Issue) error {
 			violations = append(violations, dangling("related", id))
 		}
 	}
-	if cycle := findCycle(idx, iss.ID); cycle != "" {
-		violations = append(violations, invalid("blocked_by", "dependency cycle: %s", cycle))
+	if cycle := cycleViolation(idx, iss.ID); cycle != nil {
+		violations = append(violations, cycle)
 	}
 	return s.firstIntroduced(iss, violations, edgesUnchanged)
 }
@@ -1746,6 +1741,16 @@ func dangling(field, ref string) *ValidationError {
 	ve := invalid(field, "referenced issue %q does not exist", ref)
 	ve.ref = &ref
 	return ve
+}
+
+// cycleViolation is the violation of the dependency cycle findCycle reports
+// from id, or nil when there is none.
+func cycleViolation(idx map[string]*Issue, id string) *ValidationError {
+	cycle := findCycle(idx, id)
+	if cycle == "" {
+		return nil
+	}
+	return invalid("blocked_by", "dependency cycle: %s", cycle)
 }
 
 // refExists reports whether an ID is resolvable: either in the hot index idx or
