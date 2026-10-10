@@ -139,6 +139,40 @@ func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
 	}
 }
 
+// TestL4_Resolve_UnreadableStoreFailsOnlyItsOwnProject is the real-disk half of
+// the central fallback: a store directory at mode 000 answers for the project it
+// is registered for, and for no other directory.
+func TestL4_Resolve_UnreadableStoreFailsOnlyItsOwnProject(t *testing.T) {
+	home := t.TempDir()
+	projects := map[string]string{"alpha": t.TempDir(), "beta": t.TempDir()}
+	for name, project := range projects {
+		if _, errOut, code := taskmgrCentral(t, project, home, "init", "--central", "--store-name", name); code != 0 {
+			t.Fatalf("init --central %s: code=%d stderr=%q", name, code, errOut)
+		}
+	}
+	beta := filepath.Join(home, "stores", "beta")
+	if err := os.Chmod(beta, 0); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(beta, 0o755) })
+	// Root ignores the permission bits, so confirm the failure is real first.
+	if _, err := os.Stat(filepath.Join(beta, "config.yaml")); err == nil {
+		t.Skip("cannot make a directory unreadable (running as root?)")
+	}
+
+	if _, errOut, code := taskmgrCentral(t, projects["alpha"], home, "list"); code != 0 {
+		t.Errorf("list in alpha's project: code=%d stderr=%q, want its store to open", code, errOut)
+	}
+	_, errOut, code := taskmgrCentral(t, t.TempDir(), home, "list")
+	if code != 1 || !strings.Contains(errOut, "no .tasks directory found") || strings.Contains(errOut, "read central store") {
+		t.Errorf("list in an unregistered directory: code=%d stderr=%q, want the no-store error", code, errOut)
+	}
+	_, errOut, code = taskmgrCentral(t, projects["beta"], home, "list")
+	if code != 1 || !strings.Contains(errOut, "read central store") {
+		t.Errorf("list in beta's project: code=%d stderr=%q, want beta's read failure", code, errOut)
+	}
+}
+
 func TestL4_Central_InitWhereListCreate(t *testing.T) {
 	home := t.TempDir()
 	proj := t.TempDir()

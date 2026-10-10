@@ -108,6 +108,95 @@ func TestResolve_StatFailureIsReportedNotSkipped(t *testing.T) {
 	}
 }
 
+// unreadableStorePaths names both places the Stat of a store can be refused: the
+// store directory itself, and the config.yaml inside it (a directory at mode 000).
+func unreadableStorePaths(store string) map[string]string {
+	dir := filepath.Join(testCentral, storesSubdir, store)
+	return map[string]string{
+		"directory": dir,
+		"config":    filepath.Join(dir, ConfigFileName),
+	}
+}
+
+// twoStoresOneUnreadable registers alpha for /alpha and beta for /beta, and
+// refuses the Stat of failPath.
+func twoStoresOneUnreadable(t *testing.T, failPath string) *vfs.Mem {
+	t.Helper()
+	m := vfs.NewMem()
+	for _, n := range []string{"alpha", "beta"} {
+		makeStore(t, m, "/"+n, filepath.Join(testCentral, storesSubdir, n), n)
+	}
+	writeRegistry(t, m, testCentral,
+		registryEntry{Path: "/alpha", Store: "alpha"},
+		registryEntry{Path: "/beta", Store: "beta"},
+	)
+	m.FailOn("Stat", failPath, errors.New("permission denied"))
+	return m
+}
+
+func TestResolve_UnreadableStoreOfAnotherProject_IsErrNoStore(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+			if err := m.MkdirAll("/elsewhere", 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+
+			_, _, err := resolveWith(ResolveOptions{WorkDir: "/elsewhere"}, m, fakeEnv(nil), nil)
+			if !errors.Is(err, ErrNoStore) {
+				t.Errorf("error = %v, want ErrNoStore: beta owns another project", err)
+			}
+		})
+	}
+}
+
+func TestResolve_UnreadableStoreOfAnotherProject_OpensTheOwningStore(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+
+			s, info, err := resolveWith(ResolveOptions{WorkDir: "/alpha"}, m, fakeEnv(nil), nil)
+			if err != nil {
+				t.Fatalf("an unreadable beta must not fail the resolution of alpha: %v", err)
+			}
+			if s.Name() != "alpha" || info.Kind != ResolvedCentral {
+				t.Errorf("resolved %q as %v, want alpha as ResolvedCentral", s.Name(), info.Kind)
+			}
+		})
+	}
+}
+
+func TestResolve_UnreadableOwningStore_IsReported(t *testing.T) {
+	for name, failPath := range unreadableStorePaths("beta") {
+		t.Run(name, func(t *testing.T) {
+			m := twoStoresOneUnreadable(t, failPath)
+
+			_, _, err := resolveWith(ResolveOptions{WorkDir: "/beta"}, m, fakeEnv(nil), nil)
+			if err == nil || !strings.Contains(err.Error(), "read central store") {
+				t.Errorf("error = %v, want the read failure of beta", err)
+			}
+		})
+	}
+}
+
+// TestResolve_UnreadableOwningStore_DoesNotFallToAShorterAncestor: the entry
+// that owns the directory answers for it, also when it cannot be read.
+func TestResolve_UnreadableOwningStore_DoesNotFallToAShorterAncestor(t *testing.T) {
+	m := vfs.NewMem()
+	makeStore(t, m, "/work", filepath.Join(testCentral, storesSubdir, "outer"), "outer")
+	makeStore(t, m, "/work/inner", filepath.Join(testCentral, storesSubdir, "inner"), "inner")
+	writeRegistry(t, m, testCentral,
+		registryEntry{Path: "/work", Store: "outer"},
+		registryEntry{Path: "/work/inner", Store: "inner"},
+	)
+	m.FailOn("Stat", filepath.Join(testCentral, storesSubdir, "inner"), errors.New("permission denied"))
+
+	_, _, err := resolveWith(ResolveOptions{WorkDir: "/work/inner"}, m, fakeEnv(nil), nil)
+	if err == nil || !strings.Contains(err.Error(), "read central store") {
+		t.Errorf("error = %v, want the read failure of inner, not the store of /work", err)
+	}
+}
+
 // TestResolve_NamedDanglingEntryIsNotReportedAsBroken pins the two messages
 // apart. The broken-store message sends the reader to `ls` inside the store
 // directory and a hand-written config.yaml; for an entry whose directory is gone
