@@ -841,7 +841,7 @@ project can see exactly how long its gates hold the lock and decide whether to r
   commands always run with hooks **enabled**.
 - **Payload version.** The stdin payload carries `schema` (§5). Adding a field is additive;
   a removal/repurpose is breaking and is versioned with the SDK module (cf. QUERY-SPEC.md §7).
-- **Spec sync.** Hooks span several specs, which stay consistent (per CODING.md): the
+- **Spec sync.** Hooks span several specs, which stay consistent (per REVIEWING.md): the
   `config.yaml` schema carries `hook_timeout` and `use` (TASK-STORAGE-SPEC.md §4.2); the
   pre/post-hook steps sit in the write path (ARCHITECTURE-SPEC.md §6); the run-or-omit-hooks
   flag on `Import` and the hook-denied error are in SDK-SPEC.md (§3/§4/§6); and the `hints` /

@@ -25,7 +25,7 @@ below.
 ## `docs/specs/`
 
 When a spec is updated, and which one, is
-[CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync)'s. What goes in it:
+[REVIEWING.md § Blocking](REVIEWING.md#blocking)'s. What goes in it:
 
 - Specify data, contract and algorithm: file formats and their keys, the command surface,
   the resolution rule, the grammar, the hook payload.

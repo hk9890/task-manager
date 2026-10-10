@@ -1,14 +1,23 @@
 # Reviewing
 
 **Local delta —** run the `code-review` skill for the correctness pass; this file is what a
-task-manager review must cover on top of it. Each rule below names the document that owns
-it: read that, and flag what the change does not respect. Where the two disagree, this
-file wins.
+task-manager review must cover on top of it. A rule below states its condition in full, or
+names the document that owns it: read that document, and flag what the change does not
+respect. Where the skill and this file disagree, this file wins.
 
 ## Blocking
 
-- **The normative spec for the touched area was updated in the same change.**
-  [CODING.md § Keep specs in sync](CODING.md#keep-specs-in-sync) maps the area to its spec.
+- **The normative spec for the touched area was updated in the same change.** Flag a
+  behaviour or structural change whose spec the diff leaves unchanged; a mismatch between
+  code and spec is a bug. The touched area names the spec:
+  - a CLI command or flag, or a public `sdk/tasks` function, type or semantics → the
+    matching one of [CLI](specs/CLI-SPEC.md), [SDK](specs/SDK-SPEC.md),
+    [STORAGE](specs/TASK-STORAGE-SPEC.md), [QUERY](specs/QUERY-SPEC.md);
+  - hook events, hook config or payloads → [HOOK](specs/HOOK-SPEC.md);
+  - config, the central registry, or store resolution → [CONFIG](specs/CONFIG-SPEC.md);
+  - a structural change (packages, a seam) →
+    [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5.
+
   The `spec_*_conformance_test.go` suites cover the sections named in their own headers and
   nothing more, so an un-updated spec is a review finding, not a test failure.
 - **A file added to `mayDeclareStoreMethods`, `mayImportVFS`, `mayImportEnv` or
@@ -33,20 +42,38 @@ file wins.
   construction, never the wall clock and never a setter afterwards
   ([TESTING.md § Conventions](TESTING.md#conventions)). A test that touches a real
   disk without the `integration` tag is a finding: it puts L3 in the fast suite.
-- **User-facing docs, in the same PR.** A new or changed command, flag, or JSON field
-  reaches [user-guide/](user-guide/); a new package reaches
-  [OVERVIEW.md § Repository layout](OVERVIEW.md#repository-layout). `check:docs` only
-  proves a cited path still exists — it can never prove a new one is cited.
+- **User-facing docs, in the same PR.** A change a user would notice — a new or changed
+  command, flag, JSON field or error message — updates the page covering it in
+  [user-guide/](user-guide/); a new package reaches
+  [OVERVIEW.md § Repository layout](OVERVIEW.md#repository-layout). Flag a diff that has
+  the change and not the page. `check:docs` only proves a cited path still exists — it can
+  never prove a new one is cited.
 - **Cross-module compatibility.** A change to a `sdk/tasks` exported symbol that `cmd/`
   now depends on has to survive `mise run verify:pin` at release time
   ([RELEASING.md](RELEASING.md)); flag one that will not.
+
+## Quality rules
+
+How finished code must look. Each rule is a condition to check on the diff, with the
+correct form.
+
+- **Flag structs**: a command in `cmd/` keeps its flag values in its own struct, named
+  `<command>Flags` — `closeFlags`, `commentAddFlags`. Flag a struct that two sibling
+  subcommands read; give each its own. The persistent-flag struct of a group, read by
+  each subcommand of that group, is no finding
+  ([CODING.md § Where changes go](CODING.md#where-changes-go) owns that mechanism).
+- **Package-level flag variables**: the only ones in `cmd/` are the `<command>Flags`
+  structs, the persistent-flag struct of a group (`configFlags`), and the root persistent
+  flags `flagJSON`/`flagDir`/`flagStoreName`. Flag any other; move it into the struct of
+  its command.
 
 ## Not a finding
 
 - Anything `mise run quality:full` already rejects — formatting, `go vet`,
   golangci-lint, a failing layer. Report only what a green gate would still ship broken.
-- Naming and style the linter accepts. The enabled set is deliberately small
-  (`.golangci.yml`); a preference it does not encode is a suggestion, not a blocker.
+- Naming and style the linter accepts and no rule above states. The enabled set is
+  deliberately small (`.golangci.yml`); a preference neither encodes is a suggestion, not
+  a blocker.
 - A missing `write` log record for a comment, dependency or related-link edit. Those are
   not lifecycle transitions and log nothing by design
   ([MONITORING.md § What `write` covers](MONITORING.md#what-write-covers)).

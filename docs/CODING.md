@@ -35,7 +35,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 | Change | Goes in |
 |---|---|
-| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. One flag struct per command, named `<command>Flags` — never shared between sibling subcommands. A selector every subcommand of a group reads is that group's own *persistent* flag instead (`configFlags` on `config`), which also makes it accept in both positions. The only package-level flag variables are those and the root persistent flags `flagJSON`/`flagDir`/`flagStoreName` |
+| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. A selector every subcommand of a group reads is that group's own *persistent* flag (`configFlags` on `config`), which also makes it accept in both positions |
 | Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
@@ -59,20 +59,6 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
   `.tasks/`. Deterministic time via `Store.now` inside package `tasks`, via
   `tasks.WithClock` at construction from `cmd/` and external consumers. Details in
   [TESTING-STRATEGY.md](implementation/TESTING-STRATEGY.md).
-
-## Keep specs in sync
-
-A change to a CLI command/flag or a public `sdk/tasks` function/type/semantics
-**must update the matching spec in the same change** ([CLI](specs/CLI-SPEC.md),
-[SDK](specs/SDK-SPEC.md), [STORAGE](specs/TASK-STORAGE-SPEC.md),
-[QUERY](specs/QUERY-SPEC.md)). A change to hook events, config, or payloads updates
-[HOOK](specs/HOOK-SPEC.md). A change to config, the central registry, or store
-resolution updates [CONFIG](specs/CONFIG-SPEC.md). A structural change (packages, a
-seam) updates [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5. A mismatch is a bug.
-
-A change a **user** would notice — a command, a flag, a JSON field, an error message —
-also updates the page covering it in [user-guide/](user-guide/) in the same change. No
-gate catches a missing one; [REVIEWING.md](REVIEWING.md) is where it is checked.
 
 ## Modules
 
