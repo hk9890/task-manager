@@ -627,8 +627,12 @@ func (s *Store) migrateInlineComments(issueFilePath string) error {
 
 // issueFilePath returns the actual on-disk path for an issue's .md file,
 // checking the hot directory first and falling through to closed/.
-// Returns ErrNotFound if the issue does not exist in either partition.
+// Returns ErrNotFound if the issue does not exist in either partition, and for
+// a value outside the ID grammar, which is never joined onto a store directory.
 func (s *Store) issueFilePath(id string) (string, error) {
+	if !validIssueID(id) {
+		return "", errNotFound(id)
+	}
 	hotPath := s.filePath(id)
 	if _, err := s.fs.Stat(hotPath); err == nil {
 		return hotPath, nil

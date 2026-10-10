@@ -62,6 +62,30 @@ func TestResolveBatchRefs_RefWithStorePrefix_IsRefused(t *testing.T) {
 	}
 }
 
+func TestEdgeNamingNothing_NamesTheFirstEdgeThatIsNeitherRefNorID(t *testing.T) {
+	entries := []BatchEntry{
+		{Ref: " epic "},
+		{CreateInput: CreateInput{Parent: "epic", BlockedBy: []string{"x-exists", " ", ""}}},
+		{CreateInput: CreateInput{Parent: " epic ", Related: []string{"x-exists", "epik"}}},
+		{CreateInput: CreateInput{Parent: "../x-1"}},
+	}
+	failed, err := edgeNamingNothing(entries)
+	var ve *ValidationError
+	if failed != 2 || !errors.As(err, &ve) || ve.Field != "related" || !strings.Contains(ve.Message, `"epik"`) {
+		t.Errorf("want a related validation error naming \"epik\" on entry index 2, got index %d, %v", failed, err)
+	}
+}
+
+func TestEdgeNamingNothing_RefsAndValidIDs_AreNotRefused(t *testing.T) {
+	entries := []BatchEntry{
+		{Ref: "epic"},
+		{CreateInput: CreateInput{Parent: "epic", BlockedBy: []string{"x-exists"}, Related: []string{"other-9"}}},
+	}
+	if failed, err := edgeNamingNothing(entries); failed != -1 || err != nil {
+		t.Errorf("got index %d, %v; want -1 and no error", failed, err)
+	}
+}
+
 func TestBatchWriteOrder_WritesAnIssueAfterEveryIssueItNames(t *testing.T) {
 	issues := []*Issue{
 		{ID: "child", Parent: "epic", BlockedBy: []string{"schema"}},
@@ -159,6 +183,55 @@ func TestCreateBatch_UnknownEdge_WritesNothing(t *testing.T) {
 	var ve *ValidationError
 	if !errors.As(err, &be) || be.Index != 1 || be.Ref != "b" || !errors.As(err, &ve) || ve.Field != "blocked_by" || !strings.Contains(ve.Message, "does not exist") {
 		t.Fatalf("want a dangling blocked_by validation error on entry index 1, got %v", err)
+	}
+	assertStoreEmpty(t, s)
+}
+
+// An edge of a set is a ref or an ID. A misspelt ref is neither, and a message
+// about an invalid ID alone does not say that no entry has that name.
+func TestCreateBatch_EdgeNeitherRefNorID_SaysBoth(t *testing.T) {
+	for _, field := range []string{"parent", "blocked_by", "related"} {
+		t.Run(field, func(t *testing.T) {
+			in := CreateInput{Title: "uses schema"}
+			switch field {
+			case "parent":
+				in.Parent = "schemma"
+			case "blocked_by":
+				in.BlockedBy = []string{"schema", "schemma"}
+			case "related":
+				in.Related = []string{"schemma"}
+			}
+			s, _ := batchStore(t)
+			_, err := s.CreateBatch([]BatchEntry{
+				{Ref: "schema", CreateInput: CreateInput{Title: "schema"}},
+				{Ref: "b", CreateInput: in},
+			})
+			var be *BatchEntryError
+			var ve *ValidationError
+			if !errors.As(err, &be) || be.Index != 1 || be.Ref != "b" || !errors.As(err, &ve) || ve.Field != field {
+				t.Fatalf("want a %s validation error on entry index 1, got %v", field, err)
+			}
+			if want := `"schemma" is neither a ref of this set nor a valid issue ID`; ve.Message != want {
+				t.Errorf("message = %q, want %q", ve.Message, want)
+			}
+			assertStoreEmpty(t, s)
+		})
+	}
+}
+
+// A value that is a valid ID keeps the reference check's message, and Create,
+// which has no refs, keeps the field check's.
+func TestCreateBatch_EdgeNeitherRefNorID_LeavesTheOtherMessagesAlone(t *testing.T) {
+	s, _ := batchStore(t)
+	var ve *ValidationError
+
+	_, err := s.CreateBatch([]BatchEntry{{Ref: "b", CreateInput: CreateInput{Title: "b", BlockedBy: []string{"step-one"}}}})
+	if !errors.As(err, &ve) || ve.Message != `referenced issue "step-one" does not exist` {
+		t.Errorf("a valid ID that names no issue: got %v", err)
+	}
+	_, err = s.Create(CreateInput{Title: "x", BlockedBy: []string{"schemma"}})
+	if !errors.As(err, &ve) || ve.Message != `"schemma" is not a valid issue ID` {
+		t.Errorf("Create: got %v", err)
 	}
 	assertStoreEmpty(t, s)
 }

@@ -183,7 +183,7 @@ one you want into the store and name it by path.`,
 		if err != nil {
 			return err
 		}
-		used, err := usedPackageNames()
+		used, err := usedPackageDirs()
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ one you want into the store and name it by path.`,
 				d.Packages = []string{}
 			}
 			for _, p := range r.Packages {
-				if used[p] {
+				if used[filepath.Join(r.Path, p)] {
 					d.Used = append(d.Used, p)
 				}
 			}
@@ -317,14 +317,16 @@ what to reinstall rather than silently ungating a store.`,
 		name := args[0]
 
 		// Name what a removal is about to break before it breaks it: a `use:`
-		// entry naming one of these packages keeps failing every mutation until
-		// it is removed too.
+		// entry that resolves into this repository keeps failing every mutation
+		// until it is removed too. The package name alone does not say that: a
+		// `path:` entry of the same name resolves elsewhere, and a name a second
+		// repository also provides resolves into that one once this is gone.
 		var orphaned []string
 		repos, err := tasks.PackageRepos()
 		if err != nil {
 			return err
 		}
-		used, err := usedPackageNames()
+		used, err := usedPackageDirs()
 		if err != nil {
 			return err
 		}
@@ -333,7 +335,7 @@ what to reinstall rather than silently ungating a store.`,
 				continue
 			}
 			for _, p := range r.Packages {
-				if used[p] {
+				if used[filepath.Join(r.Path, p)] {
 					orphaned = append(orphaned, p)
 				}
 			}
@@ -405,16 +407,18 @@ func repoURL(dir string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// usedPackageNames is the set of package names the per-user config's `use:` list
-// already names, so a listing can say which of a repository's packages are live.
-func usedPackageNames() (map[string]bool, error) {
-	cfg, err := tasks.LoadGlobalConfig()
+// usedPackageDirs is the set of directories the per-user config's `use:` entries
+// resolve to, so a listing can say which of a repository's packages are live. A
+// package name is not enough to say that: a `path:` entry whose last segment is
+// that name uses a directory outside every repository.
+func usedPackageDirs() (map[string]bool, error) {
+	infos, err := tasks.GlobalPackages()
 	if err != nil {
 		return nil, err
 	}
-	used := make(map[string]bool, len(cfg.Use))
-	for _, ref := range cfg.Use {
-		used[refName(ref)] = true
+	used := make(map[string]bool, len(infos))
+	for _, in := range infos {
+		used[in.Path] = true
 	}
 	return used, nil
 }

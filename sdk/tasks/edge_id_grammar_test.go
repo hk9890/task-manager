@@ -18,6 +18,8 @@ package tasks
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
@@ -298,5 +300,107 @@ func TestRemoveRelated_TargetOutsideTheIDGrammar_HasNoInverseSide(t *testing.T) 
 	}
 	if len(got.Related) != 0 {
 		t.Errorf("related = %v, want the value removed", got.Related)
+	}
+}
+
+// RemoveRelated writes both sides. The inverse side's write only removes a
+// value, so a value outside the grammar that stays in its list must not refuse
+// it: the first side had already been written, and the link was left half cut.
+func TestRemoveRelated_InverseSideStoresAValueOutsideTheIDGrammar_CutsBothSides(t *testing.T) {
+	s, fs := newMemStore(t)
+	a, err := unwrap(s.Create(CreateInput{Title: "a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := unwrap(s.Create(CreateInput{Title: "b"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := unwrap(s.Create(CreateInput{Title: "c"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStored(t, fs, s, a.ID, func(iss *Issue) { iss.Related = []string{b.ID} })
+	seedStored(t, fs, s, b.ID, func(iss *Issue) { iss.Related = []string{"../x", a.ID} })
+
+	if err := s.RemoveRelated(a.ID, b.ID); err != nil {
+		t.Fatalf("rel rm: %v", err)
+	}
+	gotA, err := s.Get(a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotB, err := s.Get(b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotA.Related) != 0 || !slices.Equal(gotB.Related, []string{"../x"}) {
+		t.Errorf("related: a %v, b %v; want a empty and b left with only the stored value", gotA.Related, gotB.Related)
+	}
+
+	// The tolerance is for a removal only.
+	err = s.AddRelated(b.ID, c.ID)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "related" {
+		t.Errorf("rel add onto the invalid list: got %v, want a related validation error", err)
+	}
+}
+
+// A refused add names the value at fault. When that value is one the list
+// already stored, the caller did not pass it, so the message says it is stored
+// and names the command that removes it.
+func TestAddEdge_StoredValueNamesNoIssue_NamesTheStoredValueAndTheRepair(t *testing.T) {
+	cases := []struct {
+		field, stored, reason, repair string
+		seed                          func(*Issue, string)
+		add                           func(*Store, string, string) error
+	}{
+		{"blocked_by", "../agt-1", "is not a valid issue ID", "dep rm", func(i *Issue, v string) { i.BlockedBy = []string{v} }, (*Store).AddDep},
+		{"related", "../x", "is not a valid issue ID", "rel rm", func(i *Issue, v string) { i.Related = []string{v} }, (*Store).AddRelated},
+		{"blocked_by", "agt-gone", "does not exist", "dep rm", func(i *Issue, v string) { i.BlockedBy = []string{v} }, (*Store).AddDep},
+		{"related", "agt-gone", "does not exist", "rel rm", func(i *Issue, v string) { i.Related = []string{v} }, (*Store).AddRelated},
+	}
+	for _, c := range cases {
+		t.Run(c.field+" "+c.stored, func(t *testing.T) {
+			s, fs := newMemStore(t)
+			iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := unwrap(s.Create(CreateInput{Title: "other"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedStored(t, fs, s, iss.ID, func(iss *Issue) { c.seed(iss, c.stored) })
+
+			err = c.add(s, iss.ID, other.ID)
+			var ve *ValidationError
+			if !errors.As(err, &ve) || ve.Field != c.field {
+				t.Fatalf("got %v, want a %s validation error", err, c.field)
+			}
+			repair := "remove it with 'taskmgr " + c.repair + "'"
+			for _, want := range []string{`stored value "` + c.stored + `"`, c.reason, repair} {
+				if !strings.Contains(ve.Message, want) {
+					t.Errorf("message %q does not contain %q", ve.Message, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAddDep_PassedValueOutsideTheIDGrammar_IsNotReportedAsStored(t *testing.T) {
+	s, _ := newMemStore(t)
+	iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.AddDep(iss.ID, "../x")
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "blocked_by" {
+		t.Fatalf("got %v, want a blocked_by validation error", err)
+	}
+	if !strings.Contains(ve.Message, `"../x"`) || strings.Contains(ve.Message, "stored value") {
+		t.Errorf("message %q; want the passed value named, and not as a stored one", ve.Message)
 	}
 }

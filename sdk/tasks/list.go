@@ -188,15 +188,11 @@ func (s *Store) detailFrom(idx map[string]*Issue, all []*Issue, id string) (*Det
 			r := ref(x)
 			return &r, nil
 		}
-		if !validIssueID(refID) {
-			// Dangling by definition, and never read: joined onto a store
-			// directory, "../../<name>" names a file outside the store.
-			return nil, nil
-		}
 		x, err := s.getUnresolved(refID)
 		if errors.Is(err, ErrNotFound) {
-			// Dangling: checkRefs rejects these at write time, so this is a store
-			// edited by hand. Drop the ref rather than fail the whole read.
+			// Dangling: checkRefsWith rejects these at write time, so this is a store
+			// edited by hand. Drop the ref rather than fail the whole read. A value
+			// outside the ID grammar arrives here too: getUnresolved never reads it.
 			return nil, nil
 		}
 		if err != nil {

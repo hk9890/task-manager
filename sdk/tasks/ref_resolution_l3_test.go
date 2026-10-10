@@ -29,7 +29,7 @@ import (
 )
 
 // TestL3_CheckRefs_ClosedParentAccepted verifies on a real disk that Create
-// with a parent in closed/ succeeds (checkRefs falls through to closed/).
+// with a parent in closed/ succeeds (checkRefsWith falls through to closed/).
 func TestL3_CheckRefs_ClosedParentAccepted(t *testing.T) {
 	root := t.TempDir()
 	s, err := tasks.Init(root, "tst")
