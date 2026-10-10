@@ -232,8 +232,18 @@ Labels are edited by name, not by rewriting the set:
 ## Wiring edges after the fact
 
   taskmgr dep add <dependent> <blocker>   # dependent becomes blocked by blocker
+  taskmgr dep rm <dependent> <blocker>    # ...and is released from it
   taskmgr rel add <a> <b>                 # symmetric related link
+  taskmgr rel rm <a> <b>                  # cleared on both sides
   taskmgr update <id> --parent <epic-id>
+
+An add refused with a message that says "stored" found a fault the store
+already held. Remove it, then repeat the add; rel rm takes the same form:
+
+  taskmgr dep rm <dependent> -- <value>   # the value the message quotes
+  taskmgr dep rm <x> <y>                  # a cycle: one "x -> y" step of it
+
+rm removes every copy of a duplicate, so add that edge again afterwards.
 `,
 	},
 	{
