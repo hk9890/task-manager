@@ -545,3 +545,28 @@ func TestPackageRepoList_NothingInstalled(t *testing.T) {
 		t.Errorf("stdout = %q, want it to say nothing is installed", out)
 	}
 }
+
+// `package rm` takes a `path:` entry by its path, so the remedy for one names
+// --path: the name form exits 1 for it.
+func TestPackageRepoRm_APathEntryIntoTheRepository_NamesTheRemedyThatRemovesIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, errOut, code := run(t, "package", "add", "--global", "--path", "packages/first/task-writing"); code != 0 {
+		t.Fatalf("setup: package add --path: %s", errOut)
+	}
+
+	out, errOut, code := run(t, "package", "repo", "rm", "first")
+	if code != 0 {
+		t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+	}
+	want := "remove it with 'taskmgr package rm --path packages/first/task-writing --global'"
+	if !strings.Contains(out, want) {
+		t.Fatalf("stdout = %q, want %q", out, want)
+	}
+	if _, errOut, code := run(t, "package", "rm", "--path", "packages/first/task-writing", "--global"); code != 0 {
+		t.Errorf("the printed remedy: exit %d, stderr %q", code, errOut)
+	}
+}

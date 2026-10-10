@@ -502,16 +502,24 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 	return infos, nil
 }
 
-// GlobalPackageDirs returns the directories the `use:` entries of the per-user
-// config resolve to, in list order. An entry that does not resolve is skipped,
-// and no package is loaded: a caller that only asks which directories are in
-// use does not depend on whether their manifests load. A `path:` entry resolves
-// lexically, so its directory is returned whether or not anything is there.
-func GlobalPackageDirs() ([]string, error) {
-	return globalPackageDirs(vfs.NewOS(), env.NewOS())
+// PackageUse is one `use:` entry together with the directory it resolves to.
+type PackageUse struct {
+	Ref PackageRef
+	Dir string
 }
 
-func globalPackageDirs(fs vfs.FS, e env.Environment) ([]string, error) {
+// GlobalPackageUses returns the `use:` entries of the per-user config that
+// resolve, each with its directory, in list order. An entry that does not
+// resolve is skipped, and no package is loaded: a caller that only asks which
+// directories are in use does not depend on whether their manifests load. A
+// `path:` entry resolves lexically, so its directory is returned whether or not
+// anything is there. The entry comes with the directory because removing it
+// takes its own spelling: a name for a `name:` entry, a path for a `path:` one.
+func GlobalPackageUses() ([]PackageUse, error) {
+	return globalPackageUses(vfs.NewOS(), env.NewOS())
+}
+
+func globalPackageUses(fs vfs.FS, e env.Environment) ([]PackageUse, error) {
 	home, err := taskmgrHome(e)
 	if err != nil {
 		return nil, err
@@ -520,15 +528,15 @@ func globalPackageDirs(fs vfs.FS, e env.Environment) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var dirs []string
+	var uses []PackageUse
 	for _, ref := range cfg.Use {
 		dir, _, err := resolveRef(fs, ref, home, home)
 		if err != nil {
 			continue
 		}
-		dirs = append(dirs, dir)
+		uses = append(uses, PackageUse{Ref: ref, Dir: dir})
 	}
-	return dirs, nil
+	return uses, nil
 }
 
 // inspectRef resolves one `use:` entry against the entries that already apply,

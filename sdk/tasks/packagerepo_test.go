@@ -199,14 +199,41 @@ func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
 	if err := fs.WriteAtomic("/hm/config.yaml", []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write global config: %v", err)
 	}
-	dirs, err := globalPackageDirs(fs, env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}})
+	uses, err := globalPackageUses(fs, env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}})
 	if err != nil {
-		t.Fatalf("globalPackageDirs: %v", err)
+		t.Fatalf("globalPackageUses: %v", err)
+	}
+	dirs := make([]string, len(uses))
+	for i, u := range uses {
+		dirs[i] = u.Dir
 	}
 	return dirs
 }
 
-func TestGlobalPackageDirs_ReturnsWhatEachEntryResolvesToInListOrder(t *testing.T) {
+// The entry travels with its directory: a caller that tells the user how to
+// remove it needs the spelling the config holds.
+func TestGlobalPackageUses_CarriesTheEntryOfEachDirectory(t *testing.T) {
+	fs := repoHome(t, "first/task-writing", "first/doc-policy")
+	if err := fs.WriteAtomic("/hm/config.yaml", []byte("use:\n  - path: packages/first/doc-policy\n  - name: task-writing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	uses, err := globalPackageUses(fs, env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uses) != 2 {
+		t.Fatalf("uses = %+v, want two", uses)
+	}
+	if uses[0].Ref.Path != "packages/first/doc-policy" || uses[0].Ref.Name != "" || uses[0].Dir != "/hm/packages/first/doc-policy" {
+		t.Errorf("path entry = %+v", uses[0])
+	}
+	if uses[1].Ref.Name != "task-writing" || uses[1].Ref.Path != "" || uses[1].Dir != "/hm/packages/first/task-writing" {
+		t.Errorf("name entry = %+v", uses[1])
+	}
+}
+
+func TestGlobalPackageUses_ReturnsWhatEachEntryResolvesToInListOrder(t *testing.T) {
 	fs := repoHome(t, "first/task-writing", "first/doc-policy")
 
 	got := globalDirs(t, fs, "use:\n  - name: task-writing\n  - path: packages/first/doc-policy\n")
@@ -218,7 +245,7 @@ func TestGlobalPackageDirs_ReturnsWhatEachEntryResolvesToInListOrder(t *testing.
 
 // An absolute `path:` is refused, so it resolves to nothing — also when its
 // text spells a directory that exists.
-func TestGlobalPackageDirs_SkipsAnEntryThatDoesNotResolve(t *testing.T) {
+func TestGlobalPackageUses_SkipsAnEntryThatDoesNotResolve(t *testing.T) {
 	fs := repoHome(t, "first/task-writing")
 
 	got := globalDirs(t, fs, "use:\n  - path: /hm/packages/first/task-writing\n  - name: not-installed\n")
@@ -228,7 +255,7 @@ func TestGlobalPackageDirs_SkipsAnEntryThatDoesNotResolve(t *testing.T) {
 }
 
 // Resolving reads no manifest: a package that does not load is still in use.
-func TestGlobalPackageDirs_APackageThatDoesNotLoadStillResolves(t *testing.T) {
+func TestGlobalPackageUses_APackageThatDoesNotLoadStillResolves(t *testing.T) {
 	fs := repoHome(t, "first/task-writing")
 	if err := fs.WriteAtomic("/hm/packages/first/task-writing/"+PackageManifestName, []byte("hooks: ["), 0o644); err != nil {
 		t.Fatal(err)
@@ -242,7 +269,7 @@ func TestGlobalPackageDirs_APackageThatDoesNotLoadStillResolves(t *testing.T) {
 
 // A fault fires once, on the first read it matches. One that is still armed
 // after the call is the proof that nothing read the manifest.
-func TestGlobalPackageDirs_ReadsNoManifest(t *testing.T) {
+func TestGlobalPackageUses_ReadsNoManifest(t *testing.T) {
 	fs := repoHome(t, "first/task-writing")
 	manifest := "/hm/packages/first/task-writing/" + PackageManifestName
 	armed := errors.New("armed fault")

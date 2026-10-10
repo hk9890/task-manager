@@ -556,6 +556,11 @@ The `use:` entries naming its packages are left alone — `package rm` is the ve
 removed it reports `missing` and fails every mutation in the store that names it, which is
 the state this warning exists to make visible rather than silent.
 
+The warning names the `package rm` form that removes the entry: `package rm <name> --global`
+for a `name:` entry, `package rm --path <path> --global` for a `path:` one, because the
+name form refuses a `path:` entry. Two entries that resolve to one package give two
+warnings and one name in `still_used`.
+
 - **Output:** the repository that was removed, and the packages a config still uses
   (`repoRemovedDTO` in JSON, §6).
 
