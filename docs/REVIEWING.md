@@ -14,7 +14,9 @@ respect. Where the skill and this file disagree, this file wins.
     matching one of [CLI](specs/CLI-SPEC.md), [SDK](specs/SDK-SPEC.md),
     [STORAGE](specs/TASK-STORAGE-SPEC.md), [QUERY](specs/QUERY-SPEC.md);
   - hook events, hook config or payloads → [HOOK](specs/HOOK-SPEC.md);
-  - config, the central registry, or store resolution → [CONFIG](specs/CONFIG-SPEC.md);
+  - the per-user config, the central registry, or store resolution →
+    [CONFIG](specs/CONFIG-SPEC.md); the project `config.yaml` →
+    [STORAGE](specs/TASK-STORAGE-SPEC.md) §4.2;
   - a structural change (packages, a seam) →
     [ARCHITECTURE](specs/ARCHITECTURE-SPEC.md) §5.
 
@@ -61,11 +63,14 @@ correct form.
   `<command>Flags` — `closeFlags`, `commentAddFlags`. Flag a struct that two sibling
   subcommands read; give each its own. The persistent-flag struct of a group, read by
   each subcommand of that group, is no finding
-  ([CODING.md § Where changes go](CODING.md#where-changes-go) owns that mechanism).
+  ([CODING.md § Where changes go](CODING.md#where-changes-go) owns that mechanism), and
+  neither is a struct type that two commands each hold in a variable of their own
+  (`filterFlags` behind `listFlags` and `searchFlags`).
 - **Package-level flag variables**: the only ones in `cmd/` are the `<command>Flags`
   structs, the persistent-flag struct of a group (`configFlags`), and the root persistent
   flags `flagJSON`/`flagDir`/`flagStoreName`. Flag any other; move it into the struct of
-  its command.
+  its command. A variable that holds flag names and no flag value (`createFromSetFlags`)
+  is no flag variable.
 
 ## Not a finding
 

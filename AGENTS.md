@@ -47,9 +47,7 @@ repository writes to a real store.
 
 **MUST read [docs/REVIEWING.md](docs/REVIEWING.md) before your first `git diff` or
 `gh pr diff` run to judge a change, and whenever a review is requested.** It carries the
-quality rules a finished change is held to — the spec and user-guide page it owes, the
-flag structs — what a review must cover on top of the `code-review` skill, and what is not
-a finding here.
+quality rules a finished change is held to, and what is not a finding here.
 
 ### Commit, branch, worktree, PR, merge
 

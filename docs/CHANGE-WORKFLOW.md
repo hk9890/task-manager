@@ -28,6 +28,8 @@ than running `git worktree` by hand:
      (see [TESTING.md](TESTING.md)).
    - **Behaviour change** → update the matching spec in `docs/specs/` in the same
      change (see [REVIEWING.md](REVIEWING.md#blocking)).
+   - **Change a user would notice** → update the page covering it in
+     `docs/user-guide/` in the same change (see [REVIEWING.md](REVIEWING.md#also-check)).
 4. Commit on the branch.
 
 ## Land via pull request
