@@ -172,10 +172,11 @@ CLI-SPEC §2.1). The vocabulary is the one above, so a listing and a resolution 
 disagree about an entry — a caller building a store switcher sees the entries that
 will not open before it offers them.
 
-Enumeration fails only when the registry itself cannot be read. A store directory it
-cannot read costs that one entry its `ok`, not the caller the whole list: the other
-stores are intact and still open by name, and a listing that returned nothing would
-hide exactly the names needed to reach them.
+Enumeration fails only when the registry cannot be loaded: the home does not resolve
+(§1), or the global config (§2) or `mapping.yaml` is unreadable or corrupt. A store
+directory it cannot read costs that one entry its `ok`, not the caller the whole list:
+the other stores are intact and still open by name, and a listing that returned nothing
+would hide exactly the names needed to reach them.
 
 Note that a *published* half-built store is not a state the tooling produces: a promote
 assembles the tree under a staging name and publishes it with one atomic rename (§5), so

@@ -168,19 +168,20 @@ func storeStateOf(fs vfs.FS, dir string) (storeState, error) {
 }
 
 // healthOf maps the internal classification onto the public one Stores reports,
-// so a listing and a resolution can never disagree about an entry.
-func healthOf(fs vfs.FS, dir string) (StoreHealth, error) {
+// so a listing and a resolution can never disagree about an entry. A directory
+// that could not be read is StoreBroken, with the failure as its detail.
+func healthOf(fs vfs.FS, dir string) (health StoreHealth, detail string) {
 	st, err := storeStateOf(fs, dir)
 	if err != nil {
-		return StoreOK, err
+		return StoreBroken, err.Error()
 	}
 	switch st {
 	case storeMissing:
-		return StoreDangling, nil
+		return StoreDangling, ""
 	case storePartial:
-		return StoreBroken, nil
+		return StoreBroken, ""
 	default:
-		return StoreOK, nil
+		return StoreOK, ""
 	}
 }
 
@@ -402,9 +403,7 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 			Store:     en.Store,
 			StorePath: dir,
 		}
-		if entry.Health, err = healthOf(fs, dir); err != nil {
-			entry.Health, entry.Detail = StoreBroken, err.Error()
-		}
+		entry.Health, entry.Detail = healthOf(fs, dir)
 		out = append(out, entry)
 	}
 	return out, nil

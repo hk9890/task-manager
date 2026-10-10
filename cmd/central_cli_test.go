@@ -125,6 +125,10 @@ func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
 	if got["beta"].Health != "broken" || !strings.Contains(got["beta"].Detail, "permission denied") {
 		t.Errorf("beta = %+v, want broken with the permission failure in detail", got["beta"])
 	}
+	// The struct decodes an absent key and an empty one alike (CLI-SPEC §6).
+	if n := strings.Count(out, `"detail"`); n != 1 {
+		t.Errorf("store list json carries %d detail keys, want it on beta alone: %s", n, out)
+	}
 
 	out, errOut, code = taskmgrCentral(t, t.TempDir(), home, "store", "list")
 	if code != 0 {

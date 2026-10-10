@@ -242,7 +242,7 @@ never takes a store's lock. Only "no such file or directory" makes an entry `dan
 a `stat` that fails for any other reason makes it `broken` and puts the failure in the
 row's `detail`, rather than reporting a store it could not read as gone
 (CONFIG-SPEC §3). The other entries are still listed and the command exits `0`; only a
-registry that cannot be read exits `1`.
+registry that cannot be loaded exits `1`.
 
 - **Output (human):** the table, then one `<store>: <detail>` line per entry that
   carries a detail.

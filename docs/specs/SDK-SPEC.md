@@ -149,8 +149,8 @@ them, rather than discovering them as an error per row. `String()` returns the
 stable tokens `ok` / `dangling` / `broken`, which are the CLI's JSON contract
 (CLI-SPEC §6).
 
-`Stores` returns an error only when the registry itself cannot be read or is
-corrupt. A registry that loads yields **every** entry: a store directory whose
+`Stores` returns an error only when the registry cannot be loaded (CONFIG-SPEC
+§3). A registry that loads yields **every** entry: a store directory whose
 `stat` fails for any reason other than "no such file or directory" is `StoreBroken`
 with the failure in `Detail`, and the listing continues with the next entry. One
 refused directory failing the call would drop every healthy store from the result
