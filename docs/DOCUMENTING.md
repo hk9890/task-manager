@@ -81,9 +81,10 @@ filling the gap somewhere else.
   and cannot drift; `--help` carries the flags; [CLI-SPEC](specs/CLI-SPEC.md) is the
   normative contract. A fourth copy in a user-guide page would be the only one that could
   be wrong.
-- **No `CHANGELOG.md` entries.** GoReleaser generates the grouped changelog onto the
-  GitHub release from the merged PRs of each `vX.Y.Z` tag. The tracked file stays a
-  pointer at the Releases page, not a hand-maintained log that would repeat it.
+- **No `CHANGELOG.md` entries.** The notes on each GitHub release are the log, written
+  for the user from the changelog GoReleaser generates
+  ([RELEASING.md § Release notes](RELEASING.md#release-notes)). The tracked file stays
+  a pointer at the Releases page, not a second log that would repeat them.
 - **No ADR directory.** An architecture decision is filed as a `taskmgr` issue and cited by
   ID from the spec it constrains — [ARCHITECTURE-SPEC §7](specs/ARCHITECTURE-SPEC.md) cites
   `at-39dru2` for the open-vs-closed partition axis. The decision then sits beside the rule
