@@ -2,14 +2,14 @@
 
 **Local delta —** run the `code-review` skill for the correctness pass; this file is what a
 task-manager review must cover on top of it. A rule below states its condition in full, or
-names the document that owns it: read that, and flag what the change does not respect.
-Where the two disagree, this file wins.
+names the document that owns it: read that document, and flag what the change does not
+respect. Where the skill and this file disagree, this file wins.
 
 ## Blocking
 
 - **The normative spec for the touched area was updated in the same change.** Flag a
-  behaviour change whose spec the diff leaves unchanged; a mismatch between code and spec
-  is a bug. The touched area names the spec:
+  behaviour or structural change whose spec the diff leaves unchanged; a mismatch between
+  code and spec is a bug. The touched area names the spec:
   - a CLI command or flag, or a public `sdk/tasks` function, type or semantics → the
     matching one of [CLI](specs/CLI-SPEC.md), [SDK](specs/SDK-SPEC.md),
     [STORAGE](specs/TASK-STORAGE-SPEC.md), [QUERY](specs/QUERY-SPEC.md);
