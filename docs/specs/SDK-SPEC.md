@@ -130,13 +130,15 @@ type StoreEntry struct {
     Store     string      // the registry name == subfolder under <central_root>/stores
     StorePath string      // the resolved store directory, <central_root>/stores/<Store>
     Health    StoreHealth // whether that directory is a usable store
+    Detail    string      // why the directory could not be read; empty otherwise
 }
 
 type StoreHealth int
 const (
     StoreOK       StoreHealth = iota // a finished store
     StoreDangling                    // no subfolder at all — resolution skips the entry
-    StoreBroken                      // a subfolder holding no config.yaml — resolution reports it
+    StoreBroken                      // a subfolder holding no config.yaml, or one that
+                                     // could not be read — resolution reports it
 )
 ```
 
@@ -146,6 +148,14 @@ enumerates the registry sees the dangling and broken entries **before** opening
 them, rather than discovering them as an error per row. `String()` returns the
 stable tokens `ok` / `dangling` / `broken`, which are the CLI's JSON contract
 (CLI-SPEC §6).
+
+`Stores` returns an error only when the registry cannot be loaded (CONFIG-SPEC
+§3). A registry that loads yields **every** entry: a store directory whose
+`stat` fails for any reason other than "no such file or directory" is `StoreBroken`
+with the failure in `Detail`, and the listing continues with the next entry. One
+refused directory failing the call would drop every healthy store from the result
+and leave the caller no names to open one at a time. `Detail` is empty for every
+other entry, a broken store that merely lacks its `config.yaml` included.
 
 In production `Resolve` and `InitCentral` use the OS-backed `vfs`/`env` seams;
 hermetic tests inject in-memory/fake seams through the same internal hooks the store

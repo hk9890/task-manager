@@ -168,19 +168,20 @@ func storeStateOf(fs vfs.FS, dir string) (storeState, error) {
 }
 
 // healthOf maps the internal classification onto the public one Stores reports,
-// so a listing and a resolution can never disagree about an entry.
-func healthOf(fs vfs.FS, dir string) (StoreHealth, error) {
+// so a listing and a resolution can never disagree about an entry. A directory
+// that could not be read is StoreBroken, with the failure as its detail.
+func healthOf(fs vfs.FS, dir string) (health StoreHealth, detail string) {
 	st, err := storeStateOf(fs, dir)
 	if err != nil {
-		return StoreOK, err
+		return StoreBroken, err.Error()
 	}
 	switch st {
 	case storeMissing:
-		return StoreDangling, nil
+		return StoreDangling, ""
 	case storePartial:
-		return StoreBroken, nil
+		return StoreBroken, ""
 	default:
-		return StoreOK, nil
+		return StoreOK, ""
 	}
 }
 
@@ -376,6 +377,11 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 // does not resolve against a working directory; it reads through the seams and
 // never writes. A missing registry yields an empty slice; a corrupt one an error.
 //
+// A registry that loads always yields every entry. A store directory that cannot
+// be read is a StoreBroken entry with the cause in Detail, not an error: failing
+// the call for one refused directory would drop every healthy store with it, and
+// leave the caller no names to open one at a time.
+//
 // It deliberately takes no ResolveOptions: the registry is global, so there is
 // nothing for a working directory or a store-name override to select. It used to
 // accept one and discard it, which made --dir and --store-name look as if they
@@ -392,16 +398,13 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 	out := make([]StoreEntry, 0, len(entries))
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
-		health, err := healthOf(fs, dir)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, StoreEntry{
+		entry := StoreEntry{
 			Path:      canonicalize(fs, en.Path, home, croot),
 			Store:     en.Store,
 			StorePath: dir,
-			Health:    health,
-		})
+		}
+		entry.Health, entry.Detail = healthOf(fs, dir)
+		out = append(out, entry)
 	}
 	return out, nil
 }

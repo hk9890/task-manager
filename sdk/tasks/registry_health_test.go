@@ -30,17 +30,62 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-func TestStores_StatFailureIsReportedNotReadAsDangling(t *testing.T) {
+// TestStores_UnreadableEntryIsBrokenAndTheRestAreListed covers both places the
+// Stat can be refused: the store directory itself (an unreadable stores/), and
+// the config.yaml inside it (a store directory at mode 000).
+func TestStores_UnreadableEntryIsBrokenAndTheRestAreListed(t *testing.T) {
+	for name, failPath := range map[string]string{
+		"directory": filepath.Join(testCentral, storesSubdir, "p2"),
+		"config":    filepath.Join(testCentral, storesSubdir, "p2", ConfigFileName),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := vfs.NewMem()
+			for _, n := range []string{"p1", "p2", "p3"} {
+				makeStore(t, m, "/"+n, filepath.Join(testCentral, storesSubdir, n), n)
+			}
+			writeRegistry(t, m, testCentral,
+				registryEntry{Path: "/p1", Store: "p1"},
+				registryEntry{Path: "/p2", Store: "p2"},
+				registryEntry{Path: "/p3", Store: "p3"},
+			)
+			m.FailOn("Stat", failPath, errors.New("permission denied"))
+
+			got, err := storesWith(m, fakeEnv(nil))
+			if err != nil {
+				t.Fatalf("one unreadable store directory must not fail the listing: %v", err)
+			}
+			if len(got) != 3 {
+				t.Fatalf("got %d entries, want all 3: %+v", len(got), got)
+			}
+			for _, e := range got {
+				if e.Store != "p2" {
+					if e.Health != StoreOK || e.Detail != "" {
+						t.Errorf("entry %q = %v %q, want StoreOK with no detail", e.Store, e.Health, e.Detail)
+					}
+					continue
+				}
+				// Not StoreDangling: that label sends the reader to the repair
+				// that deletes the registry entry of an intact store.
+				if e.Health != StoreBroken {
+					t.Errorf("entry p2 health = %v, want StoreBroken", e.Health)
+				}
+				if !strings.Contains(e.Detail, "permission denied") {
+					t.Errorf("entry p2 detail %q does not carry the underlying failure", e.Detail)
+				}
+			}
+		})
+	}
+}
+
+func TestStores_UnreadableRegistryIsAnError(t *testing.T) {
 	m := vfs.NewMem()
 	makeStore(t, m, "/p1", filepath.Join(testCentral, storesSubdir, "p1"), "p1")
 	writeRegistry(t, m, testCentral, registryEntry{Path: "/p1", Store: "p1"})
-
-	// What an unreadable ~/.taskmgr/stores does to the Stat of a store inside it.
-	m.FailOn("Stat", filepath.Join(testCentral, storesSubdir, "p1"), errors.New("permission denied"))
+	m.FailOn("ReadFile", filepath.Join(testCentral, registryFileName), errors.New("permission denied"))
 
 	got, err := storesWith(m, fakeEnv(nil))
 	if err == nil {
-		t.Fatalf("an unreadable store directory must be an error, got %+v", got)
+		t.Fatalf("an unreadable registry must be an error, got %+v", got)
 	}
 	if !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("error %q does not carry the underlying failure", err)

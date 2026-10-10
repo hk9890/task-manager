@@ -232,14 +232,20 @@ Never errors on no-store; exits `0` with `kind: none`. **Output (JSON):** `where
 
 Enumerate the registry entries — each entry's project `path`, `store` name, the store
 directory, and its `health`: `ok`, `dangling` (no subfolder) or `broken` (a subfolder
-without `config.yaml`), the same three cases resolution acts on (CONFIG-SPEC §3).
+without `config.yaml`, or one that could not be read), the same three cases resolution
+acts on (CONFIG-SPEC §3).
 Listing them is what makes a store switcher possible: the caller sees the entries that
 will not open before it offers them, instead of one error per selected row.
 
 Classification is a `stat` per entry, not an open, so the listing stays a read and
 never takes a store's lock. Only "no such file or directory" makes an entry `dangling`;
-a `stat` that fails for any other reason exits `1` with that failure, rather than
-reporting stores it could not read as gone (CONFIG-SPEC §3).
+a `stat` that fails for any other reason makes it `broken` and puts the failure in the
+row's `detail`, rather than reporting a store it could not read as gone
+(CONFIG-SPEC §3). The other entries are still listed and the command exits `0`; only a
+registry that cannot be loaded exits `1`.
+
+- **Output (human):** the table, then one `<store>: <detail>` line per entry that
+  carries a detail.
 
 - **Output (JSON):** array of `storeListDTO` (§6).
 
@@ -1226,9 +1232,10 @@ local store:
 ```
 
 **`storeListDTO`** — emitted by `store list`, one per registry entry:
-`{path, store, store_path, health}` (the project path, the registry name, the resolved
-store directory, and `ok` | `dangling` | `broken` — §2.1). `health` is always present;
-it mirrors the engine's `StoreHealth` (SDK-SPEC §1).
+`{path, store, store_path, health, detail}` (the project path, the registry name, the
+resolved store directory, `ok` | `dangling` | `broken` — §2.1 — and why the store
+directory could not be read). `health` is always present; it mirrors the engine's
+`StoreHealth` (SDK-SPEC §1). `detail` is omitted unless the read failed.
 
 **`storeMoveDTO`** — emitted by `store move`, describing the store after the move:
 `{store, store_path, project_path}` (the registry name, the store directory, and the

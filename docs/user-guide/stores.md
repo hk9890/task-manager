@@ -54,14 +54,16 @@ Each row of `store list` carries a health:
 |---|---|
 | `ok` | a usable store |
 | `dangling` | the entry is registered, its store directory is gone — commands resolve past it |
-| `broken` | the directory is there without its `config.yaml` — commands stop and say so |
+| `broken` | the directory is there without its `config.yaml`, or could not be read — commands stop and say so |
 
 A `dangling` or `broken` row is an entry to repair or delete by hand, not a store to
 select. Both are what a half-finished move leaves behind.
 
-A health is read from the store directory, so if `store list` cannot read one it says so
-and exits instead of printing a row: a directory it was refused is not a directory that
-is gone, and only one of the two is repaired by deleting the entry.
+A health is read from the store directory. If `store list` cannot read one — a
+permission it was refused, say — the row is `broken` and the reason is printed under the
+table (`detail` in `--json`); every other store is still listed. It is never `dangling`:
+a directory it was refused is not a directory that is gone, and only one of the two is
+repaired by deleting the entry.
 
 ## Working on another project's store
 
