@@ -483,8 +483,15 @@ func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error // read-modify-w
 func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
+func GlobalPackageUses() ([]PackageUse, error) // its entries that resolve, each with its directory; nothing loaded
 func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
 func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) // InspectPackage for this file
+
+// PackageUse is one use: entry that resolves, with the directory it resolves to.
+type PackageUse struct {
+    Ref PackageRef // the entry as the config spells it
+    Dir string     // the directory it resolves to
+}
 
 // PackageRepo is one installed package repository under <taskmgr home>/packages:
 // the directory a name: entry is resolved against, and the packages it provides.
@@ -512,6 +519,16 @@ resolves. That is the case the guide has to serve: an agent runs it before it kn
 whether it is standing in a project at all. `InspectGlobalPackage` is `Store.InspectPackage`
 for this file and needs no store either; it resolves a candidate entry against this
 file's own list, which is the only one that runs earlier (HOOK-SPEC §3.5 rule 1).
+
+`GlobalPackageUses` returns its rows in list order.
+It exists beside `GlobalPackages` because a caller matching directories
+cannot use that call's `Path`: for an entry that does not resolve it is the `path:` text
+as written, which counts as a directory in use wherever the text spells one. It also
+spares the manifest reads `GlobalPackages` makes to report a status. A `path:` entry
+resolves lexically, so its directory is returned whether or not anything is there. The
+row carries the entry because a caller that tells the user how to remove it needs the
+config's own spelling: `package rm <name>` for a `name:` entry, `package rm --path <path>`
+for a `path:` one.
 
 The four repository functions are the SDK's whole share of installing a package: they
 read the directory and remove one, and know nothing of URLs, revisions or networks.
