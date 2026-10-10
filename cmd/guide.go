@@ -237,9 +237,13 @@ Labels are edited by name, not by rewriting the set:
   taskmgr rel rm <a> <b>                  # cleared on both sides
   taskmgr update <id> --parent <epic-id>
 
-An add refused with a message that says "stored" found a fault already in the
-issue's file: a bad value, a duplicate, or a cycle. Remove the entry the message
-names with the rm form, as its second argument, then repeat the add.
+An add refused with a message that says "stored" found a fault the store
+already held. Remove it, then repeat the add; rel rm takes the same form:
+
+  taskmgr dep rm <dependent> -- <value>   # the value the message quotes
+  taskmgr dep rm <x> <y>                  # a cycle: one "x -> y" step of it
+
+rm removes every copy of a duplicate, so add that edge again afterwards.
 `,
 	},
 	{

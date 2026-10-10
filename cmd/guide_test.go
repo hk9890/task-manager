@@ -116,15 +116,12 @@ func TestGuideSections_HaveUniqueIDs(t *testing.T) {
 }
 
 // A refused `dep add` or `rel add` names the rm command and no arguments, so the
-// guide is where a caller finds the form to run.
-func TestGuideSections_ShowTheRemovalOfEachEdge(t *testing.T) {
-	for _, want := range []string{"taskmgr dep rm <dependent> <blocker>", "taskmgr rel rm <a> <b>"} {
-		found := false
-		for _, s := range guideSections {
-			found = found || strings.Contains(s.text, want)
-		}
-		if !found {
-			t.Errorf("no guide section shows %q", want)
+// guide is where a caller finds the form to run. The form is read from the live
+// command, so the guide cannot keep one the command no longer has.
+func TestGuideText_ShowsTheRemovalOfEachEdge(t *testing.T) {
+	for _, c := range []*cobra.Command{depRmCmd, relRmCmd} {
+		if want := c.Parent().CommandPath() + " " + c.Use; !strings.Contains(guideText, want) {
+			t.Errorf("the guide does not show %q", want)
 		}
 	}
 }
