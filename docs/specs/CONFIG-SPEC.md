@@ -159,16 +159,23 @@ in the registry — a broken store as above, and a dangling one as a directory t
 gone. The two messages stay distinct because the repairs are: restoring a folder, or
 dropping the entry.
 
-**A `stat` that fails is neither.** Only "no such file or directory" makes an entry
-dangling. A permission error or an I/O failure says nothing about whether the store is
-there, so it is reported as itself. Reading it as "gone" labels intact stores
-`dangling` and sends the reader to the one repair that deletes their registry entry.
+**A `stat` that fails is never dangling.** Only "no such file or directory" makes an
+entry dangling. A permission error or an I/O failure says nothing about whether the
+store is there, so it is reported as itself: resolution fails with it, and enumeration
+labels the entry `broken` with the failure as its detail. Reading it as "gone" labels
+intact stores `dangling` and sends the reader to the one repair that deletes their
+registry entry.
 
 **Enumeration** classifies without opening: `Stores` labels every entry `ok`,
 `dangling` or `broken` from a `stat` (SDK-SPEC §1, surfaced by `store list`,
 CLI-SPEC §2.1). The vocabulary is the one above, so a listing and a resolution never
 disagree about an entry — a caller building a store switcher sees the entries that
 will not open before it offers them.
+
+Enumeration fails only when the registry itself cannot be read. A store directory it
+cannot read costs that one entry its `ok`, not the caller the whole list: the other
+stores are intact and still open by name, and a listing that returned nothing would
+hide exactly the names needed to reach them.
 
 Note that a *published* half-built store is not a state the tooling produces: a promote
 assembles the tree under a staging name and publishes it with one atomic rename (§5), so

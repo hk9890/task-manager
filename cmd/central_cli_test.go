@@ -84,6 +84,55 @@ type storeListJSON struct {
 	Store     string `json:"store"`
 	StorePath string `json:"store_path"`
 	Health    string `json:"health"`
+	Detail    string `json:"detail"`
+}
+
+// TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed is the real-disk
+// half: a store directory at mode 000 answers the Stat of its config.yaml with
+// EACCES, and the listing must still print every entry and exit 0.
+func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		if _, errOut, code := taskmgrCentral(t, t.TempDir(), home, "init", "--central", "--store-name", name); code != 0 {
+			t.Fatalf("init --central %s: code=%d stderr=%q", name, code, errOut)
+		}
+	}
+	beta := filepath.Join(home, "stores", "beta")
+	if err := os.Chmod(beta, 0); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(beta, 0o755) })
+	// Root ignores the permission bits, so confirm the failure is real first.
+	if _, err := os.Stat(filepath.Join(beta, "config.yaml")); err == nil {
+		t.Skip("cannot make a directory unreadable (running as root?)")
+	}
+
+	out, errOut, code := taskmgrCentral(t, t.TempDir(), home, "--json", "store", "list")
+	if code != 0 {
+		t.Fatalf("store list: code=%d stderr=%q", code, errOut)
+	}
+	var entries []storeListJSON
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("store list json: %v (%q)", err, out)
+	}
+	got := map[string]storeListJSON{}
+	for _, e := range entries {
+		got[e.Store] = e
+	}
+	if len(got) != 2 || got["alpha"].Health != "ok" || got["alpha"].Detail != "" {
+		t.Errorf("store list = %+v, want both entries with alpha ok", entries)
+	}
+	if got["beta"].Health != "broken" || !strings.Contains(got["beta"].Detail, "permission denied") {
+		t.Errorf("beta = %+v, want broken with the permission failure in detail", got["beta"])
+	}
+
+	out, errOut, code = taskmgrCentral(t, t.TempDir(), home, "store", "list")
+	if code != 0 {
+		t.Fatalf("store list (human): code=%d stderr=%q", code, errOut)
+	}
+	if !strings.Contains(out, "alpha") || !strings.Contains(out, "beta: read central store") {
+		t.Errorf("human listing = %q, want both rows and beta's cause", out)
+	}
 }
 
 func TestL4_Central_InitWhereListCreate(t *testing.T) {

@@ -81,10 +81,11 @@ type StoreEntry struct {
 	Store     string      // the registry name == subfolder under <central_root>/stores
 	StorePath string      // the resolved store directory, <central_root>/stores/<Store>
 	Health    StoreHealth // whether that directory is a usable store
+	Detail    string      // why the directory could not be read; empty otherwise
 }
 
 // StoreHealth classifies an entry's store subfolder (CONFIG-SPEC §3). It carries
-// the same three cases resolution acts on, so a listing and a resolution never
+// the same cases resolution acts on, so a listing and a resolution never
 // disagree about an entry: dangling is skipped, broken is reported.
 type StoreHealth int
 
@@ -93,7 +94,8 @@ const (
 	StoreOK StoreHealth = iota
 	// StoreDangling: no subfolder at all — resolution skips the entry.
 	StoreDangling
-	// StoreBroken: a subfolder holding no config.yaml — resolution reports it.
+	// StoreBroken: a subfolder holding no config.yaml, or one that could not be
+	// read (StoreEntry.Detail carries the cause) — resolution reports it.
 	StoreBroken
 )
 

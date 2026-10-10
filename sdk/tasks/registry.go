@@ -376,6 +376,11 @@ func resolveWith(opts ResolveOptions, fs vfs.FS, e env.Environment, sopts []Opti
 // does not resolve against a working directory; it reads through the seams and
 // never writes. A missing registry yields an empty slice; a corrupt one an error.
 //
+// A registry that loads always yields every entry. A store directory that cannot
+// be read is a StoreBroken entry with the cause in Detail, not an error: failing
+// the call for one refused directory would drop every healthy store with it, and
+// leave the caller no names to open one at a time.
+//
 // It deliberately takes no ResolveOptions: the registry is global, so there is
 // nothing for a working directory or a store-name override to select. It used to
 // accept one and discard it, which made --dir and --store-name look as if they
@@ -392,16 +397,15 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 	out := make([]StoreEntry, 0, len(entries))
 	for _, en := range entries {
 		dir := filepath.Join(croot, storesSubdir, en.Store)
-		health, err := healthOf(fs, dir)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, StoreEntry{
+		entry := StoreEntry{
 			Path:      canonicalize(fs, en.Path, home, croot),
 			Store:     en.Store,
 			StorePath: dir,
-			Health:    health,
-		})
+		}
+		if entry.Health, err = healthOf(fs, dir); err != nil {
+			entry.Health, entry.Detail = StoreBroken, err.Error()
+		}
+		out = append(out, entry)
 	}
 	return out, nil
 }
