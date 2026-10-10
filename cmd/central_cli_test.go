@@ -87,13 +87,15 @@ type storeListJSON struct {
 	Detail    string `json:"detail"`
 }
 
-// TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed is the real-disk
-// half: a store directory at mode 000 answers the Stat of its config.yaml with
-// EACCES, and the listing must still print every entry and exit 0.
-func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
-	home := t.TempDir()
-	for _, name := range []string{"alpha", "beta"} {
-		if _, errOut, code := taskmgrCentral(t, t.TempDir(), home, "init", "--central", "--store-name", name); code != 0 {
+// centralStoresBetaUnreadable creates the central stores alpha and beta under a
+// new home, each for a project of its own, and puts the directory of beta at
+// mode 000. It skips the test where that mode refuses nothing.
+func centralStoresBetaUnreadable(t *testing.T) (home string, projects map[string]string) {
+	t.Helper()
+	home = t.TempDir()
+	projects = map[string]string{"alpha": t.TempDir(), "beta": t.TempDir()}
+	for name, project := range projects {
+		if _, errOut, code := taskmgrCentral(t, project, home, "init", "--central", "--store-name", name); code != 0 {
 			t.Fatalf("init --central %s: code=%d stderr=%q", name, code, errOut)
 		}
 	}
@@ -106,6 +108,14 @@ func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(beta, "config.yaml")); err == nil {
 		t.Skip("cannot make a directory unreadable (running as root?)")
 	}
+	return home, projects
+}
+
+// TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed is the real-disk
+// half: a store directory at mode 000 answers the Stat of its config.yaml with
+// EACCES, and the listing must still print every entry and exit 0.
+func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
+	home, _ := centralStoresBetaUnreadable(t)
 
 	out, errOut, code := taskmgrCentral(t, t.TempDir(), home, "--json", "store", "list")
 	if code != 0 {
@@ -143,22 +153,7 @@ func TestL4_StoreList_UnreadableStoreIsBrokenAndTheRestAreListed(t *testing.T) {
 // the central fallback: a store directory at mode 000 answers for the project it
 // is registered for, and for no other directory.
 func TestL4_Resolve_UnreadableStoreFailsOnlyItsOwnProject(t *testing.T) {
-	home := t.TempDir()
-	projects := map[string]string{"alpha": t.TempDir(), "beta": t.TempDir()}
-	for name, project := range projects {
-		if _, errOut, code := taskmgrCentral(t, project, home, "init", "--central", "--store-name", name); code != 0 {
-			t.Fatalf("init --central %s: code=%d stderr=%q", name, code, errOut)
-		}
-	}
-	beta := filepath.Join(home, "stores", "beta")
-	if err := os.Chmod(beta, 0); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(beta, 0o755) })
-	// Root ignores the permission bits, so confirm the failure is real first.
-	if _, err := os.Stat(filepath.Join(beta, "config.yaml")); err == nil {
-		t.Skip("cannot make a directory unreadable (running as root?)")
-	}
+	home, projects := centralStoresBetaUnreadable(t)
 
 	if _, errOut, code := taskmgrCentral(t, projects["alpha"], home, "list"); code != 0 {
 		t.Errorf("list in alpha's project: code=%d stderr=%q, want its store to open", code, errOut)

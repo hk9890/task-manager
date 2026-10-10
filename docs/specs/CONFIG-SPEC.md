@@ -166,9 +166,9 @@ the failure as its detail, and resolution fails with it where the entry is the o
 by `--store-name` or the one that wins the match of §4 step 3. An entry that cannot be
 read and does not own the working directory has no effect on resolution: failing there
 would refuse every directory that has no local store for one store that tracks none of
-them, and keep a caller from the listing that names the fault. Reading it as "gone" labels
-intact stores `dangling` and sends the reader to the one repair that deletes their
-registry entry.
+them, and stop a front end that resolves at start-up before it reaches the listing that
+names the fault. Reading a failed `stat` as "gone" labels intact stores `dangling` and
+sends the reader to the one repair that deletes their registry entry.
 
 **Enumeration** classifies without opening: `Stores` labels every entry `ok`,
 `dangling` or `broken` from a `stat` (SDK-SPEC §1, surfaced by `store list`,
