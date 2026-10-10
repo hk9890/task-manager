@@ -18,6 +18,7 @@ package tasks
 
 import (
 	"errors"
+	iofs "io/fs"
 	"slices"
 	"strings"
 	"testing"
@@ -402,5 +403,165 @@ func TestAddDep_PassedValueOutsideTheIDGrammar_IsNotReportedAsStored(t *testing.
 	}
 	if !strings.Contains(ve.Message, `"../x"`) || strings.Contains(ve.Message, "stored value") {
 		t.Errorf("message %q; want the passed value named, and not as a stored one", ve.Message)
+	}
+}
+
+// A duplicate, a self-edge and a dependency cycle that the list already stores
+// refuse the add as a stored value that names no issue does. The caller passed
+// none of them, so the message says the fault is stored and names the command
+// that removes it. It never prints a command line: a stored value is unchecked
+// text.
+func TestAddEdge_StoredDuplicateSelfEdgeOrCycle_SaysStoredAndNamesTheRepair(t *testing.T) {
+	cases := []struct {
+		name, field, repair string
+		stored              func(self, other string) []string
+		otherBlockedBySelf  bool
+		add                 func(*Store, string, string) error
+		want                func(self, other string) string
+	}{
+		{
+			"blocked_by duplicate", "blocked_by", "dep rm",
+			func(_, other string) []string { return []string{other, other} }, false,
+			(*Store).AddDep,
+			func(_, other string) string { return `stored duplicate dependency "` + other + `"` },
+		},
+		{
+			"blocked_by self-edge", "blocked_by", "dep rm",
+			func(self, _ string) []string { return []string{self} }, false,
+			(*Store).AddDep,
+			func(self, _ string) string { return "stored dependency cycle: " + self + " -> " + self },
+		},
+		{
+			"blocked_by cycle", "blocked_by", "dep rm",
+			func(_, other string) []string { return []string{other} }, true,
+			(*Store).AddDep,
+			func(self, other string) string {
+				return "stored dependency cycle: " + self + " -> " + other + " -> " + self
+			},
+		},
+		{
+			"related duplicate", "related", "rel rm",
+			func(_, other string) []string { return []string{other, other} }, false,
+			(*Store).AddRelated,
+			func(_, other string) string { return `stored duplicate reference "` + other + `"` },
+		},
+		{
+			"related self-reference", "related", "rel rm",
+			func(self, _ string) []string { return []string{self} }, false,
+			(*Store).AddRelated,
+			func(self, _ string) string { return `stored value "` + self + `" names the issue itself` },
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, fs := newMemStore(t)
+			iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := unwrap(s.Create(CreateInput{Title: "other"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := unwrap(s.Create(CreateInput{Title: "target"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedStored(t, fs, s, iss.ID, func(i *Issue) {
+				if c.field == "related" {
+					i.Related = c.stored(iss.ID, other.ID)
+				} else {
+					i.BlockedBy = c.stored(iss.ID, other.ID)
+				}
+			})
+			if c.otherBlockedBySelf {
+				seedStored(t, fs, s, other.ID, func(o *Issue) { o.BlockedBy = []string{iss.ID} })
+			}
+
+			err = c.add(s, iss.ID, target.ID)
+			var ve *ValidationError
+			if !errors.As(err, &ve) || ve.Field != c.field {
+				t.Fatalf("got %v, want a %s validation error", err, c.field)
+			}
+			want := c.want(iss.ID, other.ID) + "; remove it with 'taskmgr " + c.repair + "'"
+			if ve.Message != want {
+				t.Errorf("message %q, want %q", ve.Message, want)
+			}
+		})
+	}
+}
+
+// The stored wording is for a fault the add found. A cycle the add itself
+// closes keeps the bare message: the value at fault is the one passed.
+func TestAddDep_CycleTheAddCloses_IsNotReportedAsStored(t *testing.T) {
+	s, _ := newMemStore(t)
+	a, err := unwrap(s.Create(CreateInput{Title: "a"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := unwrap(s.Create(CreateInput{Title: "d", BlockedBy: []string{a.ID}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.AddDep(a.ID, d.ID)
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("got %v, want a validation error", err)
+	}
+	if want := "dependency cycle: " + a.ID + " -> " + d.ID + " -> " + a.ID; ve.Message != want {
+		t.Errorf("message %q, want %q", ve.Message, want)
+	}
+}
+
+// closedStats counts the Stat calls on closed/, the file access the reference
+// check makes for a value that is not an open issue.
+type closedStats struct {
+	vfs.FS
+	n int
+}
+
+func (c *closedStats) Stat(name string) (iofs.FileInfo, error) {
+	if strings.Contains(name, "/closed/") {
+		c.n++
+	}
+	return c.FS.Stat(name)
+}
+
+// A refused add runs under the store lock, so it looks each value of the list
+// up once: the violation carries the value at fault, and rewording it for a
+// stored value needs no second pass over the list.
+func TestAddDep_Refused_LooksEachStoredValueUpOnce(t *testing.T) {
+	lookups := func(closedBlockers int) int {
+		s, fs := newMemStore(t)
+		iss, err := unwrap(s.Create(CreateInput{Title: "x"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored []string
+		for range closedBlockers {
+			b, err := unwrap(s.Create(CreateInput{Title: "blocker"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Close(b.ID, "done"); err != nil {
+				t.Fatal(err)
+			}
+			stored = append(stored, b.ID)
+		}
+		seedStored(t, fs, s, iss.ID, func(i *Issue) { i.BlockedBy = append(stored, "agt-gone") })
+		counted := &closedStats{FS: fs}
+		s.fs = counted
+
+		err = s.AddDep(iss.ID, "agt-zzzzzz")
+		var ve *ValidationError
+		if !errors.As(err, &ve) || !strings.Contains(ve.Message, `stored value "agt-gone"`) {
+			t.Fatalf("got %v, want the stored value named", err)
+		}
+		return counted.n
+	}
+
+	if extra := lookups(3) - lookups(0); extra != 3 {
+		t.Errorf("three closed blockers cost %d more closed/ lookups, want 3: one per value", extra)
 	}
 }

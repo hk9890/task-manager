@@ -60,6 +60,25 @@ func (e *BatchEntryError) Error() string {
 
 func (e *BatchEntryError) Unwrap() error { return e.Err }
 
+// batchRefs is the one definition of a ref of the set: the Ref of an entry,
+// trimmed, when that leaves anything. refs[i] is the ref of entries[i], empty
+// when it has none, and firstWith maps each ref to the first entry carrying it.
+func batchRefs(entries []BatchEntry) (refs []string, firstWith map[string]int) {
+	refs = make([]string, len(entries))
+	firstWith = make(map[string]int, len(entries))
+	for i, e := range entries {
+		ref := strings.TrimSpace(e.Ref)
+		if ref == "" {
+			continue
+		}
+		refs[i] = ref
+		if _, seen := firstWith[ref]; !seen {
+			firstWith[ref] = i
+		}
+	}
+	return refs, firstWith
+}
+
 // resolveBatchRefs returns the entries as plain create inputs, with every edge
 // that names a ref of the set replaced by the ID allocated to that entry; ids[i]
 // is the ID of entries[i]. An edge that names no ref is left for the reference
@@ -71,24 +90,22 @@ func (e *BatchEntryError) Unwrap() error { return e.Err }
 //
 // Refs and edges are compared trimmed, as the edges of an issue are stored.
 func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs []CreateInput, failed int, err error) {
-	idOf := make(map[string]string, len(entries))
-	for i, e := range entries {
-		ref := strings.TrimSpace(e.Ref)
+	refs, firstWith := batchRefs(entries)
+	for i, ref := range refs {
 		if ref == "" {
 			continue
 		}
 		if strings.HasPrefix(ref, prefix+"-") {
 			return nil, i, invalid("ref", "%q carries the store prefix %q, which is reserved for issue IDs", ref, prefix)
 		}
-		if _, dup := idOf[ref]; dup {
+		if firstWith[ref] != i {
 			return nil, i, invalid("ref", "%q is already used by an earlier entry", ref)
 		}
-		idOf[ref] = ids[i]
 	}
 	resolve := func(edge string) string {
 		edge = strings.TrimSpace(edge)
-		if id, ok := idOf[edge]; ok {
-			return id
+		if i, ok := firstWith[edge]; ok {
+			return ids[i]
 		}
 		return edge
 	}
@@ -110,10 +127,7 @@ func resolveBatchRefs(prefix string, entries []BatchEntry, ids []string) (inputs
 // ID, which does not tell a caller who misspelt a ref that no entry has that
 // name. Create has no refs and keeps the field check's message.
 func edgeNamingNothing(entries []BatchEntry) (failed int, err error) {
-	isRef := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		isRef[strings.TrimSpace(e.Ref)] = true
-	}
+	_, firstWith := batchRefs(entries)
 	for i, e := range entries {
 		edges := []struct {
 			field  string
@@ -126,7 +140,7 @@ func edgeNamingNothing(entries []BatchEntry) (failed int, err error) {
 		for _, edge := range edges {
 			for _, v := range edge.values {
 				v = strings.TrimSpace(v)
-				if v == "" || isRef[v] || validIssueID(v) {
+				if _, isRef := firstWith[v]; v == "" || isRef || validIssueID(v) {
 					continue
 				}
 				return i, invalid(edge.field, "%q is neither a ref of this set nor a valid issue ID", v)
@@ -144,9 +158,10 @@ func namedByRef(err error, entries []BatchEntry, ids []string) error {
 	if !errors.As(err, &ve) {
 		return err
 	}
+	refs, _ := batchRefs(entries)
 	var refOf []string
-	for i, e := range entries {
-		if ref := strings.TrimSpace(e.Ref); ref != "" {
+	for i, ref := range refs {
+		if ref != "" {
 			refOf = append(refOf, ids[i], ref)
 		}
 	}

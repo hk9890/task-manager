@@ -46,6 +46,11 @@ var labelRe = regexp.MustCompile(`^[a-z0-9][a-z0-9:._/\-]*$`)
 type ValidationError struct {
 	Field   string
 	Message string
+
+	// ref is the edge value a reference check found to name no issue, so a
+	// caller that rewords the refusal need not look the list up again. Nil for
+	// every other violation: an empty stored value is a value too.
+	ref *string
 }
 
 func (e *ValidationError) Error() string {

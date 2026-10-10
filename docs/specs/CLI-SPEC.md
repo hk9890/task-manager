@@ -937,6 +937,20 @@ not a valid issue ID; remove it with 'taskmgr dep rm'`, or
 command and prints no command line: the value is stored text, not something to paste
 into a shell. `rel add` does the same for a stored `related` value, naming `rel rm`.
 
+A duplicate, a self-edge or a dependency cycle that `<dependent>` already stores refuses
+the add in the same form, because the caller passed none of them:
+
+| Stored fault | Message |
+|---|---|
+| Duplicate blocker | `blocked_by: stored duplicate dependency "<value>"; remove it with 'taskmgr dep rm'` |
+| Self-edge, or a cycle through a stored blocker | `blocked_by: stored dependency cycle: <id> -> … -> <id>; remove it with 'taskmgr dep rm'` |
+| Duplicate `related` value (`rel add`) | `related: stored duplicate reference "<value>"; remove it with 'taskmgr rel rm'` |
+| `related` value that is the issue itself (`rel add`) | `related: stored value "<id>" names the issue itself; remove it with 'taskmgr rel rm'` |
+
+A fault is stored when the list has it without `<blocker>`. One the add itself introduces
+keeps its bare message: `blocked_by: issue cannot block itself`, or
+`blocked_by: dependency cycle: <id> -> … -> <id>` for an edge that closes a cycle.
+
 ### `taskmgr dep rm <dependent> <blocker>`
 
 Remove a blocking dependency. Removing one that is not present succeeds and
