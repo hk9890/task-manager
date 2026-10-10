@@ -69,8 +69,9 @@ correct form.
 - **Package-level flag variables**: the only ones in `cmd/` are the `<command>Flags`
   structs, the persistent-flag struct of a group (`configFlags`), and the root persistent
   flags `flagJSON`/`flagDir`/`flagStoreName`. Flag any other; move it into the struct of
-  its command. A variable that holds flag names and no flag value (`createFromSetFlags`)
-  is no flag variable.
+  its command. A flag variable is one that a flag is bound to and writes its value into.
+  A variable that holds flag names (`createFromSetFlags`) or the values a flag accepts
+  (`validSortValues`) is none.
 
 ## Not a finding
 
