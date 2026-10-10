@@ -64,7 +64,9 @@ const (
 type PackageInfo struct {
 	// Name is the package name: the `name:` given, or the base name of `path:`.
 	Name string
-	// Path is the directory the entry resolves to on this machine.
+	// Path is the directory the entry resolves to on this machine. An entry that
+	// does not resolve carries its `path:` as written instead, empty for a
+	// `name:` entry, so Path is not a directory to match on.
 	Path string
 	// Scope is "global" or "store" — which config file declared the entry.
 	Scope string
@@ -498,6 +500,43 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 	}
 	_, infos, _ := collectUse(fs, cfg.Use, home, home, scopeGlobal, make(map[string]string))
 	return infos, nil
+}
+
+// PackageUse is one `use:` entry together with the directory it resolves to.
+type PackageUse struct {
+	Ref PackageRef
+	Dir string
+}
+
+// GlobalPackageUses returns the `use:` entries of the per-user config that
+// resolve, each with its directory, in list order. An entry that does not
+// resolve is skipped, and no package is loaded: a caller that only asks which
+// directories are in use does not depend on whether their manifests load. A
+// `path:` entry resolves lexically, so its directory is returned whether or not
+// anything is there. The entry comes with the directory because removing it
+// takes its own spelling: a name for a `name:` entry, a path for a `path:` one.
+func GlobalPackageUses() ([]PackageUse, error) {
+	return globalPackageUses(vfs.NewOS(), env.NewOS())
+}
+
+func globalPackageUses(fs vfs.FS, e env.Environment) ([]PackageUse, error) {
+	home, err := taskmgrHome(e)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := loadGlobalConfig(fs, home)
+	if err != nil {
+		return nil, err
+	}
+	var uses []PackageUse
+	for _, ref := range cfg.Use {
+		dir, _, err := resolveRef(fs, ref, home, home)
+		if err != nil {
+			continue
+		}
+		uses = append(uses, PackageUse{Ref: ref, Dir: dir})
+	}
+	return uses, nil
 }
 
 // inspectRef resolves one `use:` entry against the entries that already apply,
