@@ -519,9 +519,11 @@ and clobbering either deletes packages some config still names.
 
 List the installed repositories, sorted by name, each with the packages it provides, which
 of those the per-user config uses, and its `origin` URL. A package is used when a `use:`
-entry of that config resolves into the repository's directory for it. A `path:` entry of
-the same name resolves outside the repository, and a name two repositories provide
-resolves into neither (HOOK-SPEC §3.5), so neither counts.
+entry of that config resolves into the repository's directory for it, by `name:` or by a
+`path:` that leads there. A `path:` entry of the same name that resolves elsewhere does
+not count. Neither does an entry that does not resolve: a name two repositories provide
+resolves into neither (HOOK-SPEC §3.5), and a refused `path:` resolves nowhere, even where
+its text spells that directory.
 
 Only a directory holding `taskmgr-package.yaml` counts as a package, so a repository's
 README, licence and `.git` directory are not listed as broken ones.

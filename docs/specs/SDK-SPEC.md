@@ -514,6 +514,12 @@ whether it is standing in a project at all. `InspectGlobalPackage` is `Store.Ins
 for this file and needs no store either; it resolves a candidate entry against this
 file's own list, which is the only one that runs earlier (HOOK-SPEC §3.5 rule 1).
 
+`GlobalPackageDirs` exists beside `GlobalPackages` because a caller matching directories
+cannot use that call's `Path`: for an entry that does not resolve it is the `path:` text
+as written, which counts as a directory in use wherever the text spells one. It also
+spares the manifest reads `GlobalPackages` makes to report a status. A `path:` entry
+resolves lexically, so its directory is returned whether or not anything is there.
+
 The four repository functions are the SDK's whole share of installing a package: they
 read the directory and remove one, and know nothing of URLs, revisions or networks.
 Cloning is the CLI's (`taskmgr package repo add`, [CLI-SPEC](CLI-SPEC.md) §2.4), so an SDK

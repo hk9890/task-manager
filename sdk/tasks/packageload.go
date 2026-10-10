@@ -64,7 +64,9 @@ const (
 type PackageInfo struct {
 	// Name is the package name: the `name:` given, or the base name of `path:`.
 	Name string
-	// Path is the directory the entry resolves to on this machine.
+	// Path is the directory the entry resolves to on this machine. An entry that
+	// does not resolve carries its `path:` as written instead, empty for a
+	// `name:` entry, so Path is not a directory to match on.
 	Path string
 	// Scope is "global" or "store" — which config file declared the entry.
 	Scope string
@@ -503,7 +505,8 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 // GlobalPackageDirs returns the directories the `use:` entries of the per-user
 // config resolve to, in list order. An entry that does not resolve is skipped,
 // and no package is loaded: a caller that only asks which directories are in
-// use does not depend on whether their manifests load.
+// use does not depend on whether their manifests load. A `path:` entry resolves
+// lexically, so its directory is returned whether or not anything is there.
 func GlobalPackageDirs() ([]string, error) {
 	return globalPackageDirs(vfs.NewOS(), env.NewOS())
 }

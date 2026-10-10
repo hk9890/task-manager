@@ -209,8 +209,8 @@ func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
 func TestGlobalPackageDirs_ReturnsWhatEachEntryResolvesToInListOrder(t *testing.T) {
 	fs := repoHome(t, "first/task-writing", "first/doc-policy")
 
-	got := globalDirs(t, fs, "use:\n  - path: packages/first/doc-policy\n  - name: task-writing\n")
-	want := "/hm/packages/first/doc-policy,/hm/packages/first/task-writing"
+	got := globalDirs(t, fs, "use:\n  - name: task-writing\n  - path: packages/first/doc-policy\n")
+	want := "/hm/packages/first/task-writing,/hm/packages/first/doc-policy"
 	if strings.Join(got, ",") != want {
 		t.Errorf("dirs = %v, want %s", got, want)
 	}
@@ -237,5 +237,19 @@ func TestGlobalPackageDirs_APackageThatDoesNotLoadStillResolves(t *testing.T) {
 	got := globalDirs(t, fs, "use:\n  - name: task-writing\n")
 	if len(got) != 1 || got[0] != "/hm/packages/first/task-writing" {
 		t.Errorf("dirs = %v, want the package directory", got)
+	}
+}
+
+// A fault fires once, on the first read it matches. One that is still armed
+// after the call is the proof that nothing read the manifest.
+func TestGlobalPackageDirs_ReadsNoManifest(t *testing.T) {
+	fs := repoHome(t, "first/task-writing")
+	manifest := "/hm/packages/first/task-writing/" + PackageManifestName
+	armed := errors.New("armed fault")
+	fs.(*vfs.Mem).FailOn("ReadFile", manifest, armed)
+
+	globalDirs(t, fs, "use:\n  - name: task-writing\n")
+	if _, err := fs.ReadFile(manifest); !errors.Is(err, armed) {
+		t.Errorf("read after the call = %v, want the fault still armed: resolving read the manifest", err)
 	}
 }
