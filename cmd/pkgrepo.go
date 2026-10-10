@@ -410,15 +410,16 @@ func repoURL(dir string) string {
 // usedPackageDirs is the set of directories the per-user config's `use:` entries
 // resolve to, so a listing can say which of a repository's packages are live. A
 // package name is not enough to say that: a `path:` entry whose last segment is
-// that name uses a directory outside every repository.
+// that name uses a directory outside every repository. An entry that does not
+// resolve uses nothing, however its text is spelled.
 func usedPackageDirs() (map[string]bool, error) {
-	infos, err := tasks.GlobalPackages()
+	dirs, err := tasks.GlobalPackageDirs()
 	if err != nil {
 		return nil, err
 	}
-	used := make(map[string]bool, len(infos))
-	for _, in := range infos {
-		used[in.Path] = true
+	used := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		used[dir] = true
 	}
 	return used, nil
 }

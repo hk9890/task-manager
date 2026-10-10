@@ -500,6 +500,34 @@ func globalPackages(fs vfs.FS, e env.Environment) ([]PackageInfo, error) {
 	return infos, nil
 }
 
+// GlobalPackageDirs returns the directories the `use:` entries of the per-user
+// config resolve to, in list order. An entry that does not resolve is skipped,
+// and no package is loaded: a caller that only asks which directories are in
+// use does not depend on whether their manifests load.
+func GlobalPackageDirs() ([]string, error) {
+	return globalPackageDirs(vfs.NewOS(), env.NewOS())
+}
+
+func globalPackageDirs(fs vfs.FS, e env.Environment) ([]string, error) {
+	home, err := taskmgrHome(e)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := loadGlobalConfig(fs, home)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for _, ref := range cfg.Use {
+		dir, _, err := resolveRef(fs, ref, home, home)
+		if err != nil {
+			continue
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, nil
+}
+
 // inspectRef resolves one `use:` entry against the entries that already apply,
 // and reports what it is, without writing anything. It is what lets a command
 // check a package *before* it adds the entry that depends on it.

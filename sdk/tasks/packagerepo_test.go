@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
@@ -189,5 +190,52 @@ func TestPackageRepos_NoPackagesDirectoryIsNotAnError(t *testing.T) {
 	}
 	if len(repos) != 0 {
 		t.Errorf("repos = %+v, want none", repos)
+	}
+}
+
+// globalDirs writes the per-user config of /hm and resolves its `use:` list.
+func globalDirs(t *testing.T, fs vfs.FS, configYAML string) []string {
+	t.Helper()
+	if err := fs.WriteAtomic("/hm/config.yaml", []byte(configYAML), 0o644); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
+	dirs, err := globalPackageDirs(fs, env.Fake{Vars: map[string]string{"TASKMGR_HOME": "/hm"}})
+	if err != nil {
+		t.Fatalf("globalPackageDirs: %v", err)
+	}
+	return dirs
+}
+
+func TestGlobalPackageDirs_ReturnsWhatEachEntryResolvesToInListOrder(t *testing.T) {
+	fs := repoHome(t, "first/task-writing", "first/doc-policy")
+
+	got := globalDirs(t, fs, "use:\n  - path: packages/first/doc-policy\n  - name: task-writing\n")
+	want := "/hm/packages/first/doc-policy,/hm/packages/first/task-writing"
+	if strings.Join(got, ",") != want {
+		t.Errorf("dirs = %v, want %s", got, want)
+	}
+}
+
+// An absolute `path:` is refused, so it resolves to nothing — also when its
+// text spells a directory that exists.
+func TestGlobalPackageDirs_SkipsAnEntryThatDoesNotResolve(t *testing.T) {
+	fs := repoHome(t, "first/task-writing")
+
+	got := globalDirs(t, fs, "use:\n  - path: /hm/packages/first/task-writing\n  - name: not-installed\n")
+	if len(got) != 0 {
+		t.Errorf("dirs = %v, want none", got)
+	}
+}
+
+// Resolving reads no manifest: a package that does not load is still in use.
+func TestGlobalPackageDirs_APackageThatDoesNotLoadStillResolves(t *testing.T) {
+	fs := repoHome(t, "first/task-writing")
+	if err := fs.WriteAtomic("/hm/packages/first/task-writing/"+PackageManifestName, []byte("hooks: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := globalDirs(t, fs, "use:\n  - name: task-writing\n")
+	if len(got) != 1 || got[0] != "/hm/packages/first/task-writing" {
+		t.Errorf("dirs = %v, want the package directory", got)
 	}
 }

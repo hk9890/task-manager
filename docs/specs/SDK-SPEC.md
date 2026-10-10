@@ -483,6 +483,7 @@ func UpdateGlobalConfig(mutate func(*GlobalConfig) error) error // read-modify-w
 func SaveGlobalConfig(cfg GlobalConfig) error  // replace the file wholesale
 func GlobalConfigPath() (string, error)        // absolute path, whether or not it exists
 func GlobalPackages() ([]PackageInfo, error)   // the per-user use: list and what it resolves to
+func GlobalPackageDirs() ([]string, error)     // the directories its entries resolve to; unresolved ones skipped, nothing loaded
 func GlobalGuideTopics() ([]GuideTopic, error) // the guide fragments its packages contribute
 func InspectGlobalPackage(ref PackageRef) (PackageInfo, error) // InspectPackage for this file
 

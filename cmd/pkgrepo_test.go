@@ -169,6 +169,74 @@ func TestPackageRepoList_APathEntryOfTheSameNameIsNotUsed(t *testing.T) {
 	}
 }
 
+// useAbsolutePath writes a per-user config whose only `use:` entry is the
+// absolute path of a repository's package: an entry that is refused, and so
+// resolves to nothing, while its text equals a directory the repository holds.
+func useAbsolutePath(t *testing.T, home, repo, pkg string) {
+	t.Helper()
+	body := "use:\n  - path: " + filepath.Join(home, "packages", repo, pkg) + "\n"
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPackageRepoList_AnEntryThatDoesNotResolveIsNotUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	useAbsolutePath(t, home, "first", "task-writing")
+
+	out, errOut, code := run(t, "package", "repo", "list", "--json")
+	if code != 0 {
+		t.Fatalf("repo list: exit %d, stderr %q", code, errOut)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo list --json: %v\n%s", err, out)
+	}
+	if len(got) != 1 {
+		t.Fatalf("repo list = %v, want one repository", got)
+	}
+	if _, ok := got[0]["used"]; ok {
+		t.Errorf("repo list = %v, want no used key", got)
+	}
+	if out, _, _ := run(t, "package", "list", "--global", "--json"); !strings.Contains(out, `"status": "broken"`) {
+		t.Errorf("package list = %s, want the entry still reported broken", out)
+	}
+}
+
+// `used` asks where an entry resolves, not whether the package loads.
+func TestPackageRepoList_APackageThatDoesNotLoadIsStillUsed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TASKMGR_HOME", home)
+	if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+		t.Fatal("setup: repo add")
+	}
+	if _, _, code := run(t, "package", "add", "--global", "task-writing"); code != 0 {
+		t.Fatal("setup: package add")
+	}
+	manifest := filepath.Join(home, "packages", "first", "task-writing", "taskmgr-package.yaml")
+	if err := os.WriteFile(manifest, []byte("hooks: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, code := run(t, "package", "repo", "list", "--json")
+	if code != 0 {
+		t.Fatalf("repo list: exit %d, stderr %q", code, errOut)
+	}
+	var got []struct {
+		Used []string `json:"used"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("repo list --json: %v\n%s", err, out)
+	}
+	if len(got) != 1 || strings.Join(got[0].Used, ",") != "task-writing" {
+		t.Errorf("repo list = %s, want task-writing used", out)
+	}
+}
+
 // The name is derived from the URL, so two repositories whose URLs end the same
 // way collide. Overwriting either would delete a package a config still names,
 // so the collision is refused and --as is named as the way past it.
@@ -358,6 +426,35 @@ func TestPackageRepoRm_JSON_APathEntryOfTheSameNameIsNotStillUsed(t *testing.T) 
 	}
 	if out, _, _ := run(t, "package", "list", "--global"); strings.Contains(out, "missing") {
 		t.Errorf("package list = %q, want the path entry to resolve", out)
+	}
+}
+
+// An entry that does not resolve was broken before the removal, so the removal
+// orphans nothing and the human form offers no remedy for it.
+func TestPackageRepoRm_AnEntryThatDoesNotResolveIsNotStillUsed(t *testing.T) {
+	for _, form := range []string{"json", "human"} {
+		t.Run(form, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("TASKMGR_HOME", home)
+			if _, _, code := run(t, "package", "repo", "add", originRepo(t, "task-writing"), "--as", "first"); code != 0 {
+				t.Fatal("setup: repo add")
+			}
+			useAbsolutePath(t, home, "first", "task-writing")
+
+			if form == "json" {
+				if got := repoRmJSON(t, "first"); got["still_used"] != nil {
+					t.Errorf("output = %v, want no still_used key", got)
+				}
+				return
+			}
+			out, errOut, code := run(t, "package", "repo", "rm", "first")
+			if code != 0 {
+				t.Fatalf("repo rm: exit %d, stderr %q", code, errOut)
+			}
+			if strings.Contains(out+errOut, "warning:") {
+				t.Errorf("stdout %q, stderr %q, want no warning", out, errOut)
+			}
+		})
 	}
 }
 
