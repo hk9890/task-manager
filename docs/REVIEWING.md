@@ -59,7 +59,9 @@ correct form.
 
 - **Flag structs**: a command in `cmd/` keeps its flag values in its own struct, named
   `<command>Flags` — `closeFlags`, `commentAddFlags`. Flag a struct that two sibling
-  subcommands read; give each its own.
+  subcommands read; give each its own. The persistent-flag struct of a group, read by
+  each subcommand of that group, is no finding
+  ([CODING.md § Where changes go](CODING.md#where-changes-go) owns that mechanism).
 - **Package-level flag variables**: the only ones in `cmd/` are the `<command>Flags`
   structs, the persistent-flag struct of a group (`configFlags`), and the root persistent
   flags `flagJSON`/`flagDir`/`flagStoreName`. Flag any other; move it into the struct of
