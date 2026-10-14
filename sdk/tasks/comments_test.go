@@ -137,6 +137,9 @@ func TestGolden_RoundTripBodyExact(t *testing.T) {
 		"line with: colons\n",
 		"---\nin a body\n---\n",
 		"```go\nfmt.Println(\"hi\")\n```\n",
+		// gopkg.in/yaml.v3 v3.0.1 wrote `body: |2` with no line break after the
+		// header, so the leading blank line was lost on the way to disk.
+		"\nafter a leading blank line\n",
 	}
 
 	for _, body := range bodies {

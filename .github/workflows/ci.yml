@@ -76,7 +76,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Set up mise (pins go + goimports + golangci-lint 2.14.0)
+      - name: Set up mise (installs the tools .mise.toml pins)
         uses: jdx/mise-action@08ae2a091c038e1e05ec6f5115dc5c69d5a2a6b8 # v5.1.2
 
       # The format gate is defined once, in .mise.toml, and run from there —
