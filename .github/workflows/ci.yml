@@ -104,7 +104,8 @@ jobs:
 
       # The Go pin is go.work's toolchain line, which Dependabot does not update.
       # This fails once a newer patch of that Go version is out, so a Go security
-      # release does not wait for someone to notice it. It reaches go.dev, so it
-      # runs here, beside vuln, and not in the pre-commit gate.
+      # release does not wait for someone to notice it, and once go.dev no longer
+      # lists that minor version as supported. It reaches go.dev, so it runs
+      # here, beside vuln, and not in the pre-commit gate.
       - name: check:go (Go toolchain is the newest patch of a supported minor)
         run: mise run check:go

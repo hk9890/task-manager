@@ -20,10 +20,7 @@ package main
 // pins, whether go.dev still releases that version's minor, and whether a
 // release is a newer patch of it.
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestToolchainVersion_ReadsTheToolchainLine(t *testing.T) {
 	gowork := []byte("go 1.27.0\n\ntoolchain go1.27.2\n\nuse (\n\t.\n\t./sdk\n)\n")
@@ -83,7 +80,7 @@ func TestNewerPatch_PicksTheHighest(t *testing.T) {
 	}
 }
 
-func TestListsMinor_UnsupportedMinor_IsNotListed(t *testing.T) {
+func TestListsMinor_ListsOnlyTheFeedsMinors(t *testing.T) {
 	releases := []string{"1.27.2", "1.26.9"}
 	cases := []struct {
 		pinned string
@@ -96,12 +93,8 @@ func TestListsMinor_UnsupportedMinor_IsNotListed(t *testing.T) {
 		{"1.28.0", false}, // newer than the feed knows
 	}
 	for _, c := range cases {
-		listed, minors := listsMinor(c.pinned, releases)
-		if listed != c.listed {
-			t.Errorf("listsMinor(%q) listed = %v; want %v", c.pinned, listed, c.listed)
-		}
-		if got := strings.Join(minors, ", "); got != "go1.27, go1.26" {
-			t.Errorf("listsMinor(%q) minors = %q; want \"go1.27, go1.26\"", c.pinned, got)
+		if got := listsMinor(c.pinned, releases); got != c.listed {
+			t.Errorf("listsMinor(%q) = %v; want %v", c.pinned, got, c.listed)
 		}
 	}
 }
