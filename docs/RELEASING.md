@@ -22,8 +22,10 @@ tag — there is nothing to build).
 - The CLI module **depends on the SDK by version** (`require …/sdk vX.Y.Z`, no
   `replace`). Local development uses the committed `go.work` workspace, so the CLI
   builds against the in-tree SDK; released builds and downstream `go install`
-  ignore `go.work` and resolve the SDK from its published `sdk/vX.Y.Z` tag. **That
-  is why the SDK tag must be pushed before the CLI tag** (see step 4).
+  ignore `go.work` and resolve the SDK from its published `sdk/vX.Y.Z` tag
+  (`release.yml` sets `GOWORK=off` once the pin resolves, so a dry run on the pin
+  commit builds the same).
+  **That is why the SDK tag must be pushed before the CLI tag** (see step 4).
 
 ## Cutting a release
 
@@ -53,7 +55,7 @@ on a clean, up-to-date tree.
    ```
 
 4. **Release the SDK module first** (the CLI depends on it by version). Tag and
-   push the SDK on the release commit, then pin the CLI to the just-published tag.
+   push the SDK on the current `main` commit, then pin the CLI to the just-published tag.
    `GOWORK=off` bypasses the dev workspace so the real published module is
    resolved into `go.mod` + `go.sum`:
 
@@ -66,8 +68,8 @@ on a clean, up-to-date tree.
    ```
 
    The pin is an ordinary code change: land it via PR, never directly on `main`
-   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). Both tags are cut on the merged
-   `main` commit.
+   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). No SDK change may land between the
+   SDK tag and the CLI tag.
 
    Then confirm the pin actually resolves:
 
@@ -91,7 +93,9 @@ on a clean, up-to-date tree.
 
 5. **Dry-run the release workflow on the commit you are about to tag.** This is
    the same job that runs on a tag push — same build, same signing, same SBOMs —
-   with `--snapshot`, so it publishes nothing:
+   with `--snapshot`, so it publishes nothing. A warning on either of its two SDK
+   checks means a tag push from this commit would fail or ship the wrong SDK:
+   finish step 4 and run it again.
 
    ```bash
    gh workflow run release.yml --ref main
@@ -109,6 +113,7 @@ on a clean, up-to-date tree.
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
 
    ```bash
+   git pull --rebase    # on main: HEAD is now the merged pin commit
    git tag -a vX.Y.Z -m "task-manager vX.Y.Z"
    git push origin vX.Y.Z
    ```
@@ -143,7 +148,8 @@ does not say it.
   ``**`taskmgr tree` prints the parent and blocker graph.**`` Then say what it was
   before, and name the flag, JSON key or message the user needs.
 - Open a change that can break a caller with `**Action required for <who>:**`, and
-  say what to run or write in its place.
+  say what to run or write in its place. A change to a release file — the SBOM or
+  signature format, an archive name — is one: its caller is whoever parses it.
 - Take each command, key and message from the code at the tag, not from the commit
   subject: a later commit in the range can have reworded it.
 
@@ -162,7 +168,9 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 
 `--skip=sign,sbom` matches `release.yml`'s snapshot path: those steps need `cosign`
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
-if you have both.
+if you have both. The PR job skips both steps and is not the `release` job, so it
+never runs a change to `sboms:`, `signs:` or the `release` job
+([REVIEWING.md § Also check](REVIEWING.md#also-check)).
 
 **Signing is not covered by either of those.** Keyless cosign needs an `id-token`
 from GitHub's OIDC provider, which no local run has and which the PR job must never
