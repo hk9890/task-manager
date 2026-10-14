@@ -68,8 +68,8 @@ jobs:
       # When the pin resolves, every later step runs with GOWORK=off, so GoReleaser
       # builds what `go install …@vX.Y.Z` builds: the SDK from its published tag,
       # not the in-tree one. That holds for a tag push and for a dry run on the
-      # pin commit alike, so step 5 rehearses the exact release build. Only a dry
-      # run with a stale pin keeps the workspace, and it says so above.
+      # pin commit alike, so step 5 rehearses the exact release build. A dry run
+      # whose pin check fails keeps the workspace, and its warning says so.
       - name: Verify the SDK pin resolves (go install path)
         run: |
           if GOWORK=off go build ./...; then
@@ -81,7 +81,27 @@ jobs:
             echo "::error::Push the matching sdk/vX.Y.Z tag and re-pin the CLI before tagging — docs/RELEASING.md step 4."
             exit 1
           fi
-          echo "::warning::go.mod pins an SDK version this commit does not build against — expected between releases; RELEASING.md step 4 clears it before a tag."
+          echo "::warning::go.mod pins an SDK version this commit does not build against — expected between releases; RELEASING.md step 4 clears it before a tag. This dry run builds the in-tree SDK, not what a tag push builds."
+
+      # With GOWORK=off the binary takes the SDK from the pinned tag, so an SDK
+      # change that landed after that tag is not in it, and the build above cannot
+      # see that: a change that adds no symbol compiles either way. RELEASING.md
+      # step 4 forbids an SDK change between the SDK tag and the CLI tag; this is
+      # the check. Fatal on a tag push, a warning on a dry run.
+      - name: Verify sdk/ matches the pinned SDK tag
+        if: env.GOWORK == 'off'
+        run: |
+          pinned="$(go list -m -f '{{.Version}}' github.com/hk9890/task-manager/sdk)"
+          if git diff --quiet "sdk/${pinned}" HEAD -- sdk/; then
+            echo "sdk/ at HEAD matches sdk/${pinned}"
+            exit 0
+          fi
+          git diff --stat "sdk/${pinned}" HEAD -- sdk/
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "::error::sdk/ differs from sdk/${pinned}, so the release binary would leave that change out. Tag a new sdk/vX.Y.Z and re-pin — docs/RELEASING.md step 4."
+            exit 1
+          fi
+          echo "::warning::sdk/ differs from sdk/${pinned}; a release from this commit would leave that change out."
 
       # cosign-release pins the cosign BINARY, not just the action. Without it the
       # installer fetches the latest cosign, so a new major lands in the release

@@ -69,7 +69,7 @@ on a clean, up-to-date tree.
 
    The pin is an ordinary code change: land it via PR, never directly on `main`
    ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). No SDK change may land between the
-   SDK tag and the merged pin commit.
+   SDK tag and the CLI tag.
 
    Then confirm the pin actually resolves:
 
@@ -93,7 +93,9 @@ on a clean, up-to-date tree.
 
 5. **Dry-run the release workflow on the commit you are about to tag.** This is
    the same job that runs on a tag push — same build, same signing, same SBOMs —
-   with `--snapshot`, so it publishes nothing:
+   with `--snapshot`, so it publishes nothing. A warning on either of its two SDK
+   checks means a tag push from this commit would fail or ship the wrong SDK:
+   finish step 4 and run it again.
 
    ```bash
    gh workflow run release.yml --ref main
@@ -111,6 +113,7 @@ on a clean, up-to-date tree.
    Release workflow (it filters to `v[0-9]*`, so only this tag triggers it):
 
    ```bash
+   git pull --rebase    # on main: HEAD is now the merged pin commit
    git tag -a vX.Y.Z -m "task-manager vX.Y.Z"
    git push origin vX.Y.Z
    ```
@@ -165,8 +168,9 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 
 `--skip=sign,sbom` matches `release.yml`'s snapshot path: those steps need `cosign`
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
-if you have both. The PR job skips both steps, so it never runs a change to
-`sboms:` or `signs:` ([REVIEWING.md § Also check](REVIEWING.md#also-check)).
+if you have both. The PR job skips both steps and is not the `release` job, so it
+never runs a change to `sboms:`, `signs:` or the `release` job
+([REVIEWING.md § Also check](REVIEWING.md#also-check)).
 
 **Signing is not covered by either of those.** Keyless cosign needs an `id-token`
 from GitHub's OIDC provider, which no local run has and which the PR job must never
