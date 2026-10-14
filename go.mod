@@ -2,8 +2,6 @@ module github.com/hk9890/task-manager
 
 go 1.27.0
 
-toolchain go1.27.2
-
 require (
 	github.com/hk9890/task-manager/sdk v0.12.1
 	github.com/spf13/cobra v1.10.2

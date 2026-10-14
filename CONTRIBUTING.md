@@ -16,7 +16,7 @@ enable it.
 
 ## Prerequisites
 
-- **Go 1.27+** (pinned in `go.mod`).
+- **Go 1.27+** (the exact toolchain is pinned in `go.work`).
 - Optionally [`mise`](https://mise.jdx.dev): `mise install` provisions the toolchain
   CI uses, golangci-lint included. Without it you cannot reproduce the lint
   job locally.

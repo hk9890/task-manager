@@ -20,6 +20,7 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 │   ├── internal/query/           the filter-expression engine — pure, imports nothing of tasks
 │   └── internal/storetest/       fixture builder; every test store is built through it
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
+├── scripts/checkgo/              the Go patch check on go.work's toolchain line (TESTING.md)
 └── docs/
     ├── specs/                    the normative contract — the table below
     ├── implementation/           orientation maps that own nothing; the specs are normative

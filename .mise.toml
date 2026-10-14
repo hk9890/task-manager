@@ -1,5 +1,10 @@
+# Go itself is pinned once, by the `toolchain` line in go.work: mise reads it from
+# there (it prefers go.work to go.mod), and so does setup-go in CI and the
+# release. `mise run check:go` fails when a newer patch of that Go version is out.
+[settings]
+idiomatic_version_file_enable_tools = ["go"]
+
 [tools]
-go = "1.27.2"
 "go:gotest.tools/gotestsum" = "1.13.0"
 "go:golang.org/x/tools/cmd/goimports" = "0.52.0"
 "go:github.com/golangci/golangci-lint/v2/cmd/golangci-lint" = "2.14.0"
@@ -162,6 +167,10 @@ CGO_ENABLED = "1"
 [tasks."check:docs"]
 description = "Doc gate: cited source paths resolve, no line-anchored citations, links and anchors resolve, the user guide stays user-facing"
 run = "go run ./scripts/checkdocs"
+
+[tasks."check:go"]
+description = "Fail when go.work's toolchain line is behind the newest patch of its Go version (reaches go.dev)"
+run = "go run ./scripts/checkgo"
 
 [tasks."verify:pin"]
 description = "Build the CLI against the SDK version pinned in go.mod, without the workspace — the check that 'go install .../cmd/taskmgr@vX.Y.Z' will compile"

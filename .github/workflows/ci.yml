@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version-file: go.work
           cache: true
 
       # Formatting is checked in the Lint job, which already has mise. It cannot
@@ -101,3 +101,10 @@ jobs:
       # because it reaches the network for the vulnerability database.
       - name: vuln (both modules)
         run: mise run vuln
+
+      # The Go pin is go.work's toolchain line, which Dependabot does not update.
+      # This fails once a newer patch of that Go version is out, so a Go security
+      # release does not wait for someone to notice it. It reaches go.dev, so it
+      # runs here, beside vuln, and not in the pre-commit gate.
+      - name: check:go (Go toolchain is the newest patch)
+        run: mise run check:go

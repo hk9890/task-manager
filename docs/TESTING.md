@@ -27,9 +27,10 @@ loop — `sdk/tasks/edge_bounds_slow_test.go`, which fills a relation list to it
 suite, name the reason in its file comment, and keep it in `quality:full`.
 
 A change is not green until `quality:full` passes; it covers everything
-`.github/workflows/ci.yml` checks **except** the vulnerability scan, which runs
-only in CI because it reaches the network: run `mise run vuln` by hand to check it
-early. There is no `make lint` — linting is `mise run lint`.
+`.github/workflows/ci.yml` checks **except** two that run only in CI because they
+reach the network: the vulnerability scan (`mise run vuln`), and the check that the
+`toolchain` line in `go.work` is the newest Go patch (`mise run check:go`). Run them
+by hand to check early. There is no `make lint` — linting is `mise run lint`.
 
 Two coverage tasks are **manual** and gate nothing. `mise run test:coverage` runs
 every layer against a threshold (`COVERAGE_THRESHOLD`, default 75) — a policy
