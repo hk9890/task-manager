@@ -12,7 +12,7 @@ taskmgr version
 Or download an archive for your OS and architecture from the
 [releases page](https://github.com/hk9890/task-manager/releases) and put the binary on your
 `PATH`. Each release ships Linux, macOS and Windows builds for amd64 and arm64, a
-`checksums.txt`, an SBOM per archive, and a cosign signature over the checksums.
+`checksums.txt`, a CycloneDX SBOM per archive, and a cosign signature over the checksums.
 
 ## Create a store
 

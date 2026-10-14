@@ -3,7 +3,7 @@
 #
 # Validate locally without publishing:
 #   goreleaser check
-#   goreleaser release --snapshot --clean
+#   goreleaser release --snapshot --clean --skip=sign,sbom
 #
 # Note: local dev uses a go.work workspace, but release builds (and downstream
 # `go install`) ignore go.work and resolve the SDK from its published
@@ -57,9 +57,12 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-# Generate a CycloneDX SBOM (via syft) for each release archive.
+# Generate a CycloneDX SBOM (via syft) for each release archive. GoReleaser's
+# default args write SPDX, so the format is set here; --enrich all is kept from
+# those defaults.
 sboms:
   - artifacts: archive
+    args: ["$artifact", "--output", "cyclonedx-json=$document", "--enrich", "all"]
 
 # Keyless (Sigstore/OIDC) signature over checksums.txt — which in turn covers
 # every artifact. Produces one checksums.txt.bundle: cosign 3.x writes the
