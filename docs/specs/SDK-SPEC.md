@@ -1159,11 +1159,18 @@ func (r PackageRef) MarshalYAML() (any, error)
 
 They model the `use:` list by hand: a `use:` that is not a list, or an entry that
 is not a mapping, is recorded as a defect instead of failing the decode, and a
-malformed entry is written back exactly as it was read. Only `go.yaml.in/yaml/v3`
-calls these methods. Any other YAML library, `gopkg.in/yaml.v3` included, skips
-them with no error: a decode fails on an entry that is not a mapping and records
-no defect, and an encode writes the fields of the library's node type in place of
-a malformed entry. Read and write these files through `Store`,
+malformed entry is written back exactly as it was read. The two directions differ
+under any other YAML library, `gopkg.in/yaml.v3` included:
+
+- **Decode.** The `UnmarshalYAML` methods take a `go.yaml.in/yaml/v3` node, so
+  another library does not call them. Its decode fails on an entry that is not a
+  mapping, and records no defect.
+- **Encode.** `PackageRef.MarshalYAML` names no library type, so `gopkg.in/yaml.v3`
+  and `gopkg.in/yaml.v2` call it. For a malformed entry it returns a
+  `go.yaml.in/yaml/v3` node, which those libraries write field by field in place
+  of the entry.
+
+Read and write these files through `Store`,
 `LoadGlobalConfig` and `SaveGlobalConfig`, or decode them with
 `go.yaml.in/yaml/v3`.
 
