@@ -64,9 +64,16 @@ jobs:
       # and the weekly schedule report the stale pin and carry on to the build
       # and signing steps this run exists to exercise. `mise run verify:pin` is
       # the check to run by hand before tagging (RELEASING.md step 4).
+      #
+      # When the pin resolves, every later step runs with GOWORK=off, so GoReleaser
+      # builds what `go install …@vX.Y.Z` builds: the SDK from its published tag,
+      # not the in-tree one. That holds for a tag push and for a dry run on the
+      # pin commit alike, so step 5 rehearses the exact release build. Only a dry
+      # run with a stale pin keeps the workspace, and it says so above.
       - name: Verify the SDK pin resolves (go install path)
         run: |
           if GOWORK=off go build ./...; then
+            echo "GOWORK=off" >> "$GITHUB_ENV"
             exit 0
           fi
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -135,13 +142,8 @@ jobs:
           args: release --clean ${{ github.event_name != 'push' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A release builds what `go install …@vX.Y.Z` builds: the SDK from its
-          # published tag, not the in-tree one the committed go.work wires in.
-          # A dry run keeps the workspace, because between releases main may use
-          # SDK code that is not published yet. An empty GOWORK is the default.
-          GOWORK: ${{ github.event_name == 'push' && 'off' || '' }}
           # GORELEASER_CURRENT_TAG and GORELEASER_PREVIOUS_TAG come from the
-          # step above, via $GITHUB_ENV.
+          # step above, and GOWORK=off from the pin check, via $GITHUB_ENV.
 
   # PR touching the release config -> snapshot build only (no publish, read-only
   # token). Catches a broken .goreleaser.yaml before any tag is ever cut.

@@ -53,6 +53,9 @@ respect. Where the skill and this file disagree, this file wins.
 - **Cross-module compatibility.** A change to a `sdk/tasks` exported symbol that `cmd/`
   now depends on has to survive `mise run verify:pin` at release time
   ([RELEASING.md](RELEASING.md)); flag one that will not.
+- **Release signing and SBOMs.** A change to `sboms:` or `signs:` in `.goreleaser.yaml`
+  links a passing `workflow_dispatch` dry run of `release.yml` on its head commit; the
+  PR snapshot job skips both steps. Flag one that does not.
 
 ## Quality rules
 

@@ -23,7 +23,8 @@ tag — there is nothing to build).
   `replace`). Local development uses the committed `go.work` workspace, so the CLI
   builds against the in-tree SDK; released builds and downstream `go install`
   ignore `go.work` and resolve the SDK from its published `sdk/vX.Y.Z` tag
-  (`release.yml` sets `GOWORK=off` on a tag push; a dry run keeps the workspace).
+  (`release.yml` sets `GOWORK=off` once the pin resolves, so a dry run on the pin
+  commit builds the same).
   **That is why the SDK tag must be pushed before the CLI tag** (see step 4).
 
 ## Cutting a release
@@ -54,7 +55,7 @@ on a clean, up-to-date tree.
    ```
 
 4. **Release the SDK module first** (the CLI depends on it by version). Tag and
-   push the SDK on the release commit, then pin the CLI to the just-published tag.
+   push the SDK on the current `main` commit, then pin the CLI to the just-published tag.
    `GOWORK=off` bypasses the dev workspace so the real published module is
    resolved into `go.mod` + `go.sum`:
 
@@ -67,9 +68,8 @@ on a clean, up-to-date tree.
    ```
 
    The pin is an ordinary code change: land it via PR, never directly on `main`
-   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). The SDK tag goes on the `main`
-   commit before the pin, and the CLI tag (step 6) on the merged pin commit, so
-   no SDK change may land between the two.
+   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). No SDK change may land between the
+   SDK tag and the merged pin commit.
 
    Then confirm the pin actually resolves:
 
@@ -165,8 +165,8 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 
 `--skip=sign,sbom` matches `release.yml`'s snapshot path: those steps need `cosign`
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
-if you have both. Because the PR job skips them, a PR that changes `sboms:` or
-`signs:` links a `workflow_dispatch` dry run on its head commit.
+if you have both. The PR job skips both steps, so it never runs a change to
+`sboms:` or `signs:` ([REVIEWING.md § Also check](REVIEWING.md#also-check)).
 
 **Signing is not covered by either of those.** Keyless cosign needs an `id-token`
 from GitHub's OIDC provider, which no local run has and which the PR job must never
