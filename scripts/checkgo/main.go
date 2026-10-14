@@ -26,8 +26,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -64,14 +62,21 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-// toolchainVersion returns the version of go.work's `toolchain` line, without
-// the "go" prefix.
+// toolchainVersion returns the major.minor.patch version of go.work's
+// `toolchain` line, without the "go" prefix. Any other version is an error, so
+// a pin the check cannot compare fails it instead of passing it.
 func toolchainVersion(file []byte) (string, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(file))
-	for scanner.Scan() {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(scanner.Text()), "toolchain go"); ok {
-			return v, nil
+	for line := range strings.Lines(string(file)) {
+		directive, _, _ := strings.Cut(line, "//")
+		fields := strings.Fields(directive)
+		if len(fields) != 2 || fields[0] != "toolchain" {
+			continue
 		}
+		version := strings.TrimPrefix(fields[1], "go")
+		if _, _, ok := splitPatch(version); !ok {
+			return "", fmt.Errorf("go.work pins toolchain %s, which is not a goX.Y.Z release", fields[1])
+		}
+		return version, nil
 	}
 	return "", fmt.Errorf("go.work has no `toolchain` line")
 }
@@ -100,6 +105,9 @@ func stableReleases(url string) ([]string, error) {
 		if r.Stable {
 			versions = append(versions, strings.TrimPrefix(r.Version, "go"))
 		}
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("GET %s: the feed lists no stable release", url)
 	}
 	return versions, nil
 }

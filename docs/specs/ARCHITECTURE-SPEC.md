@@ -78,7 +78,8 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 ├── cmd/                                 command groups + output rendering
 │   └── taskmgr/                         package main — wires command execution
 ├── scripts/                             repo tooling shipped in neither binary
-│   └── checkdocs/                       package main — the doc gate, stdlib only
+│   ├── checkdocs/                       package main — the doc gate, stdlib only
+│   └── checkgo/                         package main — the Go patch check, stdlib only
 └── sdk/                                 separate module — the engine
     └── tasks/                           package tasks: storage engine + public API
 ```

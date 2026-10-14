@@ -29,8 +29,21 @@ func TestToolchainVersion_ReadsTheToolchainLine(t *testing.T) {
 	}
 }
 
+func TestToolchainVersion_TabAndTrailingComment_ReadsTheVersion(t *testing.T) {
+	got, err := toolchainVersion([]byte("go 1.27.0\ntoolchain\tgo1.27.2 // bumped by hand\n"))
+	if err != nil || got != "1.27.2" {
+		t.Fatalf("toolchainVersion = %q, %v; want 1.27.2", got, err)
+	}
+}
+
 func TestToolchainVersion_NoLine_Fails(t *testing.T) {
 	if got, err := toolchainVersion([]byte("go 1.27.0\n\nuse .\n")); err == nil {
+		t.Fatalf("toolchainVersion = %q, nil; want an error", got)
+	}
+}
+
+func TestToolchainVersion_NotAPatchRelease_Fails(t *testing.T) {
+	if got, err := toolchainVersion([]byte("go 1.27.0\ntoolchain go1.28rc1\n")); err == nil {
 		t.Fatalf("toolchainVersion = %q, nil; want an error", got)
 	}
 }
