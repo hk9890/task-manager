@@ -186,7 +186,7 @@ github.com/spf13/cobra (v1.10.2) — Apache License 2.0
 
 
 --------------------------------------------------------------------------------
-github.com/spf13/pflag (v1.0.9) — BSD 3-Clause
+github.com/spf13/pflag (v1.0.10) — BSD 3-Clause
 --------------------------------------------------------------------------------
 
 Copyright (c) 2012 Alex Ogier. All rights reserved.
@@ -427,7 +427,7 @@ github.com/inconshreveable/mousetrap (v1.1.0) — Apache License 2.0
 
 
 --------------------------------------------------------------------------------
-gopkg.in/yaml.v3 (v3.0.1) — MIT and Apache License 2.0
+go.yaml.in/yaml/v3 (v3.0.5) — MIT and Apache License 2.0
 --------------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 --------------------------------------------------------------------------------
-golang.org/x/sys (v0.48.0) — BSD 3-Clause
+golang.org/x/sys (v0.49.0) — BSD 3-Clause
 --------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.

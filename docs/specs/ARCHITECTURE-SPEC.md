@@ -336,7 +336,7 @@ system would provide is left to that system.
 
 ## 10. Dependencies & philosophy
 
-The engine has two dependencies: `gopkg.in/yaml.v3` for YAML encoding, and
+The engine has two dependencies: `go.yaml.in/yaml/v3` for YAML encoding, and
 `github.com/fsnotify/fsnotify` for the file notifications behind `Store.Watch`
 (SDK-SPEC §4), which brings in `golang.org/x/sys`. The CLI adds a command
 framework. The guiding principle is subtractive: prefer the smallest design

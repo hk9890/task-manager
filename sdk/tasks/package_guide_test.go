@@ -24,7 +24,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
