@@ -62,7 +62,7 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 ## Modules
 
-Two modules: root (the CLI) and `sdk/` (minimal-dep — `yaml.v3`, and `fsnotify` inside `internal/vfs`). The
+Two modules: root (the CLI) and `sdk/` (minimal-dep — `go.yaml.in/yaml/v3`, and `fsnotify` inside `internal/vfs`). The
 committed `go.work` wires local builds to the in-tree SDK; the root `go.mod` has no
 `replace` and pins the published `sdk vX.Y.Z` for consumers. `mise run build:all`
 compiles both so a cross-module break fails the gate.

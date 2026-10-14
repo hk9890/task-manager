@@ -40,7 +40,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // catOutput decodes the part of a served `output` entry the tests assert on. It

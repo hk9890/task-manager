@@ -5,7 +5,7 @@ Install `taskmgr`, create a store in your project, and run one task from filed t
 ## Install
 
 ```bash
-go install github.com/hk9890/task-manager/cmd/taskmgr@latest   # needs Go 1.26+
+go install github.com/hk9890/task-manager/cmd/taskmgr@latest   # needs Go 1.27+
 taskmgr version
 ```
 

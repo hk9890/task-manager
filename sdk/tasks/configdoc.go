@@ -32,7 +32,7 @@ package tasks
 import (
 	"fmt"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // yamlIndent matches the encoder settings used everywhere else in the store, so

@@ -62,7 +62,7 @@ func TestUnmarshal_MalformedYAML(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Must not panic. If it panics, the test harness will report it.
 			_, err := Unmarshal([]byte(tc.input))
-			// Some of the above may parse leniently under gopkg.in/yaml.v3.
+			// Some of the above may parse leniently under go.yaml.in/yaml/v3.
 			// What we care about: no panic. An error is acceptable; silent
 			// data loss for these malformed inputs would also be acceptable
 			// as long as the spec-mandated error cases do error.

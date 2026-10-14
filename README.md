@@ -22,7 +22,7 @@ directly via the **`sdk/tasks`** Go module.
 ## Install
 
 ```bash
-# 1. Go toolchain (Go 1.26+) — installs the latest tagged release onto your $PATH
+# 1. Go toolchain (Go 1.27+) — installs the latest tagged release onto your $PATH
 go install github.com/hk9890/task-manager/cmd/taskmgr@latest
 
 # 2. Prebuilt binary — download an archive for your OS/arch from the Releases page:
@@ -58,7 +58,7 @@ filtering, hooks, and keeping the tracker outside the repository.
 ## Use as a Go library
 
 The storage engine is an importable, dependency-light module
-(`github.com/hk9890/task-manager/sdk/tasks` — it depends on `gopkg.in/yaml.v3` and
+(`github.com/hk9890/task-manager/sdk/tasks` — it depends on `go.yaml.in/yaml/v3` and
 `github.com/fsnotify/fsnotify`):
 
 ```bash
