@@ -29,7 +29,8 @@ suite, name the reason in its file comment, and keep it in `quality:full`.
 A change is not green until `quality:full` passes; it covers everything
 `.github/workflows/ci.yml` checks **except** two that run only in CI because they
 reach the network: the vulnerability scan (`mise run vuln`), and the check that the
-`toolchain` line in `go.work` is the newest Go patch (`mise run check:go`). Run them
+`toolchain` line in `go.work` is the newest patch of a supported Go minor
+(`mise run check:go`). Run them
 by hand to check early. There is no `make lint` — linting is `mise run lint`.
 
 Two coverage tasks are **manual** and gate nothing. `mise run test:coverage` runs

@@ -1,6 +1,7 @@
 # Go itself is pinned once, by the `toolchain` line in go.work: mise reads it from
 # there (it prefers go.work to go.mod), and so does setup-go in CI and the
-# release. `mise run check:go` fails when a newer patch of that Go version is out.
+# release. `mise run check:go` fails when a newer patch of that Go version is out,
+# or when go.dev no longer releases its minor.
 [settings]
 idiomatic_version_file_enable_tools = ["go"]
 
@@ -169,7 +170,7 @@ description = "Doc gate: cited source paths resolve, no line-anchored citations,
 run = "go run ./scripts/checkdocs"
 
 [tasks."check:go"]
-description = "Fail when go.work's toolchain line is behind the newest patch of its Go version (reaches go.dev)"
+description = "Fail when go.work's toolchain line is behind the newest patch of its Go version, or its minor is out of support (reaches go.dev)"
 run = "go run ./scripts/checkgo"
 
 [tasks."verify:pin"]

@@ -106,5 +106,5 @@ jobs:
       # This fails once a newer patch of that Go version is out, so a Go security
       # release does not wait for someone to notice it. It reaches go.dev, so it
       # runs here, beside vuln, and not in the pre-commit gate.
-      - name: check:go (Go toolchain is the newest patch)
+      - name: check:go (Go toolchain is the newest patch of a supported minor)
         run: mise run check:go
