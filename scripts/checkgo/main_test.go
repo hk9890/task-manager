@@ -35,7 +35,7 @@ func TestToolchainVersion_NoLine_Fails(t *testing.T) {
 	}
 }
 
-func TestNewerPatch(t *testing.T) {
+func TestNewerPatch_ComparesOnlyTheSameMinorByNumber(t *testing.T) {
 	releases := []string{"1.27.2", "1.26.9"}
 	cases := []struct {
 		pinned string
