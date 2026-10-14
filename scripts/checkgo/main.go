@@ -23,6 +23,7 @@
 // workspace. Dependabot does not update that line, so without this check a Go
 // security release reaches no build until someone notices it. A newer minor
 // version does not fail the check: moving to one is a decision, not an update.
+// A pinned minor that go.dev no longer releases does fail it.
 package main
 
 import (
@@ -50,6 +51,9 @@ func main() {
 	releases, err := stableReleases(releasesURL)
 	if err != nil {
 		fail(err)
+	}
+	if listed, minors := listsMinor(pinned, releases); !listed {
+		fail(fmt.Errorf("go.work pins go%s, but go.dev no longer releases that minor version; move to a supported one: %s", pinned, strings.Join(minors, ", ")))
 	}
 	if newer, ok := newerPatch(pinned, releases); ok {
 		fail(fmt.Errorf("go.work pins go%s, but go%s is released; set `toolchain go%s` in go.work", pinned, newer, newer))
@@ -110,6 +114,24 @@ func stableReleases(url string) ([]string, error) {
 		return nil, fmt.Errorf("GET %s: the feed lists no stable release", url)
 	}
 	return versions, nil
+}
+
+// listsMinor reports whether releases hold a release of pinned's major and minor
+// version, and returns the minor versions they hold ("go1.27"). The feed lists
+// only supported minors, so a pin whose minor is missing gets no more security
+// releases.
+func listsMinor(pinned string, releases []string) (bool, []string) {
+	line, _, _ := splitPatch(pinned)
+	listed, minors := false, []string{}
+	for _, r := range releases {
+		rLine, _, ok := splitPatch(r)
+		if !ok {
+			continue
+		}
+		minors = append(minors, "go"+rLine)
+		listed = listed || rLine == line
+	}
+	return listed, minors
 }
 
 // newerPatch returns the highest release with pinned's major and minor version
