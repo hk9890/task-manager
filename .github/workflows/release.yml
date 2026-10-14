@@ -135,6 +135,11 @@ jobs:
           args: release --clean ${{ github.event_name != 'push' && '--snapshot' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A release builds what `go install …@vX.Y.Z` builds: the SDK from its
+          # published tag, not the in-tree one the committed go.work wires in.
+          # A dry run keeps the workspace, because between releases main may use
+          # SDK code that is not published yet. An empty GOWORK is the default.
+          GOWORK: ${{ github.event_name == 'push' && 'off' || '' }}
           # GORELEASER_CURRENT_TAG and GORELEASER_PREVIOUS_TAG come from the
           # step above, via $GITHUB_ENV.
 

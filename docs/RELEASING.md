@@ -22,8 +22,9 @@ tag — there is nothing to build).
 - The CLI module **depends on the SDK by version** (`require …/sdk vX.Y.Z`, no
   `replace`). Local development uses the committed `go.work` workspace, so the CLI
   builds against the in-tree SDK; released builds and downstream `go install`
-  ignore `go.work` and resolve the SDK from its published `sdk/vX.Y.Z` tag. **That
-  is why the SDK tag must be pushed before the CLI tag** (see step 4).
+  ignore `go.work` and resolve the SDK from its published `sdk/vX.Y.Z` tag
+  (`release.yml` sets `GOWORK=off` on a tag push; a dry run keeps the workspace).
+  **That is why the SDK tag must be pushed before the CLI tag** (see step 4).
 
 ## Cutting a release
 
@@ -66,8 +67,9 @@ on a clean, up-to-date tree.
    ```
 
    The pin is an ordinary code change: land it via PR, never directly on `main`
-   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). Both tags are cut on the merged
-   `main` commit.
+   ([CHANGE-WORKFLOW.md](CHANGE-WORKFLOW.md)). The SDK tag goes on the `main`
+   commit before the pin, and the CLI tag (step 6) on the merged pin commit, so
+   no SDK change may land between the two.
 
    Then confirm the pin actually resolves:
 
@@ -143,7 +145,8 @@ does not say it.
   ``**`taskmgr tree` prints the parent and blocker graph.**`` Then say what it was
   before, and name the flag, JSON key or message the user needs.
 - Open a change that can break a caller with `**Action required for <who>:**`, and
-  say what to run or write in its place.
+  say what to run or write in its place. A change to a release file — the SBOM or
+  signature format, an archive name — is one: its caller is whoever parses it.
 - Take each command, key and message from the code at the tag, not from the commit
   subject: a later commit in the range can have reworded it.
 
@@ -162,7 +165,8 @@ goreleaser release --snapshot --clean --skip=sign,sbom    # build every target i
 
 `--skip=sign,sbom` matches `release.yml`'s snapshot path: those steps need `cosign`
 and `syft` on `PATH`, which snapshot validation does not install. Drop the flag only
-if you have both.
+if you have both. Because the PR job skips them, a PR that changes `sboms:` or
+`signs:` links a `workflow_dispatch` dry run on its head commit.
 
 **Signing is not covered by either of those.** Keyless cosign needs an `id-token`
 from GitHub's OIDC provider, which no local run has and which the PR job must never
