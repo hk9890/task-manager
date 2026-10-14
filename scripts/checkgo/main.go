@@ -15,7 +15,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command checkgo fails when the Go toolchain that go.work pins is behind the
-// newest patch release of its minor version.
+// newest patch release of its minor version, or when go.dev does not list that
+// minor version as supported.
 //
 // The `toolchain` line in go.work is the one Go pin: setup-go reads it in CI and
 // the release, mise reads it locally (.mise.toml enables Go's version files, and
@@ -50,6 +51,9 @@ func main() {
 	releases, err := stableReleases(releasesURL)
 	if err != nil {
 		fail(err)
+	}
+	if !listsMinor(pinned, releases) {
+		fail(fmt.Errorf("go.work pins go%s, whose minor version go.dev does not list as supported; set the toolchain line in go.work to a supported release: go%s", pinned, strings.Join(releases, ", go")))
 	}
 	if newer, ok := newerPatch(pinned, releases); ok {
 		fail(fmt.Errorf("go.work pins go%s, but go%s is released; set `toolchain go%s` in go.work", pinned, newer, newer))
@@ -110,6 +114,19 @@ func stableReleases(url string) ([]string, error) {
 		return nil, fmt.Errorf("GET %s: the feed lists no stable release", url)
 	}
 	return versions, nil
+}
+
+// listsMinor reports whether releases hold a release of pinned's major and minor
+// version. The feed lists only supported minors, so a pin whose minor is missing
+// gets no security releases from it.
+func listsMinor(pinned string, releases []string) bool {
+	line, _, _ := splitPatch(pinned)
+	for _, r := range releases {
+		if rLine, _, ok := splitPatch(r); ok && rLine == line {
+			return true
+		}
+	}
+	return false
 }
 
 // newerPatch returns the highest release with pinned's major and minor version

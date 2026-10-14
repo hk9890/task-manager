@@ -16,8 +16,9 @@
 
 package main
 
-// main_test.go — the two decisions the check makes: which version go.work pins,
-// and whether a release is a newer patch of that version's minor.
+// main_test.go — the three decisions the check makes: which version go.work
+// pins, whether go.dev still releases that version's minor, and whether a
+// release is a newer patch of it.
 
 import "testing"
 
@@ -59,7 +60,7 @@ func TestNewerPatch_ComparesOnlyTheSameMinorByNumber(t *testing.T) {
 		{"1.27.1", "1.27.2", true}, // a patch behind
 		{"1.26.3", "1.26.9", true}, // the older supported minor, behind
 		{"1.26.9", "", false},      // a newer minor exists: not an update
-		{"1.25.4", "", false},      // a minor the feed no longer lists
+		{"1.25.4", "", false},      // a minor the feed no longer lists: listsMinor fails it
 		{"1.27.10", "", false},     // patch compared as a number, not as text
 		{"1.27", "", false},        // not major.minor.patch
 		{"1.27rc1", "", false},     // not major.minor.patch
@@ -76,5 +77,24 @@ func TestNewerPatch_PicksTheHighest(t *testing.T) {
 	got, behind := newerPatch("1.27.0", []string{"1.27.1", "1.27.3", "1.27.2"})
 	if got != "1.27.3" || !behind {
 		t.Fatalf("newerPatch = %q, %v; want 1.27.3, true", got, behind)
+	}
+}
+
+func TestListsMinor_ListsOnlyTheFeedsMinors(t *testing.T) {
+	releases := []string{"1.27.2", "1.26.9"}
+	cases := []struct {
+		pinned string
+		listed bool
+	}{
+		{"1.27.2", true},
+		{"1.27.0", true},  // behind, but supported: newerPatch reports it
+		{"1.26.3", true},  // the older supported minor
+		{"1.25.4", false}, // end of support
+		{"1.28.0", false}, // newer than the feed knows
+	}
+	for _, c := range cases {
+		if got := listsMinor(c.pinned, releases); got != c.listed {
+			t.Errorf("listsMinor(%q) = %v; want %v", c.pinned, got, c.listed)
+		}
 	}
 }
