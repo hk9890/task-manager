@@ -3,7 +3,7 @@
 #
 # Validate locally without publishing:
 #   goreleaser check
-#   goreleaser release --snapshot --clean
+#   goreleaser release --snapshot --clean --skip=sign,sbom
 #
 # Note: local dev uses a go.work workspace, but release builds (and downstream
 # `go install`) ignore go.work and resolve the SDK from its published
