@@ -1145,6 +1145,28 @@ is that a caller who marshals an issue and writes the bytes into the hot
 directory themselves can produce an oversized file; going through `Store` is what
 maintains the invariant.
 
+### The config types and their YAML library
+
+`Config`, `GlobalConfig` and `PackageRef` carry their own YAML methods, written
+against `go.yaml.in/yaml/v3`:
+
+```go
+func (c *Config) UnmarshalYAML(node *yaml.Node) error
+func (g *GlobalConfig) UnmarshalYAML(node *yaml.Node) error
+func (r *PackageRef) UnmarshalYAML(node *yaml.Node) error
+func (r PackageRef) MarshalYAML() (any, error)
+```
+
+They model the `use:` list by hand: a `use:` that is not a list, or an entry that
+is not a mapping, is recorded as a defect instead of failing the decode, and a
+malformed entry is written back exactly as it was read. Only `go.yaml.in/yaml/v3`
+calls these methods. Any other YAML library, `gopkg.in/yaml.v3` included, skips
+them with no error: a decode fails on an entry that is not a mapping and records
+no defect, and an encode writes the fields of the library's node type in place of
+a malformed entry. Read and write these files through `Store`,
+`LoadGlobalConfig` and `SaveGlobalConfig`, or decode them with
+`go.yaml.in/yaml/v3`.
+
 ---
 
 ## 6. Errors & validation
