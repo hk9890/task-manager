@@ -1145,6 +1145,40 @@ is that a caller who marshals an issue and writes the bytes into the hot
 directory themselves can produce an oversized file; going through `Store` is what
 maintains the invariant.
 
+### The config types and their YAML library
+
+`Config`, `GlobalConfig` and `PackageRef` carry their own YAML methods, written
+against `go.yaml.in/yaml/v3`:
+
+```go
+func (c *Config) UnmarshalYAML(node *yaml.Node) error
+func (g *GlobalConfig) UnmarshalYAML(node *yaml.Node) error
+func (r *PackageRef) UnmarshalYAML(node *yaml.Node) error
+func (r PackageRef) MarshalYAML() (any, error)
+```
+
+They model the `use:` list by hand, so a hand-edited config file never fails the
+decode: a `use:` that is not a list, and the withdrawn `hooks:` key, are recorded
+as defects of the file; an entry that is not a mapping, or a bare `-`, is carried
+as a malformed entry, reported at the write and written back exactly as it was
+read. The two directions differ under any other YAML library, `gopkg.in/yaml.v3`
+included:
+
+- **Decode.** The `UnmarshalYAML` methods take a `go.yaml.in/yaml/v3` node, so
+  another library does not call them, and records no defect. Its decode fails on
+  a `use:` that is not a list and on an entry that is not a mapping; it drops a
+  bare `-` without an error, so the next write deletes it from the file; and it
+  ignores a `hooks:` key.
+- **Encode.** `PackageRef.MarshalYAML` names no library type, so `gopkg.in/yaml.v3`
+  and `gopkg.in/yaml.v2` call it. For a malformed entry it returns a
+  `go.yaml.in/yaml/v3` node, which those libraries write field by field in place
+  of the entry.
+
+Read and write a store's `config.yaml` and the per-user
+`<taskmgr home>/config.yaml` through `Store`, `LoadGlobalConfig`,
+`UpdateGlobalConfig` and `SaveGlobalConfig`, or decode them with
+`go.yaml.in/yaml/v3`.
+
 ---
 
 ## 6. Errors & validation
