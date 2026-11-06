@@ -473,6 +473,32 @@ func TestEval_Updated_LT(t *testing.T) {
 	}
 }
 
+// TestEval_Date_LE verifies that <= on a present timestamp matches an earlier
+// and an equal date, and rejects a later one, for every date field.
+func TestEval_Date_LE(t *testing.T) {
+	bound, _ := time.Parse("2006-01-02", "2026-01-01")
+	cases := []struct {
+		name string
+		t    time.Time
+		want bool
+	}{
+		{"earlier", bound.AddDate(0, 0, -1), true},
+		{"equal", bound, true},
+		{"later", bound.AddDate(0, 0, 1), false},
+	}
+	for _, field := range []string{"created", "updated", "closed"} {
+		p := mustCompile(t, field+` <= "2026-01-01"`)
+		for _, c := range cases {
+			t.Run(field+"/"+c.name, func(t *testing.T) {
+				r := row(map[string]query.Value{field: dateVal(c.t)}, false, false)
+				if got := p.Match(r); got != c.want {
+					t.Errorf("%s <= 2026-01-01 on %s date: got %v, want %v", field, c.name, got, c.want)
+				}
+			})
+		}
+	}
+}
+
 func TestEval_Closed_CompareFalseWhenUnset(t *testing.T) {
 	// closed comparisons must be false when the issue has no closed timestamp
 	// QUERY-SPEC §2: "On an issue with no closed timestamp, every closed comparison is false."
