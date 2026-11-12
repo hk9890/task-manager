@@ -31,7 +31,7 @@ import (
 
 // ── L1: the machine-ID rules ─────────────────────────────────────────────────
 
-func TestDeriveMachineID(t *testing.T) {
+func TestDeriveMachineID_NormalisesHostnames(t *testing.T) {
 	for _, tc := range []struct{ host, want string }{
 		{"laptop", "laptop"},
 		{"Hans-Laptop.local", "hans-laptop"},
@@ -49,7 +49,7 @@ func TestDeriveMachineID(t *testing.T) {
 	}
 }
 
-func TestValidMachineID(t *testing.T) {
+func TestValidMachineID_EnforcesGrammar(t *testing.T) {
 	for _, tc := range []struct {
 		id   string
 		want bool
