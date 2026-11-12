@@ -599,15 +599,19 @@ Make `<central_root>/stores/` a git repository that publishes to `url`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--remote` | — (required) | The git URL to publish to. It becomes the remote `origin`. |
+| `--remote` | — (required) | The git URL to publish to. It becomes the remote `origin`. A relative local path is made absolute against the working directory first: git runs in the stores directory and would resolve it there. A URL with a scheme or in scp form (`host:path`) is kept as typed. |
 
 1. Read the machine ID. An invalid one exits `1` before anything is created.
 2. Create `<central_root>/stores/` when it is missing.
-3. When it holds no `.git`, run `git init` with the initial branch `machine/<machine-id>`.
-   When it does, its current branch must be that branch, as for `sync` below.
+3. When it holds no `.git`, run `git init` and point the unborn `HEAD` at
+   `machine/<machine-id>` (`git symbolic-ref`, not `--initial-branch`, which needs git
+   2.28). When it does, its current branch must be that branch, as for `sync` below.
 4. Add `origin` with `url`. An `origin` that already has `url` is left alone; one with
    another URL exits `1` naming both and is **not** overwritten — changing where a
-   machine publishes is the user's call, made with `git remote set-url`.
+   machine publishes is the user's call. The message names `git remote remove origin`
+   followed by `init` again, not `git remote set-url`: removing the remote also removes
+   its remote-tracking ref, which `sync` reads as what was last published (step 3 below),
+   so the next sync pushes the whole branch to the new remote.
 5. Write `.gitignore` when it is absent. A file that is already there is kept as it is,
    so an edit the user made survives a second init.
 
@@ -637,7 +641,7 @@ Commit what changed under `<central_root>/stores/` and push it to `machine/<mach
    `git branch -m` that moves the work tree to the new ID.
 2. **Commit.** `git add --all`. When nothing is staged, no commit is made. Otherwise one
    commit with the message `taskmgr sync: <machine-id>`.
-3. **Push.** `git push --set-upstream origin machine/<machine-id>`, only when `HEAD`
+3. **Push.** `git push origin machine/<machine-id>`, only when `HEAD`
    differs from the remote-tracking ref the last successful push left — or there is no
    such ref yet. The branch has one writer, so that ref records what the remote held
    after the last push, and a sync with nothing new reaches no network. The cost is
@@ -647,12 +651,26 @@ Commit what changed under `<central_root>/stores/` and push it to `machine/<mach
    The human summary therefore says "nothing new since its last push", not that the
    remote is up to date.
 
-**The commit is made unattended.** It is run with `user.name=taskmgr`,
-`user.email=taskmgr@<machine-id>`, `commit.gpgsign=false` and `--no-verify`; the push
-also takes `--no-verify`. Both also take `core.hooksPath=/dev/null`: `--no-verify` skips
-only some hooks, and a `prepare-commit-msg`, `post-commit` or `reference-transaction`
-hook from the user's global `core.hooksPath` would otherwise run, and could fail, in the
-stores' work tree. The user's own git identity is deliberately not used. A sync
+**Git runs unattended and in the stores' repository only.** Every git command `sync` and
+`sync init` run:
+
+- runs without the variables `git rev-parse --local-env-vars` lists (`GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the rest). A sync started from inside another
+  repository's git hook inherits them, and they would point `git add` and `git commit`
+  at that repository's index instead of the stores';
+- takes the identity `taskmgr <machine-id@taskmgr.invalid>` through `GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. Git ranks these
+  variables above any config, so a value the user exports is replaced, not merely
+  outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be
+  delivered to;
+- takes `core.hooksPath=/dev/null`, `core.excludesFile=/dev/null`,
+  `commit.gpgSign=false` and `push.gpgSign=false`. `--no-verify`, which the commit and
+  the push also take, skips only some hooks; a `prepare-commit-msg` or `post-commit`
+  hook from a global `core.hooksPath` would otherwise run, and could fail, in the stores'
+  work tree. A global excludes file could silently keep store files out of the mirror,
+  and signing needs a key or a prompt.
+
+The user's own git identity is deliberately not used. A sync
 commit is a snapshot, not an authored change — who made each change is already in the
 issue's `creator`, `agent` and comment fields (TASK-STORAGE-SPEC §4.3, §4.4) — and a fixed
 identity means `sync` needs no git setup on the machine and no signing key, which is what
@@ -668,13 +686,21 @@ exits `1` saying exactly that, and tells the user to pick another `machine_id`
 would delete the other writer's snapshots. A clash is found only by a sync that pushes,
 so a machine with nothing new to publish reports it at its next change.
 
-**No store lock is taken.** The engine replaces every file atomically, so git never reads
-a torn file, and holding a store's lock across a network call would stall every writer
-on it for as long as the remote takes. The cost is accepted: a snapshot taken during a
-write that touches several files can capture the middle of it — a close caught with the
-issue in both partitions, or a `.md` beside the sidecar it is about to replace. The next
-sync publishes the settled state, and a reader of the mirror sees one issue, because
-reads prefer the hot copy and dedup by ID (TASK-STORAGE-SPEC §7).
+**No store lock is taken.** Holding a store's lock across a network call would stall
+every writer on it for as long as the remote takes. The cost is accepted: a snapshot
+taken during a write can capture the middle of it. Issue files are replaced atomically,
+so none is torn, but:
+
+- a write that touches several files can be caught half done — a close with the issue
+  in both partitions, a reopen with it in neither, a `.md` beside the sidecar it is
+  about to replace;
+- a comment sidecar is appended in place (TASK-STORAGE-SPEC §6), so its last comment
+  can be caught cut short;
+- a file renamed between git's scan of the tree and its add makes `git add` fail, and
+  `sync` exits `1` with git's message.
+
+Each is transient: the next sync publishes the settled state, or succeeds where this one
+failed. Nothing is lost from the stores themselves, which `sync` only reads.
 
 - **Output (human):** one line — the commit and the push, the push alone, or that the
   branch has nothing new since its last push.

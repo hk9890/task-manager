@@ -66,17 +66,25 @@ Run `taskmgr sync` whenever you want the mirror up to date. It commits what chan
 pushes it. With nothing new it does nothing, not even a network call. `--json` reports
 what it did, for a script that runs it.
 
-A sync that runs while a ticket is being written can publish a half-written state. That is
-harmless: the next sync publishes the finished one.
+A sync that runs while a ticket is being written can publish a half-written state, or fail
+with a message from git. Both are harmless: run it again, and it publishes the finished
+state. Your tickets on this machine are never touched; sync only reads them.
+
+Every sync commit is made as `taskmgr`, with the e-mail `<machine-id>@taskmgr.invalid`,
+whatever git identity your machine has. Your own name and e-mail never reach the
+repository.
 
 ## When sync refuses
 
 | Message says | What happened | What to do |
 |---|---|---|
 | not set up for sync | `sync init` has not run on this machine | run `taskmgr sync init --remote <url>` |
+| has no remote "origin" | the remote was removed after `sync init` | run `taskmgr sync init --remote <url>` |
+| no machine ID can be derived from the hostname | this machine's hostname gives no usable name | set one with `taskmgr config set machine_id <id> --global` |
+| is not on a branch | the stores' git work tree was checked out on a single commit by hand | check out `machine/<machine-id>` again with `git checkout`, as the message names |
 | another machine publishes under the machine ID | two machines use one name, or this machine was set up again from scratch | pick a new name with `taskmgr config set machine_id <id> --global`, run the `git branch -m` the message prints, then `taskmgr sync` |
 | machine_id changed since 'taskmgr sync init' | you renamed the machine after setting it up | set the old name back, or run the `git branch -m` the message prints |
-| already publishes to | `sync init` was given a different URL from the first time | change the URL with `git remote set-url`, as the message shows, if that is what you want |
+| already publishes to | `sync init` was given a different URL from the first time | to publish to the new URL, run the `git remote remove origin` the message prints, then the same `sync init` again |
 | invalid machine_id | the name breaks the rule in step 1 | set a valid name |
 
 `sync` never overwrites what is on the remote. When it refuses, the remote still holds

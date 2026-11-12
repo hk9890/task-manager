@@ -128,8 +128,18 @@ func initSync(url string) error {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
 
+	url, err = absRemote(url)
+	if err != nil {
+		return err
+	}
+
+	// `git init --initial-branch` needs git 2.28; pointing an unborn HEAD at
+	// the branch works on every version.
 	if _, err := os.Stat(filepath.Join(dir, ".git")); errors.Is(err, os.ErrNotExist) {
-		if err := runGit(dir, "init", "--quiet", "--initial-branch="+branch); err != nil {
+		if _, err := syncGit(dir, id, "init", "--quiet"); err != nil {
+			return err
+		}
+		if _, err := syncGit(dir, id, "symbolic-ref", "HEAD", "refs/heads/"+branch); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -139,16 +149,16 @@ func initSync(url string) error {
 		return err
 	}
 
-	if cur, err := gitOutput(dir, "config", "--get", "remote."+syncRemote+".url"); err != nil {
-		if !gitExited(err) {
+	if cur, err := syncGit(dir, id, "config", "--get", "remote."+syncRemote+".url"); err != nil {
+		if !gitAbsent(err) {
 			return err
 		}
-		if err := runGit(dir, "remote", "add", syncRemote, url); err != nil {
+		if _, err := syncGit(dir, id, "remote", "add", syncRemote, url); err != nil {
 			return err
 		}
 	} else if cur != url {
-		return fmt.Errorf("%s already publishes to %s, not %s; change it with 'git -C %s remote set-url %s %s' if that is what you want",
-			dir, cur, url, dir, syncRemote, url)
+		return fmt.Errorf("%s already publishes to %s, not %s; to publish to %s instead, run 'git -C %s remote remove %s' and then this command again",
+			dir, cur, url, url, dir, syncRemote)
 	}
 
 	ignore := filepath.Join(dir, ".gitignore")
@@ -169,8 +179,9 @@ func initSync(url string) error {
 }
 
 // runSync commits what changed under the central stores directory and pushes
-// it. No store lock is taken: git reads files the engine replaces atomically,
-// and holding a lock across a network call would stall every writer on it.
+// it. No store lock is taken: holding one across a network call would stall
+// every writer on it, and what a snapshot caught mid-write costs is stated in
+// CLI-SPEC §2.5.
 func runSync() error {
 	id, err := machineID()
 	if err != nil {
@@ -184,8 +195,8 @@ func runSync() error {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
 		return fmt.Errorf("%s is not set up for sync; run 'taskmgr sync init --remote <url>' first", dir)
 	}
-	if _, err := gitOutput(dir, "config", "--get", "remote."+syncRemote+".url"); err != nil {
-		if !gitExited(err) {
+	if _, err := syncGit(dir, id, "config", "--get", "remote."+syncRemote+".url"); err != nil {
+		if !gitAbsent(err) {
 			return err
 		}
 		return fmt.Errorf("%s has no remote %q; run 'taskmgr sync init --remote <url>' first", dir, syncRemote)
@@ -195,17 +206,15 @@ func runSync() error {
 	}
 
 	out := syncDTO{Machine: id, Branch: branch}
-	if err := runGit(dir, "add", "--all"); err != nil {
+	if _, err := syncGit(dir, id, "add", "--all"); err != nil {
 		return err
 	}
-	staged, err := gitOutput(dir, "diff", "--cached", "--name-only")
-	if err != nil {
-		return err
-	}
-	if staged != "" {
-		if err := runGit(dir, "-c", noHooks,
-			"-c", "user.name=taskmgr", "-c", "user.email=taskmgr@"+id, "-c", "commit.gpgsign=false",
-			"commit", "--quiet", "--no-verify", "-m", "taskmgr sync: "+id); err != nil {
+	if _, err := syncGit(dir, id, "diff", "--cached", "--quiet"); err != nil {
+		if !gitAbsent(err) {
+			return err
+		}
+		// Exit 1 from diff --quiet: something is staged.
+		if _, err := syncGit(dir, id, "commit", "--quiet", "--no-verify", "-m", "taskmgr sync: "+id); err != nil {
 			return err
 		}
 		out.Committed = true
@@ -214,14 +223,20 @@ func runSync() error {
 	// The remote-tracking ref is what the last successful push left. Only this
 	// machine pushes the branch, so a HEAD equal to it is already published and
 	// the push — the only network call — is skipped.
-	head := revision(dir, "HEAD")
+	head, err := revision(dir, id, "HEAD")
+	if err != nil {
+		return err
+	}
 	if out.Committed {
 		out.Commit = head
 	}
-	published := revision(dir, "refs/remotes/"+syncRemote+"/"+branch)
+	published, err := revision(dir, id, "refs/remotes/"+syncRemote+"/"+branch)
+	if err != nil {
+		return err
+	}
 	if head != "" && head != published {
-		if msg, err := gitOutput(dir, "-c", noHooks, "push", "--quiet", "--no-verify", "--set-upstream", syncRemote, branch); err != nil {
-			if strings.Contains(msg, "[rejected]") {
+		if _, err := syncGit(dir, id, "push", "--quiet", "--no-verify", syncRemote, branch); err != nil {
+			if strings.Contains(err.Error(), "[rejected]") {
 				return errNotFastForward(dir, id)
 			}
 			return err
@@ -236,26 +251,80 @@ func runSync() error {
 	return nil
 }
 
-// noHooks turns off every git hook, a global core.hooksPath included:
-// --no-verify skips only pre-commit, commit-msg and pre-push, and sync must run
-// unattended.
-const noHooks = "core.hooksPath=/dev/null"
+// syncGitConfig neutralizes the user's git settings that would stop an
+// unattended sync or change what it publishes. --no-verify skips only
+// pre-commit, commit-msg and pre-push, so hooks are turned off whole, a global
+// core.hooksPath included; a global excludes file could silently keep store
+// files out of the mirror; signing would need a key or a prompt.
+var syncGitConfig = []string{
+	"-c", "core.hooksPath=/dev/null",
+	"-c", "core.excludesFile=/dev/null",
+	"-c", "commit.gpgSign=false",
+	"-c", "push.gpgSign=false",
+}
 
-// gitExited reports whether err is git itself exiting non-zero — the answer
-// "not found" to a query — rather than git failing to start at all.
-func gitExited(err error) bool {
+// gitRepoEnv is what `git rev-parse --local-env-vars` lists: the variables that
+// point git at a repository, an index or a config other than the one in its
+// working directory. A sync run from inside another repository's git hook
+// inherits them.
+var gitRepoEnv = map[string]bool{
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_CONFIG": true, "GIT_CONFIG_PARAMETERS": true,
+	"GIT_CONFIG_COUNT": true, "GIT_OBJECT_DIRECTORY": true, "GIT_DIR": true, "GIT_WORK_TREE": true,
+	"GIT_IMPLICIT_WORK_TREE": true, "GIT_GRAFT_FILE": true, "GIT_INDEX_FILE": true,
+	"GIT_NO_REPLACE_OBJECTS": true, "GIT_REPLACE_REF_BASE": true, "GIT_PREFIX": true,
+	"GIT_SHALLOW_FILE": true, "GIT_COMMON_DIR": true,
+}
+
+// syncGit runs one git command in the stores work tree dir. Its environment
+// is this process's without gitRepoEnv, with the fixed sync identity in the
+// variables git ranks above any config (CLI-SPEC §2.5).
+func syncGit(dir, id string, args ...string) (string, error) {
+	var env []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !gitRepoEnv[name] {
+			env = append(env, kv)
+		}
+	}
+	email := id + "@taskmgr.invalid"
+	env = append(env,
+		"GIT_AUTHOR_NAME=taskmgr", "GIT_AUTHOR_EMAIL="+email,
+		"GIT_COMMITTER_NAME=taskmgr", "GIT_COMMITTER_EMAIL="+email)
+	return gitOutput(dir, env, append(append([]string{}, syncGitConfig...), args...)...)
+}
+
+// gitAbsent reports whether err is git exiting 1: its answer "no such key" to
+// config --get, "not a symbolic ref" to symbolic-ref --quiet, "no such ref" to
+// rev-parse --verify --quiet, and "differences" to diff --quiet. Any other
+// failure — git missing, a corrupt config, a broken repository — is a real one.
+func gitAbsent(err error) bool {
 	var exit *exec.ExitError
-	return errors.As(err, &exit)
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // revision returns the commit ref names, or "" when there is none — an unborn
 // HEAD, or a branch never pushed.
-func revision(dir, ref string) string {
-	sha, err := gitOutput(dir, "rev-parse", "--verify", "--quiet", ref)
-	if err != nil {
-		return ""
+func revision(dir, id, ref string) (string, error) {
+	sha, err := syncGit(dir, id, "rev-parse", "--verify", "--quiet", ref)
+	if err != nil && gitAbsent(err) {
+		return "", nil
 	}
-	return sha
+	return sha, err
+}
+
+// absRemote makes a local-path remote absolute: git runs in the stores
+// directory, so it would resolve a relative one there, not where the user typed
+// it. A URL with a scheme, or in scp form (a ':' before any '/'), is kept as is.
+func absRemote(url string) (string, error) {
+	if filepath.IsAbs(url) || strings.Contains(url, "://") {
+		return url, nil
+	}
+	if colon := strings.Index(url, ":"); colon > 0 {
+		if slash := strings.Index(url, "/"); slash < 0 || colon < slash {
+			return url, nil
+		}
+	}
+	return filepath.Abs(url)
 }
 
 // syncSummary is the one line `sync` prints.
@@ -289,14 +358,17 @@ func errNotFastForward(dir, id string) error {
 // machine ID changed since `sync init`, and publishing would push one machine's
 // stores under another's name.
 func checkSyncBranch(dir, id string) error {
-	cur, err := gitOutput(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	// The full ref, not --short: a tag of the same name makes --short print
+	// heads/machine/<id>.
+	ref, err := syncGit(dir, id, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
-		if !gitExited(err) {
+		if !gitAbsent(err) {
 			return err
 		}
 		return fmt.Errorf("%s is not on a branch; check it out on %s", dir, machineBranch(id))
 	}
-	if cur == machineBranch(id) {
+	cur := strings.TrimPrefix(ref, "refs/heads/")
+	if ref == "refs/heads/"+machineBranch(id) {
 		return nil
 	}
 	return fmt.Errorf("%s is on branch %s, but this machine's ID is %q (branch %s): machine_id changed since 'taskmgr sync init'. "+

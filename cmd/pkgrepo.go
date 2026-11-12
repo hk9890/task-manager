@@ -30,6 +30,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -443,25 +444,34 @@ func removeArgs(ref tasks.PackageRef) string {
 // missing key, a diverged branch are all its message to give — so it is carried
 // into the error rather than replaced with a summary of it.
 func runGit(dir string, args ...string) error {
-	_, err := gitOutput(dir, args...)
+	_, err := gitOutput(dir, nil, args...)
 	return err
 }
 
-// gitOutput is runGit for a command whose output the caller reads: it returns
-// git's combined output, trimmed, on success and failure alike.
-func gitOutput(dir string, args ...string) (string, error) {
+// gitOutput is runGit for a command whose output the caller reads, run with env
+// as its environment (nil: this process's). It returns git's stdout, trimmed;
+// stderr goes only into the error, so a warning git prints never becomes a
+// value the caller compares.
+func gitOutput(dir string, env []string, args ...string) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return "", fmt.Errorf("git is not on PATH: this command runs git, so git must be available")
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	raw, err := cmd.CombinedOutput()
+	cmd.Env = env
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	raw, err := cmd.Output()
 	out := strings.TrimSpace(string(raw))
 	if err != nil {
-		if out == "" {
-			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = out
 		}
-		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
+		if msg == "" {
+			return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
 	return out, nil
 }

@@ -183,7 +183,7 @@ func TestSync_CommitsPushesAndSkipsWhatIsPublished(t *testing.T) {
 	if got := git(t, remote, "rev-parse", "machine/laptop"); got != first.Commit {
 		t.Errorf("remote branch at %s, want the commit sync reported, %s", got, first.Commit)
 	}
-	if got := git(t, stores, "log", "-1", "--format=%an <%ae> %s"); got != "taskmgr <taskmgr@laptop> taskmgr sync: laptop" {
+	if got := git(t, stores, "log", "-1", "--format=%an <%ae> %s"); got != "taskmgr <laptop@taskmgr.invalid> taskmgr sync: laptop" {
 		t.Errorf("commit = %q", got)
 	}
 
@@ -286,23 +286,82 @@ func TestSync_GitMissingIsReportedAsSuch(t *testing.T) {
 	}
 }
 
-// A hook from the user's global git config must not stop an unattended sync.
-func TestSync_GlobalHooksDoNotRun(t *testing.T) {
-	_, _, remote := syncFixture(t)
+// The user's global git config must neither stop an unattended sync (a failing
+// hook) nor change what it publishes (a global excludes file).
+func TestSync_GlobalGitConfigDoesNotApply(t *testing.T) {
+	project, stores, remote := syncFixture(t)
 	mustRun(t, "sync", "init", "--remote", remote)
+	id := strings.TrimSpace(strings.TrimPrefix(mustRun(t, "--dir", project, "create", "--title", "kept"), "Created "))
 	hooks := t.TempDir()
 	for _, hook := range []string{"prepare-commit-msg", "post-commit"} {
 		if err := os.WriteFile(filepath.Join(hooks, hook), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	excludes := filepath.Join(t.TempDir(), "ignore")
+	if err := os.WriteFile(excludes, []byte("*.md\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	global := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(global, []byte("[core]\n\thooksPath = "+hooks+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(global, []byte("[core]\n\thooksPath = "+hooks+"\n\texcludesFile = "+excludes+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", global)
 	if got := syncJSON(t); !got.Committed || !got.Pushed {
 		t.Errorf("sync with failing global hooks = %+v, want a commit, pushed", got)
+	}
+	if got := git(t, stores, "ls-files", "demo/"+id+".md"); got == "" {
+		t.Errorf("demo/%s.md is not in the snapshot: the global excludes file applied", id)
+	}
+}
+
+// A sync run from inside another repository's git hook inherits GIT_DIR and
+// GIT_INDEX_FILE, and a shell profile can export the user's identity; neither
+// may redirect the snapshot or sign it with the user's name.
+func TestSync_InheritedGitEnvironmentIsIgnored(t *testing.T) {
+	_, stores, remote := syncFixture(t)
+	mustRun(t, "sync", "init", "--remote", remote)
+	other := t.TempDir()
+	git(t, other, "init", "--quiet")
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	t.Setenv("GIT_AUTHOR_EMAIL", "someone@example.com")
+	t.Setenv("GIT_COMMITTER_EMAIL", "someone@example.com")
+	got := syncJSON(t)
+	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !got.Committed || !got.Pushed {
+		t.Fatalf("sync = %+v, want a commit, pushed", got)
+	}
+	if log := git(t, stores, "log", "-1", "--format=%ae %ce"); log != "laptop@taskmgr.invalid laptop@taskmgr.invalid" {
+		t.Errorf("commit identity = %q, want the fixed sync identity", log)
+	}
+	if _, err := os.Stat(filepath.Join(other, ".git", "index")); !os.IsNotExist(err) {
+		t.Errorf("sync wrote the other repository's index: %v", err)
+	}
+}
+
+func TestAbsRemote_ResolvesOnlyLocalRelativePaths(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ in, want string }{
+		{"./stores.git", filepath.Join(wd, "stores.git")},
+		{"stores.git", filepath.Join(wd, "stores.git")},
+		{"../a/b.git", filepath.Join(filepath.Dir(wd), "a", "b.git")},
+		{"/srv/stores.git", "/srv/stores.git"},
+		{"git@github.com:you/stores.git", "git@github.com:you/stores.git"},
+		{"https://github.com/you/stores.git", "https://github.com/you/stores.git"},
+		{"file:///srv/stores.git", "file:///srv/stores.git"},
+	} {
+		got, err := absRemote(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("absRemote(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
 	}
 }
 
