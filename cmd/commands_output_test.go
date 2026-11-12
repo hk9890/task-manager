@@ -260,6 +260,12 @@ func TestCommands_Output_EveryCommandPrintsItsDeclaredType(t *testing.T) {
 	inStore("package", "rm", "task-writing")
 	invoke("package", "repo", "rm", filepath.Base(origin))
 
+	invoke("config", "set", "machine_id", "catalog", "--global")
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	git(t, "", "init", "--quiet", "--bare", remote)
+	invoke("sync", "init", "--remote", remote)
+	invoke("sync")
+
 	for _, entry := range buildCatalog(rootCmd).Commands {
 		c, _, err := rootCmd.Find(strings.Fields(entry.Name))
 		if err != nil {

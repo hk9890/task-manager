@@ -22,7 +22,8 @@
 // to extract, so the only thing taskmgr adds over `git clone` is knowing where
 // the clone belongs and what it provides.
 //
-// git is spawned here and nowhere else. The SDK's contract stays "a directory
+// git is spawned here and by `taskmgr sync` (sync.go), through runGit and
+// gitOutput, and never by the SDK. The SDK's contract stays "a directory
 // that exists on disk", so nothing on the hook path — the resolution a create or
 // a close performs — has any notion of a network, a URL or a revision
 // (HOOK-SPEC §3.5).
@@ -442,20 +443,27 @@ func removeArgs(ref tasks.PackageRef) string {
 // missing key, a diverged branch are all its message to give — so it is carried
 // into the error rather than replaced with a summary of it.
 func runGit(dir string, args ...string) error {
+	_, err := gitOutput(dir, args...)
+	return err
+}
+
+// gitOutput is runGit for a command whose output the caller reads: it returns
+// git's combined output, trimmed, on success and failure alike.
+func gitOutput(dir string, args ...string) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
-		return fmt.Errorf("git is not on PATH: installing a package repository clones it, so git must be available")
+		return "", fmt.Errorf("git is not on PATH: this command runs git, so git must be available")
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	raw, err := cmd.CombinedOutput()
+	out := strings.TrimSpace(string(raw))
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		if out == "" {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 		}
-		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, out)
 	}
-	return nil
+	return out, nil
 }
 
 func init() {

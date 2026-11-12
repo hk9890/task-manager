@@ -25,6 +25,7 @@ func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // 
 func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
 func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
+func CentralStoresDir() (string, error)                          // <central_root>/stores, whether or not it exists
 func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
@@ -90,6 +91,11 @@ const FileExt        = ".md"         // the per-issue file extension
   override could select. Each entry carries its `Health`, classified by the same
   test resolution applies, so enumerating the registry costs one `stat` per entry
   and never reports a dangling or broken entry as usable.
+- **`CentralStoresDir`** returns `<central_root>/stores`, the directory every central
+  store lives in (CONFIG-SPEC §3). It reads the per-user config to find the central root,
+  never writes, and does not check that the directory exists. It is the whole of the
+  SDK's share of `taskmgr sync` ([CLI-SPEC](CLI-SPEC.md) §2.5): the CLI runs git in that
+  directory, so the SDK stays free of git and of any network.
 - **`DerivePrefix`** turns a project path into the default ID prefix for a store
   tracking it (CONFIG-SPEC §5): base name lowercased, non-alphanumerics stripped,
   leading digits removed, truncated to 8, falling back to `task`. `Init` and
@@ -480,6 +486,7 @@ type GlobalConfig struct {
     CentralRoot string `yaml:"central_root,omitempty"` // registry + central stores; "" = the taskmgr home
     HookTimeout string `yaml:"hook_timeout,omitempty"` // fallback limit for a store that sets none
     Use         []PackageRef `yaml:"use,omitempty"`    // hook packages applied to every store on this machine
+    MachineID   string `yaml:"machine_id,omitempty"`   // this machine's name to `taskmgr sync`; "" = derived from the hostname
 }
 
 // PackageRef is one entry of a use: list. Exactly one field is set.
@@ -553,6 +560,10 @@ from a snapshot read outside it. Both check a `use:` entry the write introduces 
 that could never resolve would fail mutations in every store on the machine, so it is
 refused at the call that caused it — and neither re-checks one already on disk, which is
 what leaves a bad entry removable.
+
+`MachineID` is carried, not used: the engine never reads it, and neither write call
+checks it. Its grammar and its hostname default (CONFIG-SPEC §2) are applied by the
+front end that publishes under it, which is `taskmgr sync` alone.
 
 ---
 

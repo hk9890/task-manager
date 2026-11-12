@@ -416,6 +416,17 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 	return out, nil
 }
 
+// CentralStoresDir returns <central_root>/stores, the directory every central
+// store lives in (CONFIG-SPEC §3), whether or not it exists. It reads the
+// per-user config to find the central root and never writes.
+func CentralStoresDir() (string, error) {
+	_, croot, err := centralPaths(vfs.NewOS(), env.NewOS())
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(croot, storesSubdir), nil
+}
+
 // InitCentral creates a central store at <central_root>/stores/<name> and
 // registers it for projectPath, in one locked operation (CONFIG-SPEC §5).
 func InitCentral(projectPath, name, prefix string, opts ...Option) (*Store, error) {

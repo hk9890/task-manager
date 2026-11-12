@@ -331,6 +331,7 @@ it is managed with `taskmgr package` (§2.3).
 | `version` | global | no | Schema version of the per-user config. |
 | `central_root` | global | yes | Directory holding the registry and central stores. Unset means the taskmgr home. Setting it does **not** move existing stores. |
 | `hook_timeout` | global | yes | Fallback limit for a store that sets none (HOOK-SPEC §3.5). |
+| `machine_id` | global | yes | This machine's name to `sync` (§2.5). Unset means one derived from the hostname. A value outside the grammar of CONFIG-SPEC §2 exits `1` and is not written. |
 
 A package cannot set `hook_timeout`; the limit bounds how long the store lock is held, so
 it is the machine owner's to set (HOOK-SPEC §3.1).
@@ -371,9 +372,9 @@ taskmgr to mediate. What these commands manage is the shared, lock-protected `us
 the merged chain that no single file shows, and the **package repositories** a machine
 installs packages from (§2.4).
 
-Installing a package repository is the one thing here that reaches a network, and it does
-so by running `git clone`. That is a deliberate exception to "taskmgr never downloads a
-package", taken because distribution was otherwise a README convention that no `--help`
+Only two kinds of command reach a network, and both do it by running git: installing or
+updating a package repository (§2.4), and `taskmgr sync` (§2.5). Installing runs
+`git clone`. That is a deliberate exception to "taskmgr never downloads a package", taken because distribution was otherwise a README convention that no `--help`
 could teach — and it is scoped so the invariant that matters survives: the network is
 reached at install time and never on the hook path, so resolving a `use:` entry during a
 `create` or a `close` still reads nothing but local directories (HOOK-SPEC §3.5).
@@ -569,6 +570,115 @@ warnings and one name in `still_used`.
 
 - **Output:** the repository that was removed, and the packages a config still uses
   (`repoRemovedDTO` in JSON, §6).
+
+---
+
+## 2.5 Publishing the central stores
+
+`taskmgr sync` publishes this machine's central stores to a git remote, as a read-only
+mirror for every other reader. What is published is `<central_root>/stores/` and nothing
+else: a project-local `.tasks/` already travels with its repository, and the registry and
+the per-user config are machine-local by construction (CONFIG-SPEC §2, §3).
+
+- **The work tree is `<central_root>/stores/` itself**, so a commit is a snapshot of the
+  stores exactly as the engine left them. History is kept: every sync that finds a change
+  is one ordinary commit.
+- **One branch per machine:** `machine/<machine-id>`, where the ID is the per-user
+  `machine_id` or its hostname default (CONFIG-SPEC §2).
+- **One writer per branch.** Only the machine with that ID pushes it, so every push is a
+  fast-forward. `sync` never merges, rebases, fetches or force-pushes. Why the design
+  stops at a mirror is [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §9.
+
+Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
+`git` must be on `PATH`; its absence is reported as such, and git's own stderr is carried
+into any other failure, as for §2.4.
+
+### `taskmgr sync init --remote <url>`
+
+Make `<central_root>/stores/` a git repository that publishes to `url`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--remote` | — (required) | The git URL to publish to. It becomes the remote `origin`. |
+
+1. Read the machine ID. An invalid one exits `1` before anything is created.
+2. Create `<central_root>/stores/` when it is missing.
+3. When it holds no `.git`, run `git init` with the initial branch `machine/<machine-id>`.
+   When it does, its current branch must be that branch, as for `sync` below.
+4. Add `origin` with `url`. An `origin` that already has `url` is left alone; one with
+   another URL exits `1` naming both and is **not** overwritten — changing where a
+   machine publishes is the user's call, made with `git remote set-url`.
+5. Write `.gitignore` when it is absent. A file that is already there is kept as it is,
+   so an edit the user made survives a second init.
+
+Running `init` again with the same remote changes nothing and exits `0`.
+
+The `.gitignore` keeps out the files the engine creates and removes on its own, because a
+snapshot of one is a state no reader can use:
+
+| Pattern | The engine's file |
+|---|---|
+| `/*/.lock` | each store's advisory write lock (TASK-STORAGE-SPEC §4.5) |
+| `.tmp-*` | the temp file of an atomic write, before its rename |
+| `/*/content/.*.incoming` | new body bytes staged before they replace a content sidecar (TASK-STORAGE-SPEC §4.6) |
+| `/.incoming-*/` | a store assembled by `store move` before it is published (CONFIG-SPEC §5) |
+
+- **Output:** the stores directory, the remote and the branch, and a `next: taskmgr sync`
+  line (`syncInitDTO` in JSON, §6).
+
+### `taskmgr sync`
+
+Commit what changed under `<central_root>/stores/` and push it to `machine/<machine-id>`.
+
+1. **Preconditions.** `<central_root>/stores/` must hold a `.git` with a remote `origin`;
+   otherwise `sync` exits `1` and names `sync init --remote <url>`. The current branch
+   must be `machine/<machine-id>`; a work tree on another branch means `machine_id`
+   changed since `init`, and `sync` exits `1` naming both branches and the
+   `git branch -m` that moves the work tree to the new ID.
+2. **Commit.** `git add --all`. When nothing is staged, no commit is made. Otherwise one
+   commit with the message `taskmgr sync: <machine-id>`.
+3. **Push.** `git push --set-upstream origin machine/<machine-id>`, only when `HEAD`
+   differs from the remote-tracking ref the last successful push left — or there is no
+   such ref yet. The branch has one writer, so that ref records what the remote held
+   after the last push, and a sync with nothing new reaches no network. The cost is
+   accepted: a remote branch deleted or a remote recreated since that push is not seen,
+   and is published again at the next change. Checking the remote on every run
+   (`git ls-remote`) was rejected because it would make every no-op sync a network call.
+   The human summary therefore says "nothing new since its last push", not that the
+   remote is up to date.
+
+**The commit is made unattended.** It is run with `user.name=taskmgr`,
+`user.email=taskmgr@<machine-id>`, `commit.gpgsign=false` and `--no-verify`; the push
+also takes `--no-verify`. Both also take `core.hooksPath=/dev/null`: `--no-verify` skips
+only some hooks, and a `prepare-commit-msg`, `post-commit` or `reference-transaction`
+hook from the user's global `core.hooksPath` would otherwise run, and could fail, in the
+stores' work tree. The user's own git identity is deliberately not used. A sync
+commit is a snapshot, not an authored change — who made each change is already in the
+issue's `creator`, `agent` and comment fields (TASK-STORAGE-SPEC §4.3, §4.4) — and a fixed
+identity means `sync` needs no git setup on the machine and no signing key, which is what
+lets it run from a timer or a service. The e-mail names the machine, so `git log` across
+branches still says where each snapshot came from.
+
+**A rejected push is a clash, not a race.** When the remote refuses the push because its
+`machine/<machine-id>` holds commits this work tree lacks, a second writer exists: another
+machine publishes under this ID, or this machine was set up again from scratch. `sync`
+exits `1` saying exactly that, and tells the user to pick another `machine_id`
+(`config set machine_id <id> --global`), move the work tree to it with
+`git branch -m machine/<id>`, and sync again. It never forces: overwriting the branch
+would delete the other writer's snapshots. A clash is found only by a sync that pushes,
+so a machine with nothing new to publish reports it at its next change.
+
+**No store lock is taken.** The engine replaces every file atomically, so git never reads
+a torn file, and holding a store's lock across a network call would stall every writer
+on it for as long as the remote takes. The cost is accepted: a snapshot taken during a
+write that touches several files can capture the middle of it — a close caught with the
+issue in both partitions, or a `.md` beside the sidecar it is about to replace. The next
+sync publishes the settled state, and a reader of the mirror sees one issue, because
+reads prefer the hot copy and dedup by ID (TASK-STORAGE-SPEC §7).
+
+- **Output (human):** one line — the commit and the push, the push alone, or that the
+  branch has nothing new since its last push.
+- **Output (JSON):** `syncDTO` (§6).
 
 ---
 
@@ -1288,6 +1398,20 @@ one is a `use:` entry that no longer resolves (§2.4), so the key is deliberatel
 `packages`: a caller reading that key as "what was removed" would take the broken
 references for cleaned-up ones.
 
+**`syncInitDTO`** — emitted by `sync init`: `{machine, branch, path, remote}`. `machine`
+is the machine ID, `branch` is `machine/<machine>`, `path` is `<central_root>/stores`, and
+`remote` is the URL `origin` publishes to.
+
+**`syncDTO`** — emitted by `sync`: `{machine, branch, committed, commit, pushed}`.
+`committed` says whether this run made a commit, and `commit` is its full SHA, omitted
+when `committed` is `false`. `pushed` says whether this run pushed; a run that made no
+commit can still push one an earlier, failed push left behind.
+
+```json
+{"machine": "laptop", "branch": "machine/laptop", "committed": true,
+ "commit": "3f9c2a1e4b7d8c6a5f0e1d2c3b4a59687f6e5d4c", "pushed": true}
+```
+
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
 the binary owns and `package` for one a package contributes; `package` and `scope`
@@ -1355,6 +1479,8 @@ taskmgr package  add <name> [--path]                       [--global]
                  repo add <url> [--as N]      # clone a package repository
                  repo list | update [N] | rm N
 taskmgr hook     list                        # the effective chain, in run order
+taskmgr sync     init --remote <url>         # make the central stores a git work tree
+taskmgr sync                                 # commit and push them to machine/<machine-id>
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]

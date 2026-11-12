@@ -13,7 +13,7 @@ system.
 
 A lean, file-based task tracker. Issues, dependencies, and ready-work computation
 live as plain files in a directory tree under version control — no database, no
-daemon, no sync engine. It deliberately implements only the small set of tracker
+daemon, no merging sync engine. It deliberately implements only the small set of tracker
 features that are actually used, and nothing more.
 
 ---
@@ -314,7 +314,29 @@ Deliberately out of scope, because they are unused weight:
   everything else, and nothing more. The store holds documents; it does not
   interpret them, rank them, or feed them to anything;
 - external tracker integrations (Jira, Linear, GitHub);
-- a database or SQL backend; a sync engine or federation;
+- a database or SQL backend;
+- a **sync engine or federation** — nothing merges one store's changes with another's,
+  and no copy of a store is writable from two machines. What is in scope is the opposite
+  shape: `taskmgr sync` publishes a machine's central stores to a git remote as a
+  **read-only mirror**, on a branch that only that machine pushes
+  ([CLI-SPEC](CLI-SPEC.md) §2.5). One writer per branch is what keeps it out of
+  sync-engine territory: every push is a fast-forward, so there is never a merge, a
+  rebase or a force-push, and a push that is not a fast-forward is a misconfiguration to
+  report, not a conflict to resolve. The cost is that a mirror cannot be edited where it
+  is read; changing a ticket means changing it on the machine that owns its store.
+  Rejected on the way there:
+  - **Merging tickets across machines.** Two writers to one issue need a merge rule per
+    field and per sidecar, and the one-writer invariant (§7) stops holding the moment a
+    store has two homes.
+  - **A server.** It is a daemon, an account and an uptime to own, for a tool whose
+    premise is plain files under existing version control.
+  - **A file-sync tool** (Syncthing, Dropbox and the like). It syncs both ways, so
+    every copy is writable and a store gains a second writer; it then resolves a
+    concurrent change with a conflict copy the engine never reads. A snapshot taken
+    mid-write is not the difference: the git mirror accepts that cost too
+    ([CLI-SPEC §2.5](CLI-SPEC.md)).
+  - **git `merge=union`.** It merges by line, so a frontmatter scalar edited on both
+    sides comes out as both values, a document the engine rejects or misreads;
 - swarms, configurable status/type catalogs, and **policy baked into the core** — rules
   like "tests must pass before close" are not engine features; they live in the hook
   extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at

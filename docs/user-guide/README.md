@@ -1,6 +1,6 @@
 # taskmgr user guide
 
-Eight pages, in reading order. Start at [Getting started](getting-started.md).
+Nine pages, in reading order. Start at [Getting started](getting-started.md).
 
 `taskmgr` is a task tracker made of files. Every issue is one Markdown file under a
 `.tasks/` directory you keep next to your code, so your tasks branch, diff, review and
@@ -19,6 +19,7 @@ catalog for a script to read.
 | Understand issues, dependencies, ready-work and documents | [Concepts](concepts.md) |
 | Select exactly the issues I mean | [Filtering and search](queries.md) |
 | Keep the tracker out of the repository, move it, or change a setting | [Where your tasks live](stores.md) |
+| Publish my central stores to a private GitHub repository | [Publishing your stores](publishing.md) |
 | Enforce a rule at close, or react to one | [Hooks](hooks.md) |
 | Point a coding agent at my tracker | [Agents](agents.md) |
 | Work out why a command refused | [Troubleshooting](troubleshooting.md) |

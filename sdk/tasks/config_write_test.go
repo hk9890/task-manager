@@ -318,6 +318,23 @@ func TestUpdateGlobalConfig_ConcurrentWritersAllSurvive(t *testing.T) {
 	}
 }
 
+func TestUpdateGlobalConfig_MachineIDRoundTrips(t *testing.T) {
+	m, e := memHome(t)
+	if err := updateGlobalConfig(m, e, func(g *GlobalConfig) error {
+		g.MachineID = "laptop"
+		return nil
+	}); err != nil {
+		t.Fatalf("updateGlobalConfig: %v", err)
+	}
+	got, err := loadGlobalConfig(m, "/home")
+	if err != nil {
+		t.Fatalf("loadGlobalConfig: %v", err)
+	}
+	if got.MachineID != "laptop" {
+		t.Fatalf("MachineID = %q after a write, want %q", got.MachineID, "laptop")
+	}
+}
+
 // TestUpdateGlobalConfig_RemovesOneOfTwoMalformedEntries is the machine-wide
 // version of the brick: an unusable package here blocks every write in every
 // store, and validating the surviving entries meant the command that removes it

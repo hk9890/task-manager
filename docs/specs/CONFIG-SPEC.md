@@ -45,6 +45,7 @@ central_root: ~/.taskmgr   # registry + central stores live here; ~ expands
 hook_timeout: 2s           # fallback limit for a store that sets none
 use:                       # hook packages applied to every store on this machine
   - name: doc-policy       # <home>/packages/<repo>/doc-policy
+machine_id: laptop         # this machine's name to `taskmgr sync`; default: the hostname
 ```
 
 | Field | Required | Notes |
@@ -53,6 +54,22 @@ use:                       # hook packages applied to every store on this machin
 | `central_root` | no | Directory holding the registry and central stores. `~` expands; a relative value resolves against the home. Defaults to the home. |
 | `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
 | `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home and stays inside it. |
+| `machine_id` | no | This machine's name to `taskmgr sync`, which publishes the central stores on the branch `machine/<machine_id>` ([CLI-SPEC](CLI-SPEC.md) §2.5). Defaults to one derived from the hostname (below). |
+
+**Machine ID.** A set `machine_id` and a derived one obey one grammar:
+`^[a-z0-9][a-z0-9-]{0,62}$` — lowercase letters, digits and `-`, a leading letter or
+digit, at most 63 characters. It is used unescaped as a git ref component and as the
+local part of the commit e-mail, and the grammar is what makes both safe. A value that
+fails it is an error naming the key: `taskmgr config set machine_id` refuses it before
+writing, and `taskmgr sync` refuses a hand-edited one where it reads it. The engine never
+reads the key.
+
+When `machine_id` is unset, the ID is derived from the hostname: lowercased, cut at the
+first `.`, every character outside `[a-z0-9-]` replaced by `-`, and leading and trailing
+`-` trimmed — `Hans-Laptop.local` becomes `hans-laptop`. A result that is empty or still
+fails the grammar is an error telling the user to set `machine_id`. The default is a
+convenience, not an identity: two machines with one hostname derive one ID, and the
+first sync after the second is set up reports the clash (CLI-SPEC §2.5).
 
 `<home>/packages` holds the installed **package repositories**, one directory each, and a
 repository's own top-level directories are the packages it provides. A `name` entry in
@@ -115,6 +132,13 @@ move plus a registry edit (§5).
         ├── comments/
         └── closed/
 ```
+
+`stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory and a
+`.gitignore` file in it (CLI-SPEC §2.5). Neither is mistaken for a store, and no store
+can take either name. Nothing lists `stores/`: every path into it is
+`stores/<store>` for a name the registry holds, and the store-name grammar below admits
+no leading `.`. The same rule keeps the `.incoming-<name>` staging directory of a move
+(§5) out of the namespace.
 
 The registry is one YAML document at `<central_root>/mapping.yaml`:
 

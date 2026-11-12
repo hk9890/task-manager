@@ -80,6 +80,11 @@ type GlobalConfig struct {
 	// config, not here.
 	Use []PackageRef `yaml:"use,omitempty"`
 
+	// MachineID names this machine to `taskmgr sync` (CONFIG-SPEC §2), which
+	// publishes the central stores on the branch machine/<MachineID>. The engine
+	// never reads it; it lives here because this is the machine's own file.
+	MachineID string `yaml:"machine_id,omitempty"`
+
 	// defects records what is wrong with this file's own package keys, on the
 	// same terms as a store config's (store.go). Here the reach is wider: a
 	// defect in this file fails mutations in every store on the machine.
