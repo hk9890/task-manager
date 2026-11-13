@@ -128,11 +128,12 @@ is diagnosed after the fact.
   publish with nothing to push logs no `push` stage. The last `publish_stage` of a run
   that never ends names the stage it hangs in.
 - **One `publish_git` per git command.** `cmd` is the subcommand (`add`, `diff`, `commit`,
-  `push`, `rev-parse`, `config`, `symbolic-ref`, `init`, `remote`); `duration_ms` is the
-  process's own wall-clock time. Exit `1` from `config --get`, `diff --quiet`,
-  `rev-parse --verify` and `symbolic-ref --quiet` is an answer — no such key, something
-  staged, no such ref, detached — and logs at debug. A push the remote rejects also
-  exits `1`, and is a failure. `stderr` is trimmed and cut at 1024 bytes.
+  `push`, `rev-parse`, `config`, `symbolic-ref`, `init`, `remote`, and after a failed push
+  `ls-remote` and `merge-base`); `duration_ms` is the process's own wall-clock time.
+  Exit `1` from `config --get`, `diff --quiet`, `rev-parse --verify`,
+  `symbolic-ref --quiet` and `merge-base --is-ancestor` is an answer — no such key,
+  something staged, no such ref, detached, not an ancestor — and logs at debug. A push the
+  remote rejects also exits `1`, and is a failure. `stderr` is trimmed and cut at 1024 bytes.
 - **`publish_lock_wait` is logged once per publish**, when its back-off on busy store
   locks reaches 5s. `store` names the store that was busy at that try, or
   `(central root)` when the registry lock was. `retries` and `lock_wait_ms` on the

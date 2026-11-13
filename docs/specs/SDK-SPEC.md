@@ -484,8 +484,8 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
 - runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
-  fails at once, as `ErrPublishAuth` (below), instead of waiting on a terminal nobody
-  watches until the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are
+  fails at once, with git's message, instead of waiting on a terminal nobody watches
+  until the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are
   deliberately not set:
   either would replace the user's own ssh setup — the command, the key, the agent — that
   the remote may need;
@@ -509,7 +509,9 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
 
   A `.gitattributes` inside `stores/` is the user's, like a `.gitignore` there, and
   applies;
-- has no timeout, except the push. Every other command is local. The push is ended after
+- has no timeout, except the two commands that reach the remote: the push, and the
+  `ls-remote` after a failed push (below), each with the same limit. Every other command
+  is local. The push is ended after
   10 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
   the seam's grace (HOOK-SPEC §7) — and the call fails with
   `push timed out after 10m0s`, followed by what git wrote to stderr before then. A publish
@@ -542,32 +544,32 @@ needs no git setup on the machine and no signing key, which is what lets it run 
 timer or a service. The e-mail names the machine, so `git log` across branches still says
 where each snapshot came from.
 
-**A rejected push is a clash, not a race.** When the remote refuses the push because its
-`machine/<machine-id>` holds commits this work tree lacks (git reports it `[rejected]`), a
-second writer exists: another machine publishes under this ID, or this machine was set up
-again from scratch. `Publish` returns `ErrMachineIDClash` with a message saying exactly
-that, telling the user to pick another `machine_id`
+**A publish decides on git's exit statuses and plumbing output, never on git's
+messages.** A message is written for a person: git translates it, and a new git release
+may reword it. So git's message is passed on to the caller, and never read.
+
+**A push to a diverged branch is a clash, not a race.** When a push ends with an exit
+status, the publish asks the remote for the branch's tip with
+`git ls-remote origin refs/heads/machine/<machine-id>`. The tip is a clash when this work
+tree does not have it (`git rev-parse --verify --quiet <tip>^{commit}` exits `1`), or
+has it off HEAD's history (`git merge-base --is-ancestor <tip> HEAD` exits `1`). Either
+way a second writer exists: another machine publishes under this ID, or this machine
+was set up again from scratch. `Publish` returns `ErrMachineIDClash` with a message
+saying exactly that, telling the user to pick another `machine_id`
 (`taskmgr config set machine_id <id> --global`), move the work tree to it with
-`git branch -m machine/<id>`, and publish again, followed by git's own message, which names
-the refs the remote refused. It never forces:
-overwriting the branch would delete the other writer's snapshots. A clash is found only
-by a publish that pushes, so a machine with nothing new reports it at its next change.
+`git branch -m machine/<id>`, and publish again, followed by git's own message. It never
+forces: overwriting the branch would delete the other writer's snapshots. A clash is
+found only by a publish that pushes, so a machine with nothing new reports it at its
+next change. The check costs one more call to the remote, and only after a failed push.
+A remote that `ls-remote` cannot reach, or with no such branch, is no clash.
 
-**A push that cannot log in is `ErrPublishAuth`.** git's message is the only signal: git
-exits `128` for every fatal push error. The messages matched are "could not read
-Username" and "could not read Password" (git found no HTTPS credentials without a
-prompt), "Authentication failed" (the remote refused them) and "Permission denied ("
-(ssh logged in with none of its methods). The message names the URL the push went to,
-from `git remote get-url --push origin`, so a `pushurl` or an `insteadOf` rewrite is
-named as git used it, and the fix that URL needs:
-
-| The push URL | The fix the message names |
-|---|---|
-| has a password in it (`https://user:token@…`) | `git remote set-url origin` with a valid token, or none: git tries only the URL's password and asks no credential helper |
-| scp form or `ssh://` | a key ssh can use with no passphrase prompt and without ssh-agent, which a timer may not reach; or an HTTPS remote |
-| any other | `gh auth setup-git` for GitHub, else a git credential helper |
-
-git's own message follows the fix.
+**Any other failed push is one error.** Its cause — no network, a login git cannot make
+without a prompt, a remote that refuses the push — is git's to tell. The error names the
+branch and the URL the push went to, from `git remote get-url --push origin`, so a
+`pushurl` or an `insteadOf` rewrite is named as git used it. It names
+`git -C <stores> push origin machine/<machine-id>` to run by hand, where git can ask what a
+sync never lets it ask, and ends with git's own message. A push that timed out or was
+killed keeps its own error (above).
 
 **A remote's credentials stay out of errors and logs.** A remote URL may carry them
 (`https://user:token@host/…`). Every error both calls return, and every record they log,
@@ -1518,18 +1520,16 @@ var (
     ErrPackageAmbiguous   // a name: entry that two installed repositories provide
     ErrNotPublishing      // stores/ has no .git, or no remote origin: run sync init
     ErrPublishBranch      // stores/ is detached, or on a branch other than machine/<machine-id>
-    ErrMachineIDClash     // the remote rejected the push: another writer of the branch
-    ErrPublishAuth        // the push could not log in to the remote
+    ErrMachineIDClash     // a failed push to a branch with a commit this work tree never made
     ErrGitMissing         // git is not on PATH
     ErrPublishBusy        // another publish or init holds the publish lock
 )
 ```
 
-The six publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
+The five publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
 command that fixes it, except `ErrPublishBusy`, which names the running publish's
-process ID and start time instead, and `ErrPublishAuth`, which names the push URL and how
-to give git or ssh credentials.
+process ID and start time instead.
 
 `ErrNotFound` is returned by every method that takes the ID of the issue to act on —
 `Get`, `Detail`, `Details`, `Comments`, `Update`, `Close`, `Reopen`, the three comment

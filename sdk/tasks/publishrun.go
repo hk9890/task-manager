@@ -247,16 +247,17 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		// The full ref on both sides: a tag of the branch's name makes the short
 		// name ambiguous, and git refuses to push it.
 		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
+			// A timeout or a kill has its own error. A push git ended with an
+			// exit status is a clash when the remote holds a commit this work
+			// tree never made; any other cause is git's to tell.
 			var g *gitError
-			if errors.As(err, &g) {
-				switch {
-				case pushRejected(g.Message):
-					return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
-				case pushAuthFailed(g.Message):
-					return PublishResult{}, errPushAuth(p.dir, p.pushURL(remote), g.Message)
-				}
+			if !errors.As(err, &g) {
+				return PublishResult{}, err
 			}
-			return PublishResult{}, err
+			if p.remoteDiverged() {
+				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			}
+			return PublishResult{}, errPushFailed(p.dir, p.branch(), p.pushURL(remote), err)
 		}
 		out.Pushed = true
 	}
@@ -351,6 +352,25 @@ func (p *publisher) branch() string { return machineBranch(p.id) }
 
 // ref is the branch's full ref name.
 func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
+
+// remoteDiverged reports whether the remote's branch holds a commit this work
+// tree never made: one it does not have, or one that is not in HEAD's
+// history. Only this machine pushes the branch, so that is a second writer.
+// It reads ls-remote's output and exit statuses only, never git's messages,
+// which are written for people and translated. A remote it cannot ask, or
+// with no such branch, has not diverged.
+func (p *publisher) remoteDiverged() bool {
+	out, err := p.gitWithin(publishPushTimeout, "ls-remote", publishRemote, p.ref())
+	tip, _, _ := strings.Cut(out, "\t")
+	if err != nil || tip == "" {
+		return false
+	}
+	if _, err := p.git("rev-parse", "--verify", "--quiet", tip+"^{commit}"); err != nil {
+		return gitAbsent(err)
+	}
+	_, err = p.git("merge-base", "--is-ancestor", tip, "HEAD")
+	return gitAbsent(err)
+}
 
 // pushURL is the URL a push of origin goes to: pushurl and the insteadOf
 // rewrites applied. It falls back to remote, origin's url, when git cannot

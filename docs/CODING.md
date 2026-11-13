@@ -32,6 +32,15 @@ seams `internal/vfs` (disk), `internal/exec` (processes: hooks and git), and `in
 none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-only:
 `cmd/` is the process boundary and reads `os` directly for args, env, and exit codes.
 
+## Reading git
+
+Code that runs git decides only on its exit status and on plumbing output (`rev-parse`,
+`ls-remote`, `symbolic-ref`, `config --get`). It never matches git's stderr or a
+porcelain message: git translates them, and a new release may reword them. git's message
+goes into an error or a log record as text to pass on, never as a value to compare.
+Where only a message would tell a case apart, ask git a plumbing question instead, as
+`remoteDiverged` does in `sdk/tasks/publishrun.go`.
+
 ## Where changes go
 
 | Change | Goes in |

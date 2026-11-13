@@ -217,34 +217,6 @@ func TestGitAbsent_OnlyAnAnswer(t *testing.T) {
 	}
 }
 
-func TestPushRejected_ReadsGitsMessage(t *testing.T) {
-	if !pushRejected(" ! [rejected]        machine/laptop -> machine/laptop (fetch first)") {
-		t.Error("a [rejected] push is not reported as rejected")
-	}
-	if pushRejected("fatal: could not read from remote repository") {
-		t.Error("an unreachable remote is reported as a rejected push")
-	}
-}
-
-func TestPushAuthFailed_ReadsGitsMessage(t *testing.T) {
-	for _, tc := range []struct {
-		msg  string
-		want bool
-	}{
-		{"fatal: could not read Username for 'https://github.com': terminal prompts disabled", true},
-		{"fatal: could not read Password for 'https://hans@github.com': terminal prompts disabled", true},
-		{"remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/hk9890/stores.git/'", true},
-		{"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", true},
-		{"git@git.example.org: Permission denied (keyboard-interactive,publickey).", true},
-		{"fatal: could not read from remote repository", false},
-		{" ! [rejected]        machine/laptop -> machine/laptop (fetch first)", false},
-	} {
-		if got := pushAuthFailed(tc.msg); got != tc.want {
-			t.Errorf("pushAuthFailed(%q) = %v, want %v", tc.msg, got, tc.want)
-		}
-	}
-}
-
 // Each pattern is built from the engine's own name for the file, so the list
 // follows a rename; tempPrefix is taken as given, not copied from the vfs seam.
 func TestPublishExcludes_BuiltFromTheEngineNames(t *testing.T) {
@@ -329,7 +301,9 @@ func TestGitAnswer_OnlyTheQuestionsThatExitOne(t *testing.T) {
 		{[]string{"diff", "--cached", "--quiet"}, true},
 		{[]string{"rev-parse", "--verify", "--quiet", "HEAD"}, true},
 		{[]string{"symbolic-ref", "--quiet", "HEAD"}, true},
+		{[]string{"merge-base", "--is-ancestor", "abc", "HEAD"}, true},
 		{[]string{"symbolic-ref", "HEAD", "refs/heads/machine/laptop"}, false},
+		{[]string{"ls-remote", "origin", "refs/heads/machine/laptop"}, false},
 		{[]string{"push", "--quiet", "--no-verify", "origin", "x:x"}, false},
 		{[]string{"commit", "--quiet", "--no-verify", "-m", ""}, false},
 		{[]string{"add", "--all"}, false},

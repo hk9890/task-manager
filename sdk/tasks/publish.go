@@ -61,13 +61,9 @@ var (
 	// ErrPublishBranch is a work tree whose HEAD is not on this machine's
 	// branch machine/<machine-id>: detached, or on another branch.
 	ErrPublishBranch = errors.New("not on this machine's branch")
-	// ErrMachineIDClash is a push the remote rejected as not a fast-forward:
-	// the branch has a second writer.
+	// ErrMachineIDClash is a failed push to a branch that holds a commit this
+	// work tree never made: the branch has a second writer.
 	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
-	// ErrPublishAuth is a push that could not authenticate: git or ssh found
-	// no credentials they can read without a prompt, or the remote refused
-	// the ones they had.
-	ErrPublishAuth = errors.New("git could not log in to the remote")
 	// ErrGitMissing is git not found on PATH.
 	ErrGitMissing = errors.New("git is not on PATH")
 	// ErrPublishBusy is another publish or init holding the publish lock. The
@@ -145,8 +141,9 @@ func redactUserinfo(s string) string { return userinfoRe.ReplaceAllString(s, "$1
 
 // gitAnswer reports whether exit 1 from git args is an answer rather than a
 // failure: "no such key" from config --get, "differences" from diff --quiet,
-// "no such ref" from rev-parse --verify, and "not a symbolic ref" from
-// symbolic-ref --quiet. It is the one place that says so: gitWithin marks
+// "no such ref" from rev-parse --verify, "not a symbolic ref" from
+// symbolic-ref --quiet, and "not an ancestor" from merge-base --is-ancestor.
+// It is the one place that says so: gitWithin marks
 // such an exit gitError.Answer, which gitAbsent reads, and logs it at debug,
 // not as a failed git run.
 func gitAnswer(args []string) bool {
@@ -163,6 +160,8 @@ func gitAnswer(args []string) bool {
 		flag = "--verify"
 	case "symbolic-ref":
 		flag = "--quiet"
+	case "merge-base":
+		flag = "--is-ancestor"
 	default:
 		return false
 	}
@@ -347,29 +346,13 @@ func (e *gitError) Error() string {
 }
 
 // gitAbsent reports whether err is an exit 1 that gitAnswer reads as an
-// answer: "no such key", "not a symbolic ref", "no such ref", "differences".
+// answer: "no such key", "not a symbolic ref", "no such ref", "differences",
+// "not an ancestor".
 // Any other failure — an exit 1 from commit or push, git missing, a corrupt
 // config, a broken repository — is a real one.
 func gitAbsent(err error) bool {
 	var g *gitError
 	return errors.As(err, &g) && g.Answer
-}
-
-// pushRejected reports whether msg, git's message from a failed push, is the
-// remote refusing it as not a fast-forward.
-func pushRejected(msg string) bool { return strings.Contains(msg, "[rejected]") }
-
-// pushAuthSigns are the messages of a push that could not authenticate. git
-// prompts are off (publishEnv), so missing HTTPS credentials end the push with
-// "could not read Username" or, for a URL that names only the user, "could not
-// read Password"; refused ones with "Authentication failed". ssh lists the
-// methods it tried after "Permission denied (", in the server's order.
-var pushAuthSigns = []string{"could not read Username", "could not read Password", "Authentication failed", "Permission denied ("}
-
-// pushAuthFailed reports whether msg, git's message from a failed push, is
-// one that could not authenticate.
-func pushAuthFailed(msg string) bool {
-	return slices.ContainsFunc(pushAuthSigns, func(sign string) bool { return strings.Contains(msg, sign) })
 }
 
 // errGitMissing is git that could not be started because it is not on PATH.
@@ -471,36 +454,23 @@ func errWrongBranch(dir, ref, id string, unborn, branchExists bool) error {
 		dir, ErrPublishBranch, branch, machineBranch(id), machineBranch(id), fix)
 }
 
-// errNotFastForward explains a rejected push and keeps git's own message,
-// which names the refs. The branch has one writer by design, so a remote that
-// holds commits this clone lacks has a second one.
+// errNotFastForward explains a push the remote's branch refused because it
+// holds a commit this work tree never made (remoteDiverged), and adds git's
+// own message, which names the refs. The branch has one writer by design, so
+// such a commit has a second one.
 func errNotFastForward(dir, id, gitMsg string) error {
-	return fmt.Errorf("%w %q: the remote rejected the push of %s because it holds commits this machine never made, so another machine uses this ID, or this machine was set up again. "+
+	return fmt.Errorf("%w %q: the remote's %s holds a commit this machine never made, so another machine uses this ID, or this machine was set up again. "+
 		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again. git said: %s",
 		ErrMachineIDClash, id, machineBranch(id), dir, redactUserinfo(gitMsg))
 }
 
-// passwordInURLRe matches a URL with a scheme that carries a password, as in
-// https://user:token@host/path.
-var passwordInURLRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://[^/@\s:]*:[^/@\s]*@`)
-
-// errPushAuth explains a push to url, the URL the push went to, that could
-// not authenticate. A publish runs unattended, from a timer, so each fix gives
-// git or ssh credentials they read without asking. The fix depends on the
-// URL: a password in it is all git tries, so no credential helper can replace
-// it; an scp-form or ssh:// URL is ssh's to log in to.
-func errPushAuth(dir, url, gitMsg string) error {
-	var fix string
-	switch {
-	case passwordInURLRe.MatchString(url):
-		fix = fmt.Sprintf("the URL carries a user and password, and git tries only those, so a credential helper cannot help. "+
-			"Put a valid token in the URL, or remove it, with 'git -C %s remote set-url origin <url>'", dir)
-	case strings.HasPrefix(url, "ssh://") || !strings.Contains(url, "://"):
-		fix = "ssh found no key the remote accepts. A sync from a timer has no terminal for a passphrase and may not reach ssh-agent, " +
-			"so give this user a key ssh can use without either, or publish to an HTTPS remote"
-	default:
-		fix = "a sync never lets git prompt, so git needs credentials it can read on its own. " +
-			"For GitHub, run 'gh auth setup-git'; for another host, set up a git credential helper"
-	}
-	return fmt.Errorf("%w %s: %s. git said: %s", ErrPublishAuth, redactUserinfo(url), fix, redactUserinfo(gitMsg))
+// errPushFailed explains a push that git ended with an exit status and that
+// is not a clash. Its cause — no network, a login git cannot make without a
+// prompt, a remote that refuses — is in git's message, which this passes on
+// and never reads. A sync runs without a terminal, so the hint is the push to
+// run by hand, where git can ask.
+func errPushFailed(dir, branch, url string, err error) error {
+	return fmt.Errorf("push of %s to %s failed. A sync never lets git prompt, so git must reach the remote and log in on its own; "+
+		"run 'git -C %s push origin %s' to see what git needs. The commit is kept, and the next sync pushes it: %w",
+		branch, redactUserinfo(url), dir, branch, err)
 }
