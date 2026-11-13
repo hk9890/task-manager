@@ -16,7 +16,7 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 ├── sdk/tasks/                    separate module — the storage engine and the public API
 │   ├── internal/vfs/             the disk seam: FS interface, osFS, and Mem for tests
 │   ├── internal/exec/            the process seam: hooks, and git for publishing
-│   ├── internal/env/             the environment seam: HOME, TASKMGR_* and the hostname
+│   ├── internal/env/             the environment seam: HOME, TASKMGR_*, the hostname and the PID
 │   ├── internal/query/           the filter-expression engine — pure, imports nothing of tasks
 │   └── internal/storetest/       fixture builder; every test store is built through it
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
@@ -73,7 +73,7 @@ Two documents under [implementation/](implementation/) orient without owning any
 ```bash
 rg -n 'Use:\s+"' cmd/                                    # every command the CLI serves
 rg -n '^func \(s \*Store\)' sdk/tasks/                   # every operation the engine offers
-rg -n '^\tErr\w+' sdk/tasks/store.go                     # the error sentinels callers match with errors.Is
+rg -n '^\tErr\w+' sdk/tasks/*.go                         # the error sentinels callers match with errors.Is
 rg -n 'kind: field' sdk/tasks/internal/query/parse.go    # every query field and the operators it allows
 rg -n 'mayImport\w+|mayDeclareStoreMethods' -A20 sdk/tasks/importboundary_test.go  # the four shell exemption lists
 rg -n '^func validateFields' -A90 sdk/tasks/validate.go  # every field constraint enforced before a write

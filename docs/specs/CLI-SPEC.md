@@ -603,7 +603,9 @@ list is SDK-SPEC's.
   `TASKMGR_LOG=debug` puts each stage, each git command and the outcome on stderr; the
   records are [MONITORING.md § Publishing](../MONITORING.md#publishing)'s. At the default
   level a failed run also writes its `publish_error` record — and a failed git command its
-  `publish_git` record — to stderr, before the `taskmgr: <message>` line.
+  `publish_git` record — to stderr, before the `taskmgr: <message>` line. The exception is
+  a refusal because another sync runs: its `publish_error` record is info, so at the
+  default level that run prints only its `taskmgr:` line.
 
 ### `taskmgr sync init --remote <url>`
 
