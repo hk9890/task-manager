@@ -237,7 +237,8 @@ enforced:
 
 1. **Acquire the store lock** — an in-process mutex, then an exclusive `flock` on
    `.tasks/.lock`; concurrent writers serialize here, whether goroutines in one
-   process or separate processes.
+   process or separate processes. A store opened `WithLockTimeout` leaves here with
+   `ErrStoreBusy` and writes nothing when the wait runs out ([SDK-SPEC](SDK-SPEC.md) §7).
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).
