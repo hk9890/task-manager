@@ -23,12 +23,14 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
@@ -267,8 +269,8 @@ func TestPublish_L3_RejectedPushNamesTheMachineIDClash(t *testing.T) {
 
 	p.create("a change")
 	_, err := p.publish()
-	if err == nil || !strings.Contains(err.Error(), `another machine publishes under the machine ID "laptop"`) {
-		t.Fatalf("publish after another push: %v, want the clash", err)
+	if !errors.Is(err, ErrMachineIDClash) || !strings.Contains(err.Error(), "[rejected]") {
+		t.Fatalf("publish after another push: %v, want the clash with git's message", err)
 	}
 	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != pushed {
 		t.Errorf("remote branch moved to %s; a rejected push must leave it at %s", got, pushed)
@@ -278,12 +280,142 @@ func TestPublish_L3_RejectedPushNamesTheMachineIDClash(t *testing.T) {
 func TestPublish_L3_ChangedMachineIDIsRefused(t *testing.T) {
 	p := newPublishL3(t)
 	p.mustInit()
+	p.mustPublish() // a branch with a commit: init re-points only an unborn HEAD
 	p.e.Host = "desktop"
-	if _, err := p.publish(); err == nil || !strings.Contains(err.Error(), "machine_id changed") || !strings.Contains(err.Error(), "machine/desktop") {
+	if _, err := p.publish(); !errors.Is(err, ErrPublishBranch) || !strings.Contains(err.Error(), "machine_id changed") || !strings.Contains(err.Error(), "machine/desktop") {
 		t.Errorf("publish on a renamed machine: %v", err)
 	}
-	if _, err := p.init(); err == nil || !strings.Contains(err.Error(), "machine_id changed") {
+	if _, err := p.init(); !errors.Is(err, ErrPublishBranch) || !strings.Contains(err.Error(), "machine_id changed") {
 		t.Errorf("init on a renamed machine: %v", err)
+	}
+}
+
+// An init that stopped after `git init` left HEAD unborn on git's default
+// branch; running init again moves it to the machine's branch.
+func TestInitPublish_L3_RepairsAnInterruptedInit(t *testing.T) {
+	p := newPublishL3(t)
+	realGit(t, p.stores, "-c", "init.defaultBranch=main", "init", "--quiet")
+	p.mustInit()
+	if got := realGit(t, p.stores, "symbolic-ref", "HEAD"); got != "refs/heads/machine/laptop" {
+		t.Errorf("HEAD = %q after init over an interrupted one, want refs/heads/machine/laptop", got)
+	}
+	if res := p.mustPublish(); !res.Pushed {
+		t.Errorf("publish after the repair = %+v, want pushed", res)
+	}
+}
+
+// A tag named like the branch makes `git push origin machine/laptop`
+// ambiguous; the full refspec still pushes the branch.
+func TestPublish_L3_TagOfTheBranchNameDoesNotStopThePush(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	p.mustPublish()
+	realGit(t, p.stores, "tag", "machine/laptop")
+	p.create("a change")
+	res := p.mustPublish()
+	if !res.Pushed {
+		t.Fatalf("publish with a tag of the branch's name = %+v, want pushed", res)
+	}
+	if got := realGit(t, p.remote, "rev-parse", "refs/heads/machine/laptop"); got != res.Commit {
+		t.Errorf("remote branch at %s, want %s", got, res.Commit)
+	}
+}
+
+// A store whose write lock another writer holds makes the publish wait for
+// it holding nothing: the central-root lock stays free for every registry
+// operation meanwhile.
+func TestPublish_L3_BusyStoreHoldsNoLockWhileWaiting(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	unlock, err := p.fs.Lock(filepath.Join(p.store.Dir(), lockFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.publish()
+		done <- err
+	}()
+	time.Sleep(4 * storeLockRetry)
+	select {
+	case err := <-done:
+		t.Fatalf("publish finished while the store was locked: %v", err)
+	default:
+	}
+	// Each retry holds the central-root lock for a moment, so one busy probe can
+	// land inside a retry; a publish that blocks under the lock is busy on every probe.
+	centralLock := filepath.Join(filepath.Dir(p.stores), centralLockName)
+	var central func() error
+	var ok bool
+	for range 10 {
+		if central, ok, err = p.fs.TryLock(centralLock); err != nil || ok {
+			break
+		}
+		time.Sleep(storeLockRetry / 5)
+	}
+	if err != nil || !ok {
+		t.Errorf("central-root lock busy on every probe while the publish waits for a store: ok %v, %v", ok, err)
+	} else if err := central(); err != nil {
+		t.Fatal(err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("publish after the store was released: %v", err)
+	}
+}
+
+// The snapshot is the engine's bytes: no line-ending conversion, no filter a
+// global attributes file names, and no fsmonitor program, which would run
+// under the store locks.
+func TestPublish_L3_GlobalConversionsAndProgramsDoNotApply(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	crlf := []byte("one\r\ntwo\r\n")
+	if err := os.WriteFile(filepath.Join(p.stores, "notes.txt"), crlf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	monitor := filepath.Join(dir, "fsmonitor")
+	if err := os.WriteFile(monitor, []byte("#!/bin/sh\ntouch "+marker+"\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	attrs := filepath.Join(dir, "attributes")
+	if err := os.WriteFile(attrs, []byte("* filter=upper\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(dir, "gitconfig")
+	config := "[core]\n\tautocrlf = true\n\tsafecrlf = true\n\tattributesFile = " + attrs + "\n\tfsmonitor = " + monitor +
+		"\n[filter \"upper\"]\n\tclean = touch " + marker + " && tr a-z A-Z\n"
+	if err := os.WriteFile(global, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	if res := p.mustPublish(); !res.Committed {
+		t.Fatalf("publish = %+v, want a commit", res)
+	}
+	if got := realGit(t, p.stores, "cat-file", "blob", "HEAD:notes.txt"); got != strings.TrimSpace(string(crlf)) {
+		t.Errorf("snapshot of notes.txt = %q, want the file's own bytes %q", got, crlf)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("a program from the user's git config ran during the publish: %v", err)
+	}
+}
+
+// A publish run from a commit or rebase hook inherits that commit's dates;
+// the snapshot must take the clock's instead.
+func TestPublish_L3_InheritedCommitDatesAreIgnored(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	t.Setenv("GIT_AUTHOR_DATE", "2001-02-03T04:05:06Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2001-02-03T04:05:06Z")
+	if res := p.mustPublish(); !res.Committed {
+		t.Fatalf("publish = %+v, want a commit", res)
+	}
+	if got := realGit(t, p.stores, "log", "-1", "--format=%ad %cd", "--date=format:%Y"); strings.Contains(got, "2001") {
+		t.Errorf("commit dates = %q, want the clock's, not the inherited 2001", got)
 	}
 }
 
@@ -293,10 +425,10 @@ func TestPublish_L3_GitMissingIsReportedAsSuch(t *testing.T) {
 	p := newPublishL3(t)
 	p.mustInit()
 	t.Setenv("PATH", t.TempDir())
-	if _, err := p.publish(); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
+	if _, err := p.publish(); !errors.Is(err, ErrGitMissing) {
 		t.Errorf("publish without git: %v", err)
 	}
-	if _, err := p.init(); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
+	if _, err := p.init(); !errors.Is(err, ErrGitMissing) {
 		t.Errorf("init without git: %v", err)
 	}
 }

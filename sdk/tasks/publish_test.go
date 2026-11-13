@@ -87,9 +87,44 @@ func TestMachineIDOf_DerivesFromTheHostname(t *testing.T) {
 	if got, err := machineIDOf("", host("Hans-Laptop.local", nil)); err != nil || got != "hans-laptop" {
 		t.Errorf("derived = %q, %v; want hans-laptop", got, err)
 	}
-	for _, h := range []func() (string, error){host("___", nil), host("", fmt.Errorf("no hostname"))} {
-		if _, err := machineIDOf("", h); err == nil || !strings.Contains(err.Error(), "taskmgr config set machine_id") {
-			t.Errorf("an underivable hostname gave %v, want advice to set machine_id", err)
+	if _, err := machineIDOf("", host("___", nil)); err == nil || !strings.Contains(err.Error(), "taskmgr config set machine_id") {
+		t.Errorf("an underivable hostname gave %v, want advice to set machine_id", err)
+	}
+}
+
+// A hostname that cannot be read is that failure, not a hostname "".
+func TestMachineIDOf_HostnameFailureCarriesTheCause(t *testing.T) {
+	cause := errors.New("uname: operation not permitted")
+	_, err := machineIDOf("", func() (string, error) { return "", cause })
+	if !errors.Is(err, cause) || strings.Contains(err.Error(), `hostname ""`) || !strings.Contains(err.Error(), "taskmgr config set machine_id") {
+		t.Errorf("unreadable hostname gave %v, want the cause and advice to set machine_id", err)
+	}
+}
+
+// Each setting keeps a user's git config from changing the snapshot's bytes
+// or running a program of the user's under the store locks.
+func TestPublishGitSettings_NeutralizeTheUsersConfig(t *testing.T) {
+	for _, want := range []string{
+		"core.hooksPath=/dev/null",
+		"core.excludesFile=/dev/null",
+		"core.attributesFile=/dev/null",
+		"core.autocrlf=false",
+		"core.safecrlf=false",
+		"core.fsmonitor=false",
+		"commit.gpgSign=false",
+		"push.gpgSign=false",
+	} {
+		i := slices.Index(publishGitSettings, want)
+		if i < 1 || publishGitSettings[i-1] != "-c" {
+			t.Errorf("publishGitSettings %q lack -c %s", publishGitSettings, want)
+		}
+	}
+}
+
+func TestPublishUnsetEnv_DropsTheRepositoryAndTheDates(t *testing.T) {
+	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"} {
+		if !slices.Contains(publishUnsetEnv, name) {
+			t.Errorf("publishUnsetEnv %q lacks %s", publishUnsetEnv, name)
 		}
 	}
 }

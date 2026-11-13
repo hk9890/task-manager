@@ -110,8 +110,8 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback, `Watch` over `fsnotify`) + `Mem` (in-memory, for tests). |
-| `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs the processes the engine spawns — hooks (HOOK-SPEC), and git for publishing the central stores (SDK-SPEC §1). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout, inherited variables dropped on request) + `Fake` (scripted, for tests). |
+| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock` (`Lock` blocks, `TryLock` does not), `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback, `Watch` over `fsnotify`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs the processes the engine spawns — hooks (HOOK-SPEC), and git for publishing the central stores (SDK-SPEC §1). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout, inherited variables dropped on request, a binary missing from `PATH` told apart from any other spawn failure) + `Fake` (scripted, for tests). |
 | `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv`, `Hostname` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec, plus `RawFixture` for raw on-disk bytes. Reaches disk through the `vfs` seam, and is held to the seam rule like any other package. |
 
@@ -158,7 +158,7 @@ already on both.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
-| `publishrun.go` | `MachineID`, `InitPublish`, `Publish` (SDK-SPEC §1): runs git in the central stores' work tree via the `internal/exec` seam, writes its exclude file, and holds the central-root lock and every central store's around the commit, and the publish lock around the whole run. Declares no `*Store` method: it locks a store by its directory, as a move does. |
+| `publishrun.go` | `InitPublish`, `Publish` (SDK-SPEC §1): runs git in the central stores' work tree via the `internal/exec` seam, writes its exclude file, and holds the central-root lock and every central store's around the commit — tried without waiting, all released before it retries — and the publish lock around the whole run. Declares no `*Store` method: it locks a store by its directory, as a move does. |
 | `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)

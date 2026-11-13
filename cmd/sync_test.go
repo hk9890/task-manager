@@ -37,7 +37,7 @@ func TestSyncSummary_OneLinePerOutcome(t *testing.T) {
 		{syncDTO{Branch: "machine/laptop", Pushed: true},
 			"Nothing new to commit; pushed machine/laptop to origin"},
 		{syncDTO{Branch: "machine/laptop"},
-			"Nothing to publish: machine/laptop has nothing new since its last push to origin"},
+			"Nothing to publish: no change since the last sync"},
 	} {
 		if got := syncSummary(tc.in); got != tc.want {
 			t.Errorf("syncSummary(%+v) = %q, want %q", tc.in, got, tc.want)

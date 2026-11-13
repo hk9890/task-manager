@@ -86,7 +86,7 @@ type GlobalConfig struct {
 
 	// MachineID names this machine to Publish (CONFIG-SPEC §2), which pushes
 	// the central stores to the branch machine/<MachineID>. "" means one derived
-	// from the hostname; MachineID resolves either.
+	// from the hostname, which InitPublish and Publish do when they read it.
 	MachineID string `yaml:"machine_id,omitempty"`
 
 	// defects records what is wrong with this file's own package keys, on the

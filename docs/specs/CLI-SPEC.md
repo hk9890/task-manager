@@ -584,8 +584,11 @@ This section is the command surface over it.
 
 Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
 `git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
-`sync init` yet, another remote, another machine's branch, a rejected push — exits `1`
-with its message on stderr and prints nothing on stdout.
+`sync init` yet, another remote, a branch other than `machine/<machine-id>`, a rejected
+push — exits `1` with its message on stderr and prints nothing on stdout. A rejected push
+prints git's own message after the explanation. git runs with the user's line-ending,
+attributes, fsmonitor, hook and signing settings turned off, so the published files are
+the stores' own bytes; the list is SDK-SPEC's.
 
 ### `taskmgr sync init --remote <url>`
 
@@ -598,6 +601,8 @@ publishes to `url`.
 
 Running `init` again with the same remote changes nothing and exits `0`. Another remote
 exits `1`, and the message names `git remote remove origin` to run before `init` again.
+An `init` that stopped after creating the repository is repaired by running it again: a
+branch with no commit yet is moved to `machine/<machine-id>`.
 
 - **Output:** the stores directory, the remote and the branch, and a `next: taskmgr sync`
   line (`syncInitDTO` in JSON, §6).
@@ -606,9 +611,10 @@ exits `1`, and the message names `git remote remove origin` to run before `init`
 
 Commit what changed under `<central_root>/stores/` and push it to `machine/<machine-id>`.
 
-- **Output (human):** one line — the commit and the push, the push alone, or that the
-  branch has nothing new since its last push. It says "nothing new since its last push",
-  not that the remote is up to date: a sync with nothing new reaches no network.
+- **Output (human):** one line — the commit and the push, the push alone, or
+  `Nothing to publish: no change since the last sync`. That last line says nothing about
+  the remote, which a sync with nothing new does not reach, and stays true when nothing
+  was ever pushed.
 - **Output (JSON):** `syncDTO` (§6).
 
 ---

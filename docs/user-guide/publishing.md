@@ -63,11 +63,12 @@ or clone it: `git clone --branch machine/laptop <url>`.
 ## Everyday use
 
 Run `taskmgr sync` whenever you want the mirror up to date. It commits what changed and
-pushes it. With nothing new it does nothing, not even a network call. `--json` reports
+pushes it. With nothing new it prints `Nothing to publish: no change since the last sync` and does nothing, not even a network call. `--json` reports
 what it did, for a script that runs it.
 
 A sync never publishes a half-written ticket: while it commits, every write to your
-central stores waits, for as long as the local commit takes. The push to the remote does
+central stores waits, for as long as the local commit takes. When a write is already in
+progress, sync waits for it to finish and blocks nothing while it waits. The push to the remote does
 not hold anyone up, and two syncs started at the same time run one after the other. Your
 tickets on this machine are never changed; sync only reads them.
 
@@ -82,9 +83,12 @@ repository.
 | not set up for sync | `sync init` has not run on this machine | run `taskmgr sync init --remote <url>` |
 | has no remote "origin" | the remote was removed after `sync init` | run `taskmgr sync init --remote <url>` |
 | no machine ID can be derived from the hostname | this machine's hostname gives no usable name | set one with `taskmgr config set machine_id <id> --global` |
-| is not on a branch | the stores' git work tree was checked out on a single commit by hand | check out `machine/<machine-id>` again with `git checkout`, as the message names |
-| another machine publishes under the machine ID | two machines use one name, or this machine was set up again from scratch | pick a new name with `taskmgr config set machine_id <id> --global`, run the `git branch -m` the message prints, then `taskmgr sync` |
+| is not on a branch | the stores' git work tree was checked out on a single commit by hand | check out `machine/<machine-id>` again with the `git checkout` the message prints |
+| another machine publishes under this machine ID | two machines use one name, or this machine was set up again from scratch | pick a new name with `taskmgr config set machine_id <id> --global`, run the `git branch -m` the message prints, then `taskmgr sync`. git's own message follows, naming what the remote refused |
 | machine_id changed since 'taskmgr sync init' | you renamed the machine after setting it up | set the old name back, or run the `git branch -m` the message prints |
+| sync publishes only from machine/... | the stores were already a git repository on another branch, such as `main`, or a `sync init` stopped part-way | run what the message prints: `sync init` again, or a `git checkout` or `git branch -m` |
+| git is not on PATH | git is not installed, or not on this shell's `PATH` | install git |
+| could not run git | git is installed but could not start, for the reason the message gives | fix that reason, such as the permissions of the stores directory |
 | already publishes to | `sync init` was given a different URL from the first time | to publish to the new URL, run the `git remote remove origin` the message prints, then the same `sync init` again |
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
 

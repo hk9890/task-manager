@@ -125,7 +125,7 @@ func syncSummary(r syncDTO) string {
 	case r.Pushed:
 		return fmt.Sprintf("Nothing new to commit; pushed %s to %s", r.Branch, syncRemote)
 	default:
-		return fmt.Sprintf("Nothing to publish: %s has nothing new since its last push to %s", r.Branch, syncRemote)
+		return "Nothing to publish: no change since the last sync"
 	}
 }
 

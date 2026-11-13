@@ -91,6 +91,10 @@ type Result struct {
 	Stderr   []byte        // captured standard error
 	Duration time.Duration // wall-clock time the process ran
 	Err      error         // underlying cause for non-Completed categories (for logging)
+	// NotFound is a SpawnError whose cause is Argv[0] not found on PATH, the
+	// one spawn failure a caller can name a remedy for; any other — a working
+	// directory it cannot enter, a platform with no runner — leaves it false.
+	NotFound bool
 }
 
 // KillGrace is how long the seam waits after SIGTERM before sending SIGKILL to

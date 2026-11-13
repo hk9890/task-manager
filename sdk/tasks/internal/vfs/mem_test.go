@@ -263,6 +263,47 @@ func TestMem_Lock_MissingParent(t *testing.T) {
 	}
 }
 
+func TestMem_TryLock_BusyIsNotOK(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := m.Lock("/tasks/.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, ok, err := m.TryLock("/tasks/.lock"); ok || err != nil || u != nil {
+		t.Fatalf("TryLock on a held lock = ok %v, err %v; want not ok, no error, no unlock", ok, err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	u, ok, err := m.TryLock("/tasks/.lock")
+	if !ok || err != nil {
+		t.Fatalf("TryLock on a free lock = ok %v, err %v", ok, err)
+	}
+	if _, ok, _ := m.TryLock("/tasks/.lock"); ok {
+		t.Error("TryLock granted a lock TryLock holds")
+	}
+	if err := u(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMem_TryLock_FaultAndMissingParent(t *testing.T) {
+	m := vfs.NewMem()
+	if _, _, err := m.TryLock("/nonexistent/.lock"); !vfs.IsNotExist(err) {
+		t.Errorf("TryLock under a missing directory: %v, want not-exist", err)
+	}
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.FailOn("TryLock", "/tasks/.lock", errInjected)
+	if _, ok, err := m.TryLock("/tasks/.lock"); ok || !errors.Is(err, errInjected) {
+		t.Errorf("TryLock with a fault = ok %v, err %v; want the injected error", ok, err)
+	}
+}
+
 // TestMem_ImplementsFS verifies Mem satisfies the vfs.FS interface at compile
 // time.
 func TestMem_ImplementsFS(t *testing.T) {

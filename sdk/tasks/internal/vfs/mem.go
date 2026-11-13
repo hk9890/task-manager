@@ -472,30 +472,45 @@ func (m *Mem) RemoveAll(path string) error {
 // ENOENT there: without that check Mem would grant a lock on a store the OS
 // implementation cannot lock at all.
 func (m *Mem) Lock(path string) (func() error, error) {
-	m.mu.Lock()
+	lmu, err := m.lockMutex("Lock", path)
+	if err != nil {
+		return nil, err
+	}
+	lmu.Lock()
+	return func() error { lmu.Unlock(); return nil }, nil
+}
 
-	if err := m.checkFault("Lock", path); err != nil {
-		m.mu.Unlock()
+// TryLock is Lock without the wait: a lock already held is ok false. It
+// honours FailOn("TryLock", …) and refuses a missing parent directory as Lock
+// does.
+func (m *Mem) TryLock(path string) (func() error, bool, error) {
+	lmu, err := m.lockMutex("TryLock", path)
+	if err != nil {
+		return nil, false, err
+	}
+	if !lmu.TryLock() {
+		return nil, false, nil
+	}
+	return func() error { lmu.Unlock(); return nil }, true, nil
+}
+
+// lockMutex returns the in-process mutex for path, after the fault and
+// parent-directory checks op shares with every other method.
+func (m *Mem) lockMutex(op, path string) (*sync.Mutex, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkFault(op, path); err != nil {
 		return nil, err
 	}
 	if err := m.requireParentDir(path, "parent directory"); err != nil {
-		m.mu.Unlock()
 		return nil, fmt.Errorf("vfs.Lock open: %w", err)
 	}
-
 	lmu, ok := m.locks[path]
 	if !ok {
 		lmu = &sync.Mutex{}
 		m.locks[path] = lmu
 	}
-	m.mu.Unlock()
-
-	lmu.Lock()
-	unlock := func() error {
-		lmu.Unlock()
-		return nil
-	}
-	return unlock, nil
+	return lmu, nil
 }
 
 // Getwd returns "/" as the working directory for the in-memory filesystem.

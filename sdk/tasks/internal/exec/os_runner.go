@@ -173,6 +173,7 @@ func (osRunner) Run(spec Spec) Result {
 	if st == nil {
 		res.Category = SpawnError
 		res.Err = err
+		res.NotFound = errors.Is(err, osexec.ErrNotFound)
 		return res
 	}
 	if st.Exited() {

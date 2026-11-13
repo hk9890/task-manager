@@ -101,7 +101,7 @@ func TestSync_PrintsWhatItDid(t *testing.T) {
 	if got := git(t, remote, "rev-parse", "machine/laptop"); got != first.Commit {
 		t.Errorf("remote branch at %s, want the commit sync reported, %s", got, first.Commit)
 	}
-	if out := mustRun(t, "sync"); out != "Nothing to publish: machine/laptop has nothing new since its last push to origin\n" {
+	if out := mustRun(t, "sync"); out != "Nothing to publish: no change since the last sync\n" {
 		t.Errorf("sync with nothing new printed %q", out)
 	}
 	mustRun(t, "--dir", project, "create", "--title", "a change")
@@ -129,7 +129,7 @@ func TestSync_RejectedPushExitsOneNamingTheClash(t *testing.T) {
 	if code != 1 || out != "" {
 		t.Fatalf("sync after another push: exit %d, stdout %q; want 1 and no output", code, out)
 	}
-	for _, want := range []string{`another machine publishes under the machine ID "laptop"`, "taskmgr config set machine_id"} {
+	for _, want := range []string{`another machine publishes under this machine ID "laptop"`, "taskmgr config set machine_id", "[rejected]"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr %q does not say %q", errOut, want)
 		}

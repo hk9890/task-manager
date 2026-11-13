@@ -38,15 +38,16 @@ const publishStores = "/home/stores"
 // fakeGit answers the git a publish runs as git would for the state it holds,
 // and logs each subcommand into the log the locks are logged into.
 type fakeGit struct {
-	m       *vfs.Mem
-	log     *[]string
-	remote  string // the URL of origin; "" = no origin
-	head    string // the ref HEAD points at; "" = detached
-	staged  bool   // add --all finds a change
-	commits int
-	pushed  string // refs/remotes/origin/<branch>; "" = never pushed
-	reject  bool   // the remote refuses the push
-	fail    map[string]exec.Result
+	m        *vfs.Mem
+	log      *[]string
+	remote   string          // the URL of origin; "" = no origin
+	head     string          // the ref HEAD points at; "" = detached
+	branches map[string]bool // full refs of branches other than HEAD's that hold a commit
+	staged   bool            // add --all finds a change
+	commits  int             // commits on HEAD's branch; 0 = unborn
+	pushed   string          // refs/remotes/origin/<branch>; "" = never pushed
+	reject   bool            // the remote refuses the push
+	fail     map[string]exec.Result
 }
 
 func sha(n int) string { return fmt.Sprintf("%040d", n) }
@@ -60,6 +61,7 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 	switch args[0] {
 	case "init":
 		_ = g.m.MkdirAll(filepath.Join(spec.Dir, ".git"), 0o755)
+		g.head = "refs/heads/master"
 	case "symbolic-ref":
 		if args[1] == "HEAD" {
 			g.head = args[2]
@@ -84,11 +86,17 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 		g.commits++
 		g.staged = false
 	case "rev-parse":
-		if args[3] == "HEAD" {
+		switch ref := args[3]; {
+		case ref == "HEAD" || ref == g.head:
 			if g.commits == 0 {
 				return exec.Deny(1, "")
 			}
 			return exec.Allow(sha(g.commits) + "\n")
+		case strings.HasPrefix(ref, "refs/heads/"):
+			if !g.branches[ref] {
+				return exec.Deny(1, "")
+			}
+			return exec.Allow(sha(1) + "\n")
 		}
 		if g.pushed == "" {
 			return exec.Deny(1, "")
@@ -105,29 +113,57 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 
 // lockLog is a Mem that logs every lock taken and released: a store's by the
 // store name, the central-root lock as "central", the publish lock as
-// "publish".
+// "publish". A lock named in busy is held by another writer: TryLock logs
+// "busy <name>" and returns not ok, and Lock fails the call instead of
+// waiting forever.
 type lockLog struct {
 	*vfs.Mem
-	log *[]string
+	log  *[]string
+	busy map[string]bool
 }
 
-func (l lockLog) Lock(path string) (func() error, error) {
-	unlock, err := l.Mem.Lock(path)
-	if err != nil {
-		return nil, err
-	}
-	name := filepath.Base(filepath.Dir(path))
+func (l lockLog) lockName(path string) string {
 	switch path {
 	case filepath.Join("/home", centralLockName):
-		name = "central"
+		return "central"
 	case filepath.Join("/home", publishLockName):
-		name = "publish"
+		return "publish"
 	}
+	return filepath.Base(filepath.Dir(path))
+}
+
+func (l lockLog) logged(name string, unlock func() error) func() error {
 	*l.log = append(*l.log, "lock "+name)
 	return func() error {
 		*l.log = append(*l.log, "unlock "+name)
 		return unlock()
-	}, nil
+	}
+}
+
+func (l lockLog) Lock(path string) (func() error, error) {
+	name := l.lockName(path)
+	if l.busy[name] {
+		*l.log = append(*l.log, "wait on "+name)
+		return nil, fmt.Errorf("blocking lock on %s, which another writer holds", name)
+	}
+	unlock, err := l.Mem.Lock(path)
+	if err != nil {
+		return nil, err
+	}
+	return l.logged(name, unlock), nil
+}
+
+func (l lockLog) TryLock(path string) (func() error, bool, error) {
+	name := l.lockName(path)
+	if l.busy[name] {
+		*l.log = append(*l.log, "busy "+name)
+		return nil, false, nil
+	}
+	unlock, ok, err := l.Mem.TryLock(path)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	return l.logged(name, unlock), true, nil
 }
 
 // publishFixture registers two central stores, out of name order, on a Mem
@@ -155,7 +191,7 @@ func publishFixture(t *testing.T, initialized bool) (lockLog, env.Fake, *exec.Fa
 		}
 		g.remote, g.head, g.staged = "/remote.git", "refs/heads/machine/laptop", true
 	}
-	return lockLog{Mem: m, log: &log}, e, &exec.Fake{Func: g.run}, g
+	return lockLog{Mem: m, log: &log, busy: map[string]bool{}}, e, &exec.Fake{Func: g.run}, g
 }
 
 // subcommands returns each recorded call's git arguments after the fixed
@@ -184,7 +220,7 @@ func TestPublish_RunsGitInTheStoresWithTheFixedIdentityAndSettings(t *testing.T)
 		if !slices.Equal(c.Env, publishIdentity("laptop")) {
 			t.Errorf("git %q env = %q, want the laptop identity", c.Argv, c.Env)
 		}
-		for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS"} {
+		for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"} {
 			if !slices.Contains(c.Unset, name) {
 				t.Errorf("git %q inherits %s", c.Argv, name)
 			}
@@ -194,9 +230,21 @@ func TestPublish_RunsGitInTheStoresWithTheFixedIdentityAndSettings(t *testing.T)
 		}
 	}
 	got := subcommands(runner.Calls())
-	if !slices.Contains(got, "commit --quiet --no-verify -m taskmgr sync: laptop") ||
-		!slices.Contains(got, "push --quiet --no-verify origin machine/laptop") {
-		t.Errorf("git calls = %q, want a --no-verify commit and push", got)
+	if !slices.Contains(got, "commit --quiet --no-verify -m taskmgr sync: laptop") {
+		t.Errorf("git calls = %q, want a --no-verify commit", got)
+	}
+}
+
+// A tag named machine/laptop makes the short name ambiguous, and git refuses
+// the push; the full ref on both sides of the refspec is not.
+func TestPublish_PushesTheFullRefspec(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner); err != nil {
+		t.Fatalf("publishWith: %v", err)
+	}
+	want := "push --quiet --no-verify origin refs/heads/machine/laptop:refs/heads/machine/laptop"
+	if got := subcommands(runner.Calls()); !slices.Contains(got, want) {
+		t.Errorf("git calls = %q, want %q", got, want)
 	}
 }
 
@@ -248,6 +296,53 @@ func TestPublish_TakesTheCentralLockFirstAndNotAcrossThePush(t *testing.T) {
 	}
 	if unlock < slices.Index(log, "unlock alpha") || unlock > slices.Index(log, "git push") {
 		t.Errorf("central lock not released after the store locks and before the push: %q", log)
+	}
+}
+
+// A publish that waited for a busy store while holding the locks before it
+// would stall every writer of those stores, and the registry, for as long as
+// the busy one is held. It must release everything, wait holding nothing,
+// and try again.
+func TestPublish_BusyStoreReleasesEveryLockBeforeWaiting(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	fs.busy["beta"] = true
+	p, err := loadPublish(fs, e, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waits := 0
+	p.backoff = func() {
+		waits++
+		*g.log = append(*g.log, "backoff")
+		delete(fs.busy, "beta")
+	}
+	res, err := p.publish()
+	if err != nil || !res.Committed || !res.Pushed {
+		t.Fatalf("publish with a busy store = %+v, %v; want a commit, pushed", res, err)
+	}
+	if waits != 1 {
+		t.Errorf("backed off %d times, want once", waits)
+	}
+	log := *g.log
+	backoff := slices.Index(log, "backoff")
+	if backoff < 0 || !slices.Contains(log[:backoff], "busy beta") {
+		t.Fatalf("no back-off after beta was busy: %q", log)
+	}
+	held := map[string]bool{}
+	for _, entry := range log[:backoff] {
+		if name, ok := strings.CutPrefix(entry, "lock "); ok {
+			held[name] = true
+		} else if name, ok := strings.CutPrefix(entry, "unlock "); ok {
+			delete(held, name)
+		}
+	}
+	delete(held, "publish") // held by design across the whole run
+	if len(held) != 0 {
+		t.Errorf("held %v while waiting for beta: %q", held, log)
+	}
+	after := log[backoff:]
+	if i, j := slices.Index(after, "lock beta"), slices.Index(after, "git add"); i < 0 || j < i || !slices.Contains(after[:j], "lock central") {
+		t.Errorf("the retry did not take every lock before the add: %q", log)
 	}
 }
 
@@ -305,12 +400,16 @@ func TestPublish_PushesWhatAnEarlierRunLeftUnpushed(t *testing.T) {
 	}
 }
 
-func TestPublish_RejectedPushIsTheMachineIDClash(t *testing.T) {
+// The explanation is the engine's; which refs were refused is git's to say.
+func TestPublish_RejectedPushIsTheMachineIDClashWithGitsMessage(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.reject = true
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), `another machine publishes under the machine ID "laptop"`) {
-		t.Errorf("rejected push: %v, want the machine-ID clash", err)
+	if !errors.Is(err, ErrMachineIDClash) {
+		t.Fatalf("rejected push: %v, want ErrMachineIDClash", err)
+	}
+	if !strings.Contains(err.Error(), "[rejected]        machine/laptop -> machine/laptop (fetch first)") {
+		t.Errorf("rejected push: %v, want git's own message kept", err)
 	}
 }
 
@@ -318,7 +417,7 @@ func TestPublish_OtherPushFailureCarriesGitsMessage(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read from remote repository")}
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "could not read from remote repository") || strings.Contains(err.Error(), "another machine") {
+	if err == nil || !strings.Contains(err.Error(), "could not read from remote repository") || errors.Is(err, ErrMachineIDClash) {
 		t.Errorf("unreachable remote: %v, want git's own message", err)
 	}
 }
@@ -326,13 +425,27 @@ func TestPublish_OtherPushFailureCarriesGitsMessage(t *testing.T) {
 func TestPublish_GitMissingIsReportedAsSuch(t *testing.T) {
 	fs, e, _, _ := publishFixture(t, true)
 	missing := &exec.Fake{Func: func(exec.Spec) exec.Result {
-		return exec.Result{Category: exec.SpawnError, Err: errors.New(`exec: "git": executable file not found in $PATH`)}
+		return exec.Result{Category: exec.SpawnError, NotFound: true, Err: errors.New(`exec: "git": executable file not found in $PATH`)}
 	}}
-	if _, err := publishWith(fs, e, missing); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
-		t.Errorf("publish without git: %v", err)
+	if _, err := publishWith(fs, e, missing); !errors.Is(err, ErrGitMissing) {
+		t.Errorf("publish without git: %v, want ErrGitMissing", err)
 	}
-	if _, err := initPublishWith("/remote.git", fs, e, missing); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
-		t.Errorf("init without git: %v", err)
+	if _, err := initPublishWith("/remote.git", fs, e, missing); !errors.Is(err, ErrGitMissing) {
+		t.Errorf("init without git: %v, want ErrGitMissing", err)
+	}
+}
+
+// git that is installed but cannot be started — a work tree it cannot enter,
+// a platform with no runner — must not send the user to install it.
+func TestPublish_OtherSpawnFailureIsNotGitMissing(t *testing.T) {
+	fs, e, _, _ := publishFixture(t, true)
+	cause := errors.New("chdir /home/stores: permission denied")
+	spawn := &exec.Fake{Func: func(exec.Spec) exec.Result {
+		return exec.Result{Category: exec.SpawnError, Err: cause}
+	}}
+	_, err := publishWith(fs, e, spawn)
+	if errors.Is(err, ErrGitMissing) || !errors.Is(err, cause) || !strings.Contains(err.Error(), "could not run git") {
+		t.Errorf("publish where git cannot start: %v, want 'could not run git' with the cause", err)
 	}
 }
 
@@ -341,7 +454,7 @@ func TestPublish_OnlyExitOneReadsAsAbsent(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.fail = map[string]exec.Result{"config": exec.Deny(128, "fatal: bad config line 3")}
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "bad config line 3") || strings.Contains(err.Error(), "has no remote") {
+	if err == nil || !strings.Contains(err.Error(), "bad config line 3") || errors.Is(err, ErrNotPublishing) {
 		t.Errorf("broken config: %v, want git's error, not a missing remote", err)
 	}
 }
@@ -349,8 +462,8 @@ func TestPublish_OnlyExitOneReadsAsAbsent(t *testing.T) {
 func TestPublish_BeforeInitRunsNoGit(t *testing.T) {
 	fs, e, runner, _ := publishFixture(t, false)
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "taskmgr sync init --remote <url>") {
-		t.Errorf("publish before init: %v", err)
+	if !errors.Is(err, ErrNotPublishing) || !strings.Contains(err.Error(), "taskmgr sync init --remote <url>") {
+		t.Errorf("publish before init: %v, want ErrNotPublishing naming sync init", err)
 	}
 	if n := len(runner.Calls()); n != 0 {
 		t.Errorf("ran git %d times before init", n)
@@ -360,21 +473,56 @@ func TestPublish_BeforeInitRunsNoGit(t *testing.T) {
 func TestPublish_NoRemoteNamesInit(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.remote = ""
-	if _, err := publishWith(fs, e, runner); err == nil || !strings.Contains(err.Error(), `has no remote "origin"`) {
-		t.Errorf("publish without origin: %v", err)
+	_, err := publishWith(fs, e, runner)
+	if !errors.Is(err, ErrNotPublishing) || !strings.Contains(err.Error(), `has no remote "origin"`) {
+		t.Errorf("publish without origin: %v, want ErrNotPublishing naming origin", err)
 	}
 }
 
 func TestPublish_RefusesAnotherMachinesBranch(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
-	g.head = "refs/heads/machine/desktop"
+	g.head, g.commits = "refs/heads/machine/desktop", 1
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "machine_id changed") || !strings.Contains(err.Error(), "branch -m machine/laptop") {
-		t.Errorf("publish on another branch: %v", err)
+	if !errors.Is(err, ErrPublishBranch) || !strings.Contains(err.Error(), "machine_id changed") || !strings.Contains(err.Error(), "branch -m machine/laptop") {
+		t.Errorf("publish on another machine's branch: %v", err)
 	}
 	g.head = ""
-	if _, err := publishWith(fs, e, runner); err == nil || !strings.Contains(err.Error(), "is not on a branch") {
+	if _, err := publishWith(fs, e, runner); !errors.Is(err, ErrPublishBranch) || !strings.Contains(err.Error(), "is not on a branch") {
 		t.Errorf("publish detached: %v", err)
+	}
+}
+
+// A branch that is no machine's is not a changed machine ID: stores/ was under
+// git before the init, or an init stopped after `git init`. The message says
+// which branch it is on and the fix for the state it is in.
+func TestPublish_NonMachineBranchNamesTheFixThatFits(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		commits  int
+		branches map[string]bool
+		fix      string
+	}{
+		{"commits, no machine branch", 1, nil, "git -C /home/stores branch -m machine/laptop"},
+		{"commits, machine branch exists", 1, map[string]bool{"refs/heads/machine/laptop": true}, "git -C /home/stores checkout machine/laptop"},
+		{"unborn", 0, nil, "run 'taskmgr sync init --remote <url>' again"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, e, runner, g := publishFixture(t, true)
+			g.head, g.commits, g.branches = "refs/heads/main", tc.commits, tc.branches
+			_, err := publishWith(fs, e, runner)
+			if !errors.Is(err, ErrPublishBranch) {
+				t.Fatalf("publish on main: %v, want ErrPublishBranch", err)
+			}
+			msg := err.Error()
+			for _, want := range []string{"on branch main, not machine/laptop", "sync publishes only from machine/laptop", tc.fix} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message %q lacks %q", msg, want)
+				}
+			}
+			if strings.Contains(msg, "machine_id changed") {
+				t.Errorf("message %q blames a machine_id change", msg)
+			}
+		})
 	}
 }
 
@@ -383,8 +531,8 @@ func TestPublish_RefusesAnotherMachinesBranch(t *testing.T) {
 func TestPublish_ComparesTheFullRef(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.head = "refs/tags/machine/laptop"
-	if _, err := publishWith(fs, e, runner); err == nil || !strings.Contains(err.Error(), "machine_id changed") {
-		t.Errorf("HEAD at a tag of the branch's name: %v, want refused", err)
+	if _, err := publishWith(fs, e, runner); !errors.Is(err, ErrPublishBranch) {
+		t.Errorf("HEAD at a tag of the branch's name: %v, want ErrPublishBranch", err)
 	}
 }
 
@@ -409,6 +557,22 @@ func TestPublish_RewritesTheExcludes(t *testing.T) {
 	}
 }
 
+// A no-op publish writes nothing, the exclude file included.
+func TestPublish_CurrentExcludesAreNotRewritten(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	exclude := filepath.Join(publishStores, ".git", "info", "exclude")
+	if err := fs.MkdirAll(filepath.Dir(exclude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.WriteAtomic(exclude, publishExcludes(vfs.TempPrefix), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs.FailOn("WriteAtomic", exclude, errors.New("exclude rewritten"))
+	if _, err := publishWith(fs, e, runner); err != nil {
+		t.Errorf("publish with current excludes: %v, want no write", err)
+	}
+}
+
 // A registered store whose directory is gone has nothing to lock and must not
 // stop every other store from publishing.
 func TestPublish_SkipsTheLockOfADanglingStore(t *testing.T) {
@@ -426,7 +590,7 @@ func TestPublish_SkipsTheLockOfADanglingStore(t *testing.T) {
 
 func TestPublish_LockFailureCommitsNothing(t *testing.T) {
 	fs, e, runner, _ := publishFixture(t, true)
-	fs.FailOn("Lock", filepath.Join(publishStores, "beta", lockFileName), errors.New("ENOLCK"))
+	fs.FailOn("TryLock", filepath.Join(publishStores, "beta", lockFileName), errors.New("ENOLCK"))
 	if _, err := publishWith(fs, e, runner); err == nil || !strings.Contains(err.Error(), "ENOLCK") {
 		t.Fatalf("publish with an unlockable store: %v", err)
 	}
@@ -447,6 +611,7 @@ func TestInitPublish_CreatesTheWorkTreeOnTheMachineBranch(t *testing.T) {
 	}
 	wantCalls := []string{
 		"init --quiet",
+		"rev-parse --verify --quiet HEAD",
 		"symbolic-ref HEAD refs/heads/machine/laptop",
 		"symbolic-ref --quiet HEAD",
 		"config --get remote.origin.url",
@@ -465,6 +630,37 @@ func TestInitPublish_CreatesTheWorkTreeOnTheMachineBranch(t *testing.T) {
 	}
 	if g.remote != "/remote.git" {
 		t.Errorf("origin = %q after a second init", g.remote)
+	}
+}
+
+// An init that stopped after `git init` left HEAD unborn on git's default
+// branch; running init again re-points it instead of refusing.
+func TestInitPublish_RepointsAnUnbornHead(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, false)
+	if err := fs.MkdirAll(filepath.Join(publishStores, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g.head = "refs/heads/master"
+	if _, err := initPublishWith("/remote.git", fs, e, runner); err != nil {
+		t.Fatalf("init over an unborn HEAD on master: %v", err)
+	}
+	if g.head != "refs/heads/machine/laptop" {
+		t.Errorf("HEAD = %q, want refs/heads/machine/laptop", g.head)
+	}
+}
+
+// A HEAD with commits is the user's: init refuses it as publish does.
+func TestInitPublish_RefusesABranchWithCommits(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, false)
+	if err := fs.MkdirAll(filepath.Join(publishStores, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g.head, g.commits = "refs/heads/main", 1
+	if _, err := initPublishWith("/remote.git", fs, e, runner); !errors.Is(err, ErrPublishBranch) {
+		t.Fatalf("init over main with a commit: %v, want ErrPublishBranch", err)
+	}
+	if g.head != "refs/heads/main" {
+		t.Errorf("HEAD = %q, want it left on main", g.head)
 	}
 }
 
@@ -521,15 +717,15 @@ func TestInitPublish_EmptyRemoteIsRefused(t *testing.T) {
 	}
 }
 
-func TestMachineID_ConfiguredElseHostname(t *testing.T) {
+func TestLoadPublish_MachineIDConfiguredElseHostname(t *testing.T) {
 	fs, e, _, _ := publishFixture(t, false)
-	if id, err := machineIDWith(fs, e); err != nil || id != "laptop" {
-		t.Errorf("machine ID from the hostname = %q, %v", id, err)
+	if p, err := loadPublish(fs, e, nil); err != nil || p.id != "laptop" {
+		t.Errorf("machine ID from the hostname = %q, %v", p.id, err)
 	}
 	if err := updateGlobalConfig(fs, e, func(g *GlobalConfig) error { g.MachineID = "desk-1"; return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if id, err := machineIDWith(fs, e); err != nil || id != "desk-1" {
-		t.Errorf("machine ID from the config = %q, %v", id, err)
+	if p, err := loadPublish(fs, e, nil); err != nil || p.id != "desk-1" {
+		t.Errorf("machine ID from the config = %q, %v", p.id, err)
 	}
 }

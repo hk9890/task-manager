@@ -86,6 +86,12 @@ type FS interface {
 	// target a unix OS.
 	Lock(path string) (unlock func() error, err error)
 
+	// TryLock is Lock without the wait: when another holder has the lock it
+	// returns ok false and holds nothing, so a caller that needs several locks
+	// can release what it holds instead of waiting while it holds it. The
+	// platform contract is Lock's.
+	TryLock(path string) (unlock func() error, ok bool, err error)
+
 	// Getwd returns the current working directory.
 	Getwd() (string, error)
 

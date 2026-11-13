@@ -25,31 +25,28 @@
 // git reads every store file and writes the work tree's .git, so it runs here,
 // in the engine, through the exec seam — never from a front end. The add and
 // the commit run under the central-root lock and the write lock of every
-// registered central store; the push, the one network call, runs after all of
-// them are released. A publish lock no writer takes runs one publish at a time.
+// registered central store, taken without waiting: a busy one makes the
+// publish release them all and try again. The push, the one network call,
+// runs after all of them are released. A publish lock no writer takes runs one
+// publish at a time.
 package tasks
 
 import (
+	"bytes"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-// MachineID returns this machine's ID (CONFIG-SPEC §2): the per-user config's
-// machine_id, else one derived from the hostname. A machine_id that fails the
-// grammar is a *ValidationError naming the key.
-func MachineID() (string, error) {
-	return machineIDWith(vfs.NewOS(), env.NewOS())
-}
-
-func machineIDWith(fs vfs.FS, e env.Environment) (string, error) {
-	p, err := loadPublish(fs, e, nil)
-	return p.id, err
-}
+// storeLockRetry is how long a publish waits, holding nothing, before it tries
+// the store locks again after finding one busy.
+const storeLockRetry = 50 * time.Millisecond
 
 // InitPublish makes <central_root>/stores a git work tree on the branch
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
@@ -82,16 +79,14 @@ func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Ru
 	}
 	defer func() { _ = unlock() }()
 
-	// `git init --initial-branch` needs git 2.28; pointing an unborn HEAD at
-	// the branch works on every version.
 	if _, err := fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		if _, err := p.git("init", "--quiet"); err != nil {
 			return PublishInfo{}, err
 		}
-		if _, err := p.git("symbolic-ref", "HEAD", "refs/heads/"+p.branch()); err != nil {
-			return PublishInfo{}, err
-		}
 	} else if err != nil {
+		return PublishInfo{}, err
+	}
+	if err := p.pointUnbornHead(); err != nil {
 		return PublishInfo{}, err
 	}
 	if err := p.checkBranch(); err != nil {
@@ -130,7 +125,11 @@ func publishWith(fs vfs.FS, e env.Environment, runner exec.Runner) (PublishResul
 	if err != nil {
 		return PublishResult{}, err
 	}
-	if _, err := fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
+	return p.publish()
+}
+
+func (p publisher) publish() (PublishResult, error) {
+	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		return PublishResult{}, errNotSetUp(p.dir)
 	} else if err != nil {
 		return PublishResult{}, err
@@ -173,9 +172,12 @@ func publishWith(fs vfs.FS, e env.Environment, runner exec.Runner) (PublishResul
 		return PublishResult{}, err
 	}
 	if head != "" && head != published {
-		if _, err := p.git("push", "--quiet", "--no-verify", publishRemote, p.branch()); err != nil {
-			if gitRejected(err) {
-				return PublishResult{}, errNotFastForward(p.dir, p.id)
+		// The full ref on both sides: a tag of the branch's name makes the short
+		// name ambiguous, and git refuses to push it.
+		if _, err := p.git("push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
+			var g *gitError
+			if gitRejected(err) && errors.As(err, &g) {
+				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
 			}
 			return PublishResult{}, err
 		}
@@ -184,26 +186,24 @@ func publishWith(fs vfs.FS, e env.Environment, runner exec.Runner) (PublishResul
 	return out, nil
 }
 
-// publisher is one publish's resolved inputs: the seams, the machine ID, and
-// the central root the stores directory is under.
+// publisher is one publish's resolved inputs: the seams, the machine ID, the
+// central root the stores directory is under, and the wait between two tries
+// of the store locks, which an L2 test replaces so that it does not sleep.
 type publisher struct {
-	fs     vfs.FS
-	runner exec.Runner
-	home   string
-	croot  string
-	dir    string // <croot>/stores, the git work tree
-	id     string
+	fs      vfs.FS
+	runner  exec.Runner
+	home    string
+	croot   string
+	dir     string // <croot>/stores, the git work tree
+	id      string
+	backoff func()
 }
 
 // loadPublish reads the per-user config once for the machine ID and the
 // central root. It writes nothing, so an invalid machine ID refuses before
 // anything is created.
 func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner) (publisher, error) {
-	home, err := taskmgrHome(e)
-	if err != nil {
-		return publisher{}, err
-	}
-	cfg, err := loadGlobalConfig(fs, home)
+	home, cfg, croot, err := centralConfig(fs, e)
 	if err != nil {
 		return publisher{}, err
 	}
@@ -211,14 +211,17 @@ func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner) (publisher, e
 	if err != nil {
 		return publisher{}, err
 	}
-	croot := centralRoot(cfg, home)
 	return publisher{
 		fs: fs, runner: runner, home: home, croot: croot,
 		dir: filepath.Join(croot, storesSubdir), id: id,
+		backoff: func() { time.Sleep(storeLockRetry) },
 	}, nil
 }
 
 func (p publisher) branch() string { return machineBranch(p.id) }
+
+// ref is the branch's full ref name.
+func (p publisher) ref() string { return "refs/heads/" + p.branch() }
 
 // git runs one git command in the work tree and returns its stdout, trimmed.
 // stderr goes only into the error, so a warning git prints never becomes a
@@ -230,7 +233,7 @@ func (p publisher) git(args ...string) (string, error) {
 		Argv:  slices.Concat([]string{"git"}, publishGitSettings, args),
 		Dir:   p.dir,
 		Env:   publishIdentity(p.id),
-		Unset: gitRepoEnv,
+		Unset: publishUnsetEnv,
 	})
 	switch res.Category {
 	case exec.Completed:
@@ -243,10 +246,28 @@ func (p publisher) git(args ...string) (string, error) {
 		}
 		return "", &gitError{Args: args, ExitCode: res.ExitCode, Message: msg}
 	case exec.SpawnError:
-		return "", errGitMissing(res.Err)
+		if res.NotFound {
+			return "", errGitMissing(res.Err)
+		}
+		return "", errGitSpawn(res.Err)
 	default:
 		return "", errGitKilled(args, res.Err)
 	}
+}
+
+// pointUnbornHead points a HEAD with no commit yet at this machine's branch,
+// whatever branch it names. `git init --initial-branch` needs git 2.28, and
+// this works on every version; it also repairs an init that stopped after
+// `git init`, which left HEAD at git's default branch. An unborn HEAD has no
+// commit to lose, so re-pointing it is safe; a HEAD with commits is left to
+// checkBranch.
+func (p publisher) pointUnbornHead() error {
+	head, err := p.revision("HEAD")
+	if err != nil || head != "" {
+		return err
+	}
+	_, err = p.git("symbolic-ref", "HEAD", p.ref())
+	return err
 }
 
 // checkBranch refuses a work tree whose branch is not this machine's.
@@ -260,22 +281,39 @@ func (p publisher) checkBranch() error {
 		}
 		return errDetached(p.dir, p.id)
 	}
-	if ref != "refs/heads/"+p.branch() {
-		return errWrongBranch(p.dir, ref, p.id)
+	if ref == p.ref() {
+		return nil
 	}
-	return nil
-}
-
-// writeExcludes rewrites the work tree's .git/info/exclude from the engine's
-// own transient-file names, so the rules are current after any rename of one.
-// It is the repository's own file, never committed, so the patterns cannot be
-// edited away in a commit or travel to a reader of the mirror.
-func (p publisher) writeExcludes() error {
-	info := filepath.Join(p.dir, ".git", "info")
-	if err := p.fs.MkdirAll(info, 0o755); err != nil {
+	head, err := p.revision("HEAD")
+	if err != nil {
 		return err
 	}
-	return p.fs.WriteAtomic(filepath.Join(info, "exclude"), publishExcludes(vfs.TempPrefix), 0o644)
+	exists, err := p.revision(p.ref())
+	if err != nil {
+		return err
+	}
+	return errWrongBranch(p.dir, ref, p.id, head == "", exists != "")
+}
+
+// writeExcludes writes the work tree's .git/info/exclude from the engine's
+// own transient-file names, so the rules are current after any rename of one,
+// and writes nothing when the file already holds them. It is the repository's
+// own file, never committed, so the patterns cannot be edited away in a commit
+// or travel to a reader of the mirror.
+func (p publisher) writeExcludes() error {
+	path := filepath.Join(p.dir, ".git", "info", "exclude")
+	want := publishExcludes(vfs.TempPrefix)
+	cur, err := p.fs.ReadFile(path)
+	if err == nil && bytes.Equal(cur, want) {
+		return nil
+	}
+	if err != nil && !vfs.IsNotExist(err) {
+		return err
+	}
+	if err := p.fs.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return p.fs.WriteAtomic(path, want, 0o644)
 }
 
 // commit stages and commits everything under the work tree while holding the
@@ -304,24 +342,40 @@ func (p publisher) commit() (committed bool, err error) {
 	return true, nil
 }
 
-// lockStores takes the central-root lock, then reads the registry and takes the
-// write lock of every store it holds, in name order. The central lock comes
-// first, as in every registry operation, so no store is created, moved in or
-// renamed while the commit runs; the name order means two holders of store
-// locks never each wait on the other. A registered store whose directory is
-// gone has nothing to lock and is skipped. The returned func releases every
-// lock taken, the central one last.
+// lockStores takes the central-root lock and the write lock of every
+// registered central store, and returns the func that releases them all. It
+// never waits while it holds one: when any is busy it releases every lock it
+// took, waits holding nothing, and tries again, so a long write to one store
+// does not stall the writers of every store locked before it.
 func (p publisher) lockStores() (unlock func(), err error) {
-	central, err := lockCentral(p.fs, p.croot)
-	if err != nil {
-		return nil, err
+	for {
+		unlock, err := p.tryLockStores()
+		if unlock != nil || err != nil {
+			return unlock, err
+		}
+		p.backoff()
 	}
-	held := []func() error{central}
+}
+
+// tryLockStores is one try of lockStores: the central-root lock, then the
+// registry read under it, then each store's lock in name order. The central
+// lock comes first, as in every registry operation, so no store is created,
+// moved in or renamed while the commit runs. A registered store whose
+// directory is gone has nothing to lock and is skipped. It returns nil and no
+// error, holding nothing, when a lock is busy; the returned func releases every
+// lock taken, the central one last.
+func (p publisher) tryLockStores() (unlock func(), err error) {
+	var held []func() error
 	release := func() {
 		for i := len(held) - 1; i >= 0; i-- {
 			_ = held[i]()
 		}
 	}
+	central, ok, err := p.fs.TryLock(filepath.Join(p.croot, centralLockName))
+	if err != nil || !ok {
+		return nil, err
+	}
+	held = append(held, central)
 
 	entries, err := loadRegistry(p.fs, p.croot, p.home)
 	if err != nil {
@@ -334,11 +388,11 @@ func (p publisher) lockStores() (unlock func(), err error) {
 	}
 	slices.Sort(names)
 	for _, name := range names {
-		u, err := lockStoreDir(p.fs, filepath.Join(p.dir, name))
+		u, ok, err := tryLockStoreDir(p.fs, filepath.Join(p.dir, name))
 		if vfs.IsNotExist(err) {
 			continue
 		}
-		if err != nil {
+		if err != nil || !ok {
 			release()
 			return nil, err
 		}

@@ -161,6 +161,36 @@ func TestOsFS_Lock_Serializes(t *testing.T) {
 	}
 }
 
+// flock conflicts between two open files of one process, as between two
+// processes, so a second open of the path stands in for another holder.
+func TestOsFS_TryLock_BusyIsNotOKAndDoesNotWait(t *testing.T) {
+	fs := vfs.NewOS()
+	path := filepath.Join(t.TempDir(), ".lock")
+	unlock, err := fs.Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, ok, err := fs.TryLock(path); ok || err != nil || u != nil {
+		t.Fatalf("TryLock on a held lock = ok %v, err %v; want not ok, no error, no unlock", ok, err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	u, ok, err := fs.TryLock(path)
+	if !ok || err != nil {
+		t.Fatalf("TryLock on a free lock = ok %v, err %v", ok, err)
+	}
+	if _, ok, _ := fs.TryLock(path); ok {
+		t.Error("TryLock granted a lock TryLock holds")
+	}
+	if err := u(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fs.TryLock(filepath.Join(t.TempDir(), "missing", ".lock")); !vfs.IsNotExist(err) {
+		t.Errorf("TryLock under a missing directory: %v, want not-exist", err)
+	}
+}
+
 func TestOsFS_ReadDir(t *testing.T) {
 	dir := t.TempDir()
 	fs := vfs.NewOS()

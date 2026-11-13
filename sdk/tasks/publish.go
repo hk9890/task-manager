@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -45,6 +46,23 @@ type PublishResult struct {
 	Commit    string // its full SHA; "" when Committed is false
 	Pushed    bool   // this run pushed
 }
+
+// Errors InitPublish and Publish refuse with (SDK-SPEC §1, §6). Each message
+// adds the directory, the branch and the command that fixes it.
+var (
+	// ErrNotPublishing is a stores directory with no git repository, or one
+	// with no remote "origin": `taskmgr sync init` has not run, or its remote
+	// was removed since.
+	ErrNotPublishing = errors.New("not set up for sync")
+	// ErrPublishBranch is a work tree whose HEAD is not on this machine's
+	// branch machine/<machine-id>: detached, or on another branch.
+	ErrPublishBranch = errors.New("not on this machine's branch")
+	// ErrMachineIDClash is a push the remote rejected as not a fast-forward:
+	// the branch has a second writer.
+	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
+	// ErrGitMissing is git not found on PATH.
+	ErrGitMissing = errors.New("git is not on PATH")
+)
 
 // publishRemote is the one remote a publish pushes to.
 const publishRemote = "origin"
@@ -81,11 +99,15 @@ func machineIDOf(configured string, hostname func() (string, error)) (string, er
 		}
 		return configured, nil
 	}
+	const advice = "set one with 'taskmgr config set machine_id <id> --global'"
 	host, err := hostname()
-	if id := deriveMachineID(host); err == nil && validMachineID(id) {
+	if err != nil {
+		return "", fmt.Errorf("no machine ID can be derived: reading the hostname failed: %w; %s", err, advice)
+	}
+	if id := deriveMachineID(host); validMachineID(id) {
 		return id, nil
 	}
-	return "", fmt.Errorf("no machine ID can be derived from the hostname %q; set one with 'taskmgr config set machine_id <id> --global'", host)
+	return "", fmt.Errorf("no machine ID can be derived from the hostname %q; %s", host, advice)
 }
 
 func machineBranch(id string) string { return "machine/" + id }
@@ -127,13 +149,21 @@ func localRelativeRemote(url string) bool {
 }
 
 // publishGitSettings neutralizes the user's git settings that would stop an
-// unattended publish or change what it publishes. --no-verify skips only
-// pre-commit, commit-msg and pre-push, so hooks are turned off whole, a global
+// unattended publish, change what it publishes, or run a program of the
+// user's while the store locks are held. --no-verify skips only pre-commit,
+// commit-msg and pre-push, so hooks are turned off whole, a global
 // core.hooksPath included; a global excludes file could silently keep store
-// files out of the mirror; signing would need a key or a prompt.
+// files out of the mirror; line-ending conversion and the filters a global
+// attributes file names would make the snapshot differ from the engine's
+// bytes, and a filter runs a program; an fsmonitor is a program too; signing
+// would need a key or a prompt.
 var publishGitSettings = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.excludesFile=/dev/null",
+	"-c", "core.attributesFile=/dev/null",
+	"-c", "core.autocrlf=false",
+	"-c", "core.safecrlf=false",
+	"-c", "core.fsmonitor=false",
 	"-c", "commit.gpgSign=false",
 	"-c", "push.gpgSign=false",
 }
@@ -149,6 +179,14 @@ var gitRepoEnv = []string{
 	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
 	"GIT_SHALLOW_FILE", "GIT_COMMON_DIR",
 }
+
+// gitDateEnv is the dates git gives a commit in place of the clock. A publish
+// run from a commit or rebase hook inherits the dates of that commit, and the
+// snapshot would take them over.
+var gitDateEnv = []string{"GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"}
+
+// publishUnsetEnv is every inherited variable git runs without.
+var publishUnsetEnv = slices.Concat(gitRepoEnv, gitDateEnv)
 
 // publishIdentity is the fixed identity of every publish commit, in the
 // variables git ranks above any config, so one the user exports is replaced.
@@ -193,10 +231,15 @@ func gitRejected(err error) bool {
 	return errors.As(err, &g) && strings.Contains(g.Message, "[rejected]")
 }
 
-// errGitMissing is git that could not be started at all, which in practice is
-// git not installed.
+// errGitMissing is git that could not be started because it is not on PATH.
 func errGitMissing(cause error) error {
-	return fmt.Errorf("git is not on PATH: publishing runs git, so git must be available (%v)", cause)
+	return fmt.Errorf("%w: publishing runs git, so git must be available (%w)", ErrGitMissing, cause)
+}
+
+// errGitSpawn is git that could not be started for another reason: a work
+// tree it cannot enter, or a platform with no process runner.
+func errGitSpawn(cause error) error {
+	return fmt.Errorf("could not run git: %w", cause)
 }
 
 // errGitKilled is git that started and was killed by a signal.
@@ -205,11 +248,11 @@ func errGitKilled(args []string, cause error) error {
 }
 
 func errNotSetUp(dir string) error {
-	return fmt.Errorf("%s is not set up for sync; run 'taskmgr sync init --remote <url>' first", dir)
+	return fmt.Errorf("%s is %w; run 'taskmgr sync init --remote <url>' first", dir, ErrNotPublishing)
 }
 
 func errNoRemote(dir string) error {
-	return fmt.Errorf("%s has no remote %q; run 'taskmgr sync init --remote <url>' first", dir, publishRemote)
+	return fmt.Errorf("%s is %w: it has no remote %q; run 'taskmgr sync init --remote <url>' first", dir, ErrNotPublishing, publishRemote)
 }
 
 // errRemoteChanged names `git remote remove`, not `set-url`: removing the remote
@@ -221,22 +264,45 @@ func errRemoteChanged(dir, cur, url string) error {
 }
 
 func errDetached(dir, id string) error {
-	return fmt.Errorf("%s is not on a branch; check it out on %s", dir, machineBranch(id))
+	return fmt.Errorf("%s is %w: it is not on a branch; check out %s with 'git -C %s checkout %s'",
+		dir, ErrPublishBranch, machineBranch(id), dir, machineBranch(id))
 }
 
-// errWrongBranch is a work tree on another machine's branch: the machine ID
-// changed since the init, and publishing would push one machine's stores under
-// another's name. ref is the full ref HEAD points at.
-func errWrongBranch(dir, ref, id string) error {
-	return fmt.Errorf("%s is on branch %s, but this machine's ID is %q (branch %s): machine_id changed since 'taskmgr sync init'. "+
-		"Set machine_id back, or move the work tree to the new ID with 'git -C %s branch -m %s'",
-		dir, strings.TrimPrefix(ref, "refs/heads/"), id, machineBranch(id), dir, machineBranch(id))
+// errWrongBranch is a work tree on a branch other than this machine's. ref is
+// the full ref HEAD points at.
+//
+// On another machine's branch, the machine ID changed since the init, and
+// publishing would push one machine's stores under another's name. On any
+// other branch, stores/ was under git before the init, or an init stopped
+// after `git init`: either way sync publishes only from machine/<id>, and the
+// fix depends on the state. An unborn HEAD is what InitPublish re-points, so
+// the fix is to run it again; otherwise machine/<id> is checked out when it
+// exists (branchExists), and the current branch renamed to it when not.
+func errWrongBranch(dir, ref, id string, unborn, branchExists bool) error {
+	branch := strings.TrimPrefix(ref, "refs/heads/")
+	if strings.HasPrefix(ref, "refs/heads/"+machineBranch("")) {
+		return fmt.Errorf("%s is %w: it is on branch %s, but this machine's ID is %q (branch %s): machine_id changed since 'taskmgr sync init'. "+
+			"Set machine_id back, or move the work tree to the new ID with 'git -C %s branch -m %s'",
+			dir, ErrPublishBranch, branch, id, machineBranch(id), dir, machineBranch(id))
+	}
+	var fix string
+	switch {
+	case unborn:
+		fix = fmt.Sprintf("it has no commit yet, so run 'taskmgr sync init --remote <url>' again, which moves it to %s", machineBranch(id))
+	case branchExists:
+		fix = fmt.Sprintf("check out that branch with 'git -C %s checkout %s'", dir, machineBranch(id))
+	default:
+		fix = fmt.Sprintf("rename the branch with 'git -C %s branch -m %s'", dir, machineBranch(id))
+	}
+	return fmt.Errorf("%s is %w: it is on branch %s, not %s, and sync publishes only from %s; %s",
+		dir, ErrPublishBranch, branch, machineBranch(id), machineBranch(id), fix)
 }
 
-// errNotFastForward explains a rejected push. The branch has one writer by
-// design, so a remote that holds commits this clone lacks has a second one.
-func errNotFastForward(dir, id string) error {
-	return fmt.Errorf("the remote rejected the push of %s: it holds commits this machine never made, so another machine publishes under the machine ID %q, or this machine was set up again. "+
-		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again",
-		machineBranch(id), id, dir)
+// errNotFastForward explains a rejected push and keeps git's own message,
+// which names the refs. The branch has one writer by design, so a remote that
+// holds commits this clone lacks has a second one.
+func errNotFastForward(dir, id, gitMsg string) error {
+	return fmt.Errorf("%w %q: the remote rejected the push of %s because it holds commits this machine never made, so another machine uses this ID, or this machine was set up again. "+
+		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again. git said: %s",
+		ErrMachineIDClash, id, machineBranch(id), dir, gitMsg)
 }

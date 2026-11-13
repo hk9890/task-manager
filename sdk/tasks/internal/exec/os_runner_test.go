@@ -127,6 +127,17 @@ func TestOSRunner_SpawnErrorMissingBinary(t *testing.T) {
 	if res.Err == nil {
 		t.Fatal("SpawnError must carry a diagnostic Err")
 	}
+	if !res.NotFound {
+		t.Error("a binary missing from PATH is not reported NotFound")
+	}
+}
+
+// A spawn that fails for another reason must not read as a missing binary.
+func TestOSRunner_SpawnErrorMissingDirIsNotNotFound(t *testing.T) {
+	res := NewOS().Run(Spec{Argv: []string{"sh", "-c", "true"}, Dir: filepath.Join(t.TempDir(), "missing")})
+	if res.Category != SpawnError || res.NotFound {
+		t.Fatalf("category=%v NotFound=%v, want a SpawnError that is not NotFound", res.Category, res.NotFound)
+	}
 }
 
 func TestOSRunner_EmptyArgvIsSpawnError(t *testing.T) {

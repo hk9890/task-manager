@@ -933,10 +933,16 @@ func (s *Store) withLock(fn func() error) error {
 }
 
 // lockStoreDir takes the advisory write lock of the store in dir, the flock
-// half of withLock. A caller with no Store for the directory — a move, a
-// publish — takes the lock every writer of that store serializes on.
+// half of withLock. A caller with no Store for the directory — a move — takes
+// the lock every writer of that store serializes on.
 func lockStoreDir(fs vfs.FS, dir string) (func() error, error) {
 	return fs.Lock(filepath.Join(dir, lockFileName))
+}
+
+// tryLockStoreDir is lockStoreDir without the wait, for a publish, which must
+// not hold one store's lock while it waits for another's.
+func tryLockStoreDir(fs vfs.FS, dir string) (func() error, bool, error) {
+	return fs.TryLock(filepath.Join(dir, lockFileName))
 }
 
 // CreateInput describes a new issue. Zero values fall back to sensible
