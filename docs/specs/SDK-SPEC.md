@@ -101,7 +101,7 @@ const FileExt        = ".md"         // the per-issue file extension
       Machine    string // the machine ID
       Branch     string // machine/<Machine>
       Path       string // <central_root>/stores, the git work tree
-      Remote     string // the URL of the remote RemoteName
+      Remote     string // the URL of the remote RemoteName, without its user and password
       RemoteName string // the git remote's name, "origin"
   }
 
@@ -491,8 +491,8 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
 - runs with `GIT_ATTR_NOSYSTEM=1`, so the system attributes file applies no more than the
   global one (`core.attributesFile`, below): either could name a `filter` or an `eol`;
 - takes these settings with `-c`, which outrank the user's global and system config.
-  The snapshot must be byte-identical to the engine's files, and no program of the
-  user's may run while the store locks are held:
+  The snapshot must be byte-identical to the engine's files, no program of the
+  user's may run while the store locks are held, and a dead connection must end the run:
 
   | Setting | Without it |
   |---|---|
@@ -504,16 +504,22 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   | `core.fsmonitor=false` | a configured fsmonitor program, or the built-in daemon, would start when git reads the index |
   | `commit.gpgSign=false`, `push.gpgSign=false` | signing needs a key or a prompt |
   | `advice.pushUpdateRejected=false` | git's hint on a rejected push is to pull, and a publish never pulls (the refusal names the remedy) |
+  | `http.lowSpeedLimit=1000`, `http.lowSpeedTime=60` | a stalled HTTPS transfer would hold the publish lock until the push timeout (below). With them git ends a transfer that moves under 1000 bytes/s for 60 seconds, so a dead connection ends after a minute and a slow one goes on. ssh has no such setting |
 
   A `.gitattributes` inside `stores/` is the user's, like a `.gitignore` there, and
   applies;
 - has no timeout, except the push. Every other command is local. The push is ended after
-  2 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
+  10 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
   the seam's grace (HOOK-SPEC §7) — and the call fails with
-  `push timed out after 2m0s`, followed by what git wrote to stderr before then. A publish
+  `push timed out after 10m0s`, followed by what git wrote to stderr before then. A publish
   runs unattended, from a timer or a service, so a dead connection must end the run
   rather than hold the publish lock, and refuse every later publish, until someone
-  notices. The commit is kept, and the next publish pushes it (step 4 above). Unlike a
+  notices. The commit is kept, and the next publish pushes it (step 4 above). The limit
+  is generous because git cannot resume a push: a push cut off at the limit starts again
+  from nothing. 10 minutes carries about 75 MB at 1 Mbit/s. A shorter limit was rejected
+  because a slow link could then never publish a large store. A dead HTTPS connection
+  ends after a minute anyway, through the low-speed abort above; an ssh remote relies on
+  this limit alone. Unlike a
   hook with a time limit, the push stays in the caller's process group, so a Ctrl-C
   ends it together with the caller. A hook's own process group lets its timeout reach
   the hook's whole process tree. For git, the cost of that group is a push that outlives
@@ -550,8 +556,9 @@ by a publish that pushes, so a machine with nothing new reports it at its next c
 (`https://user:token@host/…`). Every error both calls return, and every record they log,
 has the user and password removed from each URL with a scheme in it, git's own stderr
 included. An scp-form address (`git@host:path`) names a user and no secret, and is kept.
-`PublishInfo.Remote` is the URL as configured, credentials included: it is the caller's
-own value.
+`PublishInfo.Remote` drops them too, so a front end can print it as it is. The remote
+`origin` keeps the URL as given, which the push needs, and nothing reads the credentials
+back from the returned value.
 
 **What a run logs.** Each stage as it starts, each git command with its exit status and
 duration, the wait on a busy store, and the outcome — the records and their levels are

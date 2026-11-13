@@ -123,6 +123,20 @@ func TestPublishGitSettings_NeutralizeTheUsersConfig(t *testing.T) {
 	}
 }
 
+// A stalled HTTPS transfer must end after a minute, not hold the publish lock
+// until the push timeout.
+func TestPublishGitSettings_AbortAStalledHTTPTransfer(t *testing.T) {
+	for _, want := range []string{
+		"http.lowSpeedLimit=1000",
+		"http.lowSpeedTime=60",
+	} {
+		i := slices.Index(publishGitSettings, want)
+		if i < 1 || publishGitSettings[i-1] != "-c" {
+			t.Errorf("publishGitSettings %q lack -c %s", publishGitSettings, want)
+		}
+	}
+}
+
 // A push that needs credentials must fail at once, not wait on a terminal
 // until it times out, and the system attributes file is out of
 // core.attributesFile's reach.
@@ -321,10 +335,10 @@ func TestLogStderr_TrimsRedactsAndBounds(t *testing.T) {
 
 func TestErrGitTimeout_NamesTheCommandTheLimitAndGitsStderr(t *testing.T) {
 	err := errGitTimeout([]string{"push", "origin"}, publishPushTimeout, []byte("fatal: https://u:p@h/x hangs\n"))
-	if got, want := err.Error(), "push timed out after 2m0s: fatal: https://h/x hangs"; got != want {
+	if got, want := err.Error(), "push timed out after 10m0s: fatal: https://h/x hangs"; got != want {
 		t.Errorf("errGitTimeout = %q, want %q", got, want)
 	}
-	if got := errGitTimeout([]string{"push"}, publishPushTimeout, nil).Error(); got != "push timed out after 2m0s" {
+	if got := errGitTimeout([]string{"push"}, publishPushTimeout, nil).Error(); got != "push timed out after 10m0s" {
 		t.Errorf("errGitTimeout without stderr = %q", got)
 	}
 }

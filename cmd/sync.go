@@ -63,8 +63,9 @@ A run with nothing new commits nothing and reaches no network. Project-local
 .tasks stores are not published.
 
 One sync runs at a time: a second one, or a 'sync init', fails at once and
-names the process that is running. A push that has not finished after 2
-minutes is stopped, and the sync fails; the next sync pushes the commit.
+names the process that is running. A push that has not finished after 10
+minutes, or an HTTPS push that moves almost nothing for a minute, is stopped,
+and the sync fails; the next sync pushes the commit.
 TASKMGR_LOG=debug logs each step on stderr.`,
 	Example: "taskmgr sync",
 	Args:    cobra.NoArgs,

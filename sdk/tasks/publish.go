@@ -37,7 +37,7 @@ type PublishInfo struct {
 	Machine    string // the machine ID
 	Branch     string // machine/<Machine>, the branch published to
 	Path       string // <central_root>/stores, the git work tree
-	Remote     string // the URL the remote RemoteName publishes to
+	Remote     string // the URL the remote RemoteName publishes to, without its user and password
 	RemoteName string // the git remote's name, "origin"
 }
 
@@ -78,8 +78,11 @@ const publishRemote = "origin"
 // publishPushTimeout ends a push that has not finished. A publish runs
 // unattended, from a timer, so a dead connection must end the run rather than
 // hold the publish lock until someone notices; every other git command is
-// local and runs without a limit.
-const publishPushTimeout = 2 * time.Minute
+// local and runs without a limit. git cannot resume a push, so the limit is
+// generous: 10 minutes carries about 75 MB at 1 Mbit/s. A stalled HTTPS
+// transfer ends sooner, through the low-speed abort in publishGitSettings;
+// ssh has only this limit.
+const publishPushTimeout = 10 * time.Minute
 
 // The stages of a publish and an init, in the order they start. Each is
 // logged when it starts, so the last publish_stage record of a hung run names
@@ -266,7 +269,9 @@ func localRelativeRemote(url string) bool {
 // attributes file names would make the snapshot differ from the engine's
 // bytes, and a filter runs a program; an fsmonitor is a program too; signing
 // would need a key or a prompt; git's advice on a rejected push is to pull,
-// which a publish must never do.
+// which a publish must never do. The HTTP low-speed abort ends an HTTPS
+// transfer that moves under 1000 bytes/s for 60 seconds, so a dead connection
+// ends after a minute while a slow one goes on to publishPushTimeout.
 var publishGitSettings = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.excludesFile=/dev/null",
@@ -277,6 +282,8 @@ var publishGitSettings = []string{
 	"-c", "commit.gpgSign=false",
 	"-c", "push.gpgSign=false",
 	"-c", "advice.pushUpdateRejected=false",
+	"-c", "http.lowSpeedLimit=1000",
+	"-c", "http.lowSpeedTime=60",
 }
 
 // gitRepoEnv is what `git rev-parse --local-env-vars` lists: the variables that

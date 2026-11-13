@@ -228,7 +228,7 @@ func TestPublish_RunsGitInTheStoresWithTheFixedIdentityAndSettings(t *testing.T)
 		}
 		want := time.Duration(0)
 		if c.Argv[len(publishGitSettings)+1] == "push" {
-			want = publishPushTimeout
+			want = 10 * time.Minute
 		}
 		if c.Timeout != want {
 			t.Errorf("git %q has timeout %v, want %v", c.Argv, c.Timeout, want)
@@ -702,6 +702,25 @@ func TestInitPublish_ResolvesOnlyRelativeLocalRemotes(t *testing.T) {
 	}
 }
 
+// The configured remote keeps its credentials, since git needs them to push;
+// the returned Remote is for display and drops them.
+func TestInitPublish_RemoteOmitsUserinfo(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://u:secret@127.0.0.1:9/x.git", "https://127.0.0.1:9/x.git"},
+		{"https://127.0.0.1:9/x.git", "https://127.0.0.1:9/x.git"},
+		{"git@github.com:you/stores.git", "git@github.com:you/stores.git"},
+	} {
+		fs, e, runner, g := publishFixture(t, false)
+		info, err := initPublishWith(tc.in, fs, e, runner)
+		if err != nil || info.Remote != tc.want {
+			t.Errorf("init --remote %q: remote %q, %v; want %q", tc.in, info.Remote, err, tc.want)
+		}
+		if g.remote != tc.in {
+			t.Errorf("init --remote %q configured origin %q, want the URL as given", tc.in, g.remote)
+		}
+	}
+}
+
 func TestInitPublish_InvalidMachineIDCreatesNothing(t *testing.T) {
 	fs, e, runner, _ := publishFixture(t, false)
 	if err := fs.WriteAtomic("/home/config.yaml", []byte("version: 1\nmachine_id: Lap_Top\n"), 0o644); err != nil {
@@ -819,8 +838,8 @@ func TestPublish_PushTimeoutEndsTheRun(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.fail = map[string]exec.Result{"push": {Category: exec.Timeout, Stderr: []byte("Connecting to example.com...\n"), Err: errors.New("signal: terminated")}}
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "push timed out after 2m0s: Connecting to example.com...") {
-		t.Errorf("hung push: %v, want 'push timed out after 2m0s' with git's stderr", err)
+	if err == nil || !strings.Contains(err.Error(), "push timed out after 10m0s: Connecting to example.com...") {
+		t.Errorf("hung push: %v, want 'push timed out after 10m0s' with git's stderr", err)
 	}
 }
 

@@ -71,13 +71,21 @@ your central stores waits, for as long as the local staging takes. When a write 
 in progress, sync waits for it to finish, for up to 2 minutes, and blocks nothing while it
 waits. The commit and the push to the remote do not hold anyone up. Only one sync runs at a time: a second one stops at once and says
 which one is running, so a scheduled sync that fires during yours simply fails that
-once. A push that has not finished after 2 minutes is stopped; the commit stays, and the
-next sync pushes it. Your tickets on this machine are never changed; sync only reads them.
+once. A push that has not finished after 10 minutes is stopped; the commit stays, and the
+next sync pushes it. git cannot resume a push, so the limit leaves a slow connection
+room: about 75 MB at 1 Mbit/s. Over HTTPS, a push that moves almost nothing for a minute
+ends sooner, with git's own message; over ssh, only the 10 minutes apply. Your tickets on
+this machine are never changed; sync only reads them.
 
 To see what a sync is doing, or where a slow one is stuck, run it with
 `TASKMGR_LOG=debug taskmgr sync`: each step and each git command it runs are printed on
 stderr, the last one naming where it is. `--json` output on stdout is not affected. A
-token in your remote URL is never printed in these lines or in an error.
+token in your remote URL is never printed — not in these lines, not in an error, and not
+in what `sync init` prints.
+
+A sync that fails, or one held up by a busy store, can print log lines on stderr before
+its `taskmgr:` message, even without `TASKMGR_LOG`. A script reads the exit code, and the
+`--json` output on stdout, not the first line of stderr.
 
 Every sync commit is made as `taskmgr`, with the e-mail `<machine-id>@taskmgr.invalid`,
 whatever git identity your machine has. Your own name and e-mail never reach the
@@ -100,7 +108,7 @@ repository.
 | already publishes to ... with other credentials | `sync init` was given the same URL with a new user or token in it | run the `git remote set-url origin` the message prints, with the new URL |
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
 | another taskmgr sync is running | a sync or `sync init` is running on this machine, with the process ID and start time the message gives | wait for it and run `taskmgr sync` again; a process that is no longer there holds nothing, so the next sync runs |
-| push timed out after 2m0s | the remote did not finish receiving the push in 2 minutes: no network, or a remote that does not answer | check the connection and run `taskmgr sync` again; the commit was kept |
+| push timed out after 10m0s | the remote did not finish receiving the push in 10 minutes: no network, a remote that does not answer, or a push too large for the connection | check the connection and run `taskmgr sync` again; the commit was kept |
 | gave up after waiting 2m0s for the write lock of store | another `taskmgr` on this machine kept writing to that store, or a hook of its kept running, for 2 minutes | let it finish and run `taskmgr sync` again |
 
 `sync` never overwrites what is on the remote. When it refuses, the remote still holds

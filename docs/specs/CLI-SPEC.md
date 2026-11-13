@@ -597,8 +597,11 @@ list is SDK-SPEC's.
   the time in UTC, RFC 3339, or without the parenthesis when the running one has not
   recorded itself yet. A timer that fires during a manual sync therefore fails one tick
   instead of queueing behind it.
-- **A push has 2 minutes.** A push not finished by then is stopped and exits `1` with
-  `push timed out after 2m0s`; the commit is kept and the next `sync` pushes it. A Ctrl-C
+- **A push has 10 minutes.** A push not finished by then is stopped and exits `1` with
+  `push timed out after 10m0s`; the commit is kept and the next `sync` pushes it. git
+  cannot resume a push, so the limit leaves a slow link room: about 75 MB at 1 Mbit/s. An
+  HTTPS push that moves under 1000 bytes/s for 60 seconds ends sooner, with git's own
+  message; an ssh push has only the 10 minutes (SDK-SPEC). A Ctrl-C
   during a push ends both `taskmgr` and the push. On Linux any signal that kills
   `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
   pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for
@@ -631,7 +634,10 @@ An `init` that stopped after creating the repository is repaired by running it a
 branch with no commit yet is moved to `machine/<machine-id>`.
 
 - **Output:** the stores directory, the remote and the branch, and a `next: taskmgr sync`
-  line (`syncInitDTO` in JSON, §6).
+  line (`syncInitDTO` in JSON, §6). The remote is printed without the user and password a
+  URL with a scheme carries (`https://user:token@host/…` prints as `https://host/…`), as
+  the SDK returns it; an scp-form address (`git@host:path`) prints as typed. The remote
+  `origin` keeps the URL as given.
 
 ### `taskmgr sync`
 
@@ -1364,7 +1370,7 @@ references for cleaned-up ones.
 
 **`syncInitDTO`** — emitted by `sync init`: `{machine, branch, path, remote}`. `machine`
 is the machine ID, `branch` is `machine/<machine>`, `path` is `<central_root>/stores`, and
-`remote` is the URL `origin` publishes to.
+`remote` is the URL `origin` publishes to, without its user and password (§2.5).
 
 **`syncDTO`** — emitted by `sync`: `{machine, branch, committed, commit, pushed}`.
 `committed` says whether this run made a commit, and `commit` is its full SHA, omitted

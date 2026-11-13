@@ -43,7 +43,9 @@ respect. Where the skill and this file disagree, this file wins.
   a hand-rolled `.tasks/` tree in a test is a finding. Time is `tasks.WithClock` at
   construction, never the wall clock and never a setter afterwards
   ([TESTING.md § Conventions](TESTING.md#conventions)). A test that touches a real
-  disk without the `integration` tag is a finding: it puts L3 in the fast suite.
+  disk without the `integration` tag is a finding: it puts L3 in the fast suite. A
+  tagged one in a seam package whose file is named after the source file or the
+  function it tests, not `_l3_test.go`, is not (TESTING.md § Conventions).
 - **User-facing docs, in the same PR.** A change a user would notice — a new or changed
   command, flag, JSON field or error message — updates the page covering it in
   [user-guide/](user-guide/); a new package reaches

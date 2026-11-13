@@ -66,7 +66,8 @@ const publishLockWaitMax = 2 * time.Minute
 
 // InitPublish makes <central_root>/stores a git work tree on the branch
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
-// relative local path is resolved against the working directory. Running it
+// relative local path is resolved against the working directory. The returned
+// PublishInfo.Remote is the URL without its user and password. Running it
 // again with the same remote changes nothing; a different one is refused.
 // While a publish or another init runs it refuses with ErrPublishBusy. Of the
 // options, WithLogger and WithClock apply.
@@ -85,7 +86,7 @@ func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Ru
 	p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish_init",
 		slog.String("machine", info.Machine),
 		slog.String("branch", info.Branch),
-		slog.String("remote", redactUserinfo(info.Remote)),
+		slog.String("remote", info.Remote),
 		slog.Int64("duration_ms", p.now().Sub(start).Milliseconds()),
 	)
 	return info, nil
@@ -144,7 +145,8 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	if err := p.writeExcludes(); err != nil {
 		return PublishInfo{}, err
 	}
-	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: url, RemoteName: publishRemote}, nil
+	// Remote is for display, and nothing reads the credentials back from it.
+	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: redactUserinfo(url), RemoteName: publishRemote}, nil
 }
 
 // Publish commits what changed under <central_root>/stores and pushes it to

@@ -155,9 +155,14 @@ is diagnosed after the fact.
   On macOS only a Ctrl-C at the terminal ends git
   too; a `taskmgr` killed alone leaves a push running until git gives up on the
   connection.
-- **Hung:** the last `publish_stage` is where it is. A `push` stage lasts at most 2
+- **Hung:** the last `publish_stage` is where it is. A `push` stage lasts at most 10
   minutes plus the seam's 2s kill grace; then the push is killed and logs
-  `publish_git cmd=push exit=-1` with `error`. A hang in `commit` with
+  `publish_git cmd=push exit=-1` with `error`. An HTTPS push that moves under 1000
+  bytes/s for 60 seconds ends sooner: git aborts it itself, and `publish_git cmd=push`
+  logs git's exit status and its `stderr`. An ssh push has only the 10 minutes. The
+  limits and why are SDK-SPEC's
+  ([§ Publishing the central stores](specs/SDK-SPEC.md#publishing-the-central-stores)).
+  A hang in `commit` with
   `publish_lock_wait` names the store a long write or a slow pre-hook holds
   ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
   `publish_error`.

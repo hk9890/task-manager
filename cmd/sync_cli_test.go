@@ -133,6 +133,29 @@ func TestSyncInit_PrintsWhereAndWhatItPublishes(t *testing.T) {
 	}
 }
 
+// A token in the remote URL stays out of what init prints, human and JSON;
+// init reaches no network, so the unreachable address is never dialled.
+func TestSyncInit_PrintsTheRemoteWithoutItsUserinfo(t *testing.T) {
+	_, stores, _ := syncFixture(t)
+	const remote, shown = "https://u:secret@127.0.0.1:9/x.git", "https://127.0.0.1:9/x.git"
+
+	want := stores + " publishes to " + shown + " on branch machine/laptop\nnext: taskmgr sync\n"
+	if out := mustRun(t, "sync", "init", "--remote", remote); out != want {
+		t.Errorf("sync init printed %q, want %q", out, want)
+	}
+	out := mustRun(t, "--json", "sync", "init", "--remote", remote)
+	var got syncInitDTO
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Remote != shown || strings.Contains(out, "secret") {
+		t.Errorf("sync init --json printed %q, want remote %q and no token", out, shown)
+	}
+	if url := git(t, stores, "config", "--get", "remote.origin.url"); url != remote {
+		t.Errorf("origin = %q, want the URL as given, token included, so a push can use it", url)
+	}
+}
+
 // A relative remote means relative to where the user typed it, not to the
 // stores directory git runs in.
 func TestSyncInit_RelativeRemoteIsTheCallersPath(t *testing.T) {
