@@ -48,6 +48,15 @@ func TestFake_UserHomeDir_ReturnsTheScriptedHome(t *testing.T) {
 	}
 }
 
+func TestFake_Hostname_ReturnsTheScriptedHostOrAnError(t *testing.T) {
+	if got, err := (env.Fake{Host: "laptop"}).Hostname(); err != nil || got != "laptop" {
+		t.Errorf("Hostname = %q, %v; want laptop", got, err)
+	}
+	if _, err := (env.Fake{}).Hostname(); err == nil {
+		t.Error("Hostname with no Host returned nil error")
+	}
+}
+
 // Getenv mirrors os.Getenv: an unset variable is the empty string, not an error
 // and not a missing-key panic.
 func TestFake_Getenv(t *testing.T) {

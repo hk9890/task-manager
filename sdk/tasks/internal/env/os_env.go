@@ -26,3 +26,5 @@ type osEnv struct{}
 func (osEnv) Getenv(key string) string { return os.Getenv(key) }
 
 func (osEnv) UserHomeDir() (string, error) { return os.UserHomeDir() }
+
+func (osEnv) Hostname() (string, error) { return os.Hostname() }

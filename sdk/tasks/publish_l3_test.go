@@ -1,0 +1,360 @@
+// Copyright 2026 Hans Kohlreiter
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build integration
+
+// L3 for publishing (publishrun.go) against real git, a real temp dir and a
+// bare repository as the remote, so the commit and push paths run without a
+// network. What exec.Fake cannot show is here: that git reads the settings,
+// environment and patterns the way the L2 tests assume it does.
+package tasks
+
+import (
+	"fmt"
+	"os"
+	osexec "os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
+	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
+)
+
+// publishL3 is one machine named "laptop" with one central store, "demo", and
+// a bare remote.
+type publishL3 struct {
+	t      *testing.T
+	fs     vfs.FS
+	e      env.Fake
+	stores string
+	remote string
+	store  *Store
+}
+
+func newPublishL3(t *testing.T) *publishL3 {
+	t.Helper()
+	base := t.TempDir()
+	home, project := filepath.Join(base, "home"), filepath.Join(base, "project")
+	for _, d := range []string{home, project} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &publishL3{
+		t:      t,
+		fs:     vfs.NewOS(),
+		e:      env.Fake{Vars: map[string]string{"TASKMGR_HOME": home}, Host: "laptop"},
+		stores: filepath.Join(home, storesSubdir),
+		remote: filepath.Join(base, "remote.git"),
+	}
+	s, err := initCentralWith(project, "demo", "dem", p.fs, p.e, nil)
+	if err != nil {
+		t.Fatalf("initCentralWith: %v", err)
+	}
+	p.store = s
+	realGit(t, "", "init", "--quiet", "--bare", p.remote)
+	return p
+}
+
+func (p *publishL3) init() (PublishInfo, error) {
+	return initPublishWith(p.remote, p.fs, p.e, exec.NewOS())
+}
+
+func (p *publishL3) publish() (PublishResult, error) {
+	return publishWith(p.fs, p.e, exec.NewOS())
+}
+
+func (p *publishL3) mustInit() {
+	p.t.Helper()
+	if _, err := p.init(); err != nil {
+		p.t.Fatalf("initPublish: %v", err)
+	}
+}
+
+func (p *publishL3) mustPublish() PublishResult {
+	p.t.Helper()
+	res, err := p.publish()
+	if err != nil {
+		p.t.Fatalf("publish: %v", err)
+	}
+	return res
+}
+
+func (p *publishL3) create(title string) string {
+	p.t.Helper()
+	res, err := p.store.Create(CreateInput{Title: title})
+	if err != nil {
+		p.t.Fatalf("Create: %v", err)
+	}
+	return res.Issue.ID
+}
+
+// realGit runs git in dir, fails the test on a non-zero exit, and returns the
+// trimmed stdout.
+func realGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := osexec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		var stderr []byte
+		if ee, ok := err.(*osexec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, stderr)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestInitPublish_L3_CreatesTheRepositoryAndIsIdempotent(t *testing.T) {
+	p := newPublishL3(t)
+	info, err := p.init()
+	if err != nil {
+		t.Fatalf("initPublish: %v", err)
+	}
+	want := PublishInfo{Machine: "laptop", Branch: "machine/laptop", Path: p.stores, Remote: p.remote}
+	if info != want {
+		t.Errorf("info = %+v, want %+v", info, want)
+	}
+	if got := realGit(t, p.stores, "symbolic-ref", "HEAD"); got != "refs/heads/machine/laptop" {
+		t.Errorf("HEAD = %q, want refs/heads/machine/laptop", got)
+	}
+	if got := realGit(t, p.stores, "remote", "get-url", "origin"); got != p.remote {
+		t.Errorf("origin = %q, want %q", got, p.remote)
+	}
+	if _, err := os.Stat(filepath.Join(p.stores, ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("init wrote a .gitignore: %v", err)
+	}
+
+	if again, err := p.init(); err != nil || again != want {
+		t.Errorf("second init = %+v, %v; want %+v", again, err, want)
+	}
+	_, err = initPublishWith(filepath.Join(t.TempDir(), "else.git"), p.fs, p.e, exec.NewOS())
+	if err == nil || !strings.Contains(err.Error(), "already publishes to "+p.remote) {
+		t.Errorf("init with another remote: %v", err)
+	}
+	if got := realGit(t, p.stores, "remote", "get-url", "origin"); got != p.remote {
+		t.Errorf("origin = %q after a refused init, want it unchanged", got)
+	}
+}
+
+// The patterns are checked by git itself against the names the engine uses
+// for its transient files, so a pattern git reads differently from what it
+// says fails here. check-ignore matches a path whether or not it exists.
+func TestPublish_L3_ExcludesKeepTheEngineTransientFilesOut(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	rel := func(path string) string {
+		r, err := filepath.Rel(p.stores, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	ignored := []string{
+		rel(filepath.Join(p.store.Dir(), lockFileName)),
+		rel(filepath.Join(p.store.Dir(), vfs.TempPrefix+"123")),
+		rel(filepath.Join(p.store.Dir(), closedDirName, vfs.TempPrefix+"456")),
+		rel(p.store.stagedContentPath("dem-0001")),
+		stagingPrefix + "demo/" + ConfigFileName,
+	}
+	kept := []string{
+		rel(filepath.Join(p.store.Dir(), ConfigFileName)),
+		rel(p.store.filePath("dem-0001")),
+		rel(p.store.contentPath("dem-0001")),
+	}
+	got := realGit(t, p.stores, append([]string{"check-ignore", "--no-index"}, append(ignored, kept...)...)...)
+	lines := strings.Split(got, "\n")
+	if strings.Join(lines, "\n") != strings.Join(ignored, "\n") {
+		t.Errorf("git ignores %q, want exactly %q", lines, ignored)
+	}
+}
+
+func TestPublish_L3_CommitsPushesAndSkipsWhatIsPublished(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+
+	first := p.mustPublish()
+	if !first.Committed || !first.Pushed || first.Commit == "" || first.Machine != "laptop" || first.Branch != "machine/laptop" {
+		t.Fatalf("first publish = %+v, want a commit, pushed", first)
+	}
+	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != first.Commit {
+		t.Errorf("remote branch at %s, want the commit publish reported, %s", got, first.Commit)
+	}
+	if got := realGit(t, p.stores, "log", "-1", "--format=%an <%ae> %s"); got != "taskmgr <laptop@taskmgr.invalid> taskmgr sync: laptop" {
+		t.Errorf("commit = %q", got)
+	}
+	if got := realGit(t, p.stores, "ls-files"); strings.Contains(got, lockFileName) {
+		t.Errorf("published a lock file:\n%s", got)
+	}
+
+	if again := p.mustPublish(); again != (PublishResult{Machine: "laptop", Branch: "machine/laptop"}) {
+		t.Errorf("publish with nothing new = %+v, want no commit and no push", again)
+	}
+
+	p.create("a change")
+	next := p.mustPublish()
+	if !next.Committed || !next.Pushed || next.Commit == first.Commit {
+		t.Fatalf("publish after a change = %+v, want a new commit, pushed", next)
+	}
+	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != next.Commit {
+		t.Errorf("remote branch at %s, want %s", got, next.Commit)
+	}
+
+	// The work tree in stores/ does not disturb the registry.
+	entries, err := storesWith(p.fs, p.e)
+	if err != nil || len(entries) != 1 || entries[0].Health != StoreOK {
+		t.Errorf("stores = %+v, %v; want the one store, ok", entries, err)
+	}
+}
+
+// Two publishes on one machine — a timer and a manual run — must not push the
+// branch at once: the remote would refuse one ref update with a raw git error.
+func TestPublish_L3_ConcurrentPublishesBothSucceed(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	for i := range 10 {
+		p.create(fmt.Sprintf("change %d", i))
+		errs := make(chan error, 2)
+		for range 2 {
+			go func() {
+				_, err := p.publish()
+				errs <- err
+			}()
+		}
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: concurrent publish: %v", i, err)
+			}
+		}
+	}
+	head := realGit(t, p.stores, "rev-parse", "HEAD")
+	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != head {
+		t.Errorf("remote branch at %s, want HEAD %s", got, head)
+	}
+}
+
+func TestPublish_L3_RejectedPushNamesTheMachineIDClash(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	p.mustPublish()
+
+	// A second machine set up under the same ID publishes first.
+	other := filepath.Join(t.TempDir(), "other")
+	realGit(t, "", "clone", "--quiet", "--branch", "machine/laptop", p.remote, other)
+	if err := os.WriteFile(filepath.Join(other, "elsewhere"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realGit(t, other, "add", "--all")
+	realGit(t, other, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "other")
+	realGit(t, other, "push", "--quiet", "origin", "machine/laptop")
+	pushed := realGit(t, p.remote, "rev-parse", "machine/laptop")
+
+	p.create("a change")
+	_, err := p.publish()
+	if err == nil || !strings.Contains(err.Error(), `another machine publishes under the machine ID "laptop"`) {
+		t.Fatalf("publish after another push: %v, want the clash", err)
+	}
+	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != pushed {
+		t.Errorf("remote branch moved to %s; a rejected push must leave it at %s", got, pushed)
+	}
+}
+
+func TestPublish_L3_ChangedMachineIDIsRefused(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	p.e.Host = "desktop"
+	if _, err := p.publish(); err == nil || !strings.Contains(err.Error(), "machine_id changed") || !strings.Contains(err.Error(), "machine/desktop") {
+		t.Errorf("publish on a renamed machine: %v", err)
+	}
+	if _, err := p.init(); err == nil || !strings.Contains(err.Error(), "machine_id changed") {
+		t.Errorf("init on a renamed machine: %v", err)
+	}
+}
+
+// Once stores/ is a work tree, a missing git must still be reported as such,
+// not as a missing remote or a detached work tree.
+func TestPublish_L3_GitMissingIsReportedAsSuch(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	t.Setenv("PATH", t.TempDir())
+	if _, err := p.publish(); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
+		t.Errorf("publish without git: %v", err)
+	}
+	if _, err := p.init(); err == nil || !strings.Contains(err.Error(), "git is not on PATH") {
+		t.Errorf("init without git: %v", err)
+	}
+}
+
+// The user's global git config must neither stop an unattended publish (a
+// failing hook) nor change what it publishes (a global excludes file).
+func TestPublish_L3_GlobalGitConfigDoesNotApply(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	id := p.create("kept")
+	hooks := t.TempDir()
+	for _, hook := range []string{"prepare-commit-msg", "post-commit", "pre-push"} {
+		if err := os.WriteFile(filepath.Join(hooks, hook), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	excludes := filepath.Join(t.TempDir(), "ignore")
+	if err := os.WriteFile(excludes, []byte("*"+FileExt+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(global, []byte("[core]\n\thooksPath = "+hooks+"\n\texcludesFile = "+excludes+"\n[commit]\n\tgpgSign = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	if got := p.mustPublish(); !got.Committed || !got.Pushed {
+		t.Errorf("publish with failing global hooks = %+v, want a commit, pushed", got)
+	}
+	if got := realGit(t, p.stores, "ls-files", "demo/"+id+FileExt); got == "" {
+		t.Errorf("demo/%s%s is not in the snapshot: the global excludes file applied", id, FileExt)
+	}
+}
+
+// A publish run from inside another repository's git hook inherits GIT_DIR and
+// GIT_INDEX_FILE, and a shell profile can export the user's identity; neither
+// may redirect the snapshot or sign it with the user's name.
+func TestPublish_L3_InheritedGitEnvironmentIsIgnored(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	other := t.TempDir()
+	realGit(t, other, "init", "--quiet")
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	t.Setenv("GIT_AUTHOR_EMAIL", "someone@example.com")
+	t.Setenv("GIT_COMMITTER_EMAIL", "someone@example.com")
+	got, err := p.publish()
+	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err != nil || !got.Committed || !got.Pushed {
+		t.Fatalf("publish = %+v, %v; want a commit, pushed", got, err)
+	}
+	if log := realGit(t, p.stores, "log", "-1", "--format=%ae %ce"); log != "laptop@taskmgr.invalid laptop@taskmgr.invalid" {
+		t.Errorf("commit identity = %q, want the fixed publish identity", log)
+	}
+	if _, err := os.Stat(filepath.Join(other, ".git", "index")); !os.IsNotExist(err) {
+		t.Errorf("publish wrote the other repository's index: %v", err)
+	}
+}

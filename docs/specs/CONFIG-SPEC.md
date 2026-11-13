@@ -59,10 +59,11 @@ machine_id: laptop         # this machine's name to `taskmgr sync`; default: the
 **Machine ID.** A set `machine_id` and a derived one obey one grammar:
 `^[a-z0-9][a-z0-9-]{0,62}$` — lowercase letters, digits and `-`, a leading letter or
 digit, at most 63 characters. It is used unescaped as a git ref component and as the
-local part of the commit e-mail, and the grammar is what makes both safe. A value that
-fails it is an error naming the key: `taskmgr config set machine_id` refuses it before
-writing, and `taskmgr sync` refuses a hand-edited one where it reads it. The engine never
-reads the key.
+local part of the commit e-mail, and the grammar is what makes both safe. The engine
+enforces it: a write of the per-user config that introduces a value outside it is refused
+with a validation error naming the key, before anything is written, and a hand-edited one
+is refused where the machine ID is read — by the publish calls, before they create or run
+anything ([SDK-SPEC](SDK-SPEC.md) §1, §2).
 
 When `machine_id` is unset, the ID is derived from the hostname: lowercased, cut at the
 first `.`, every character outside `[a-z0-9-]` replaced by `-`, and leading and trailing
@@ -111,12 +112,12 @@ repository.
 ## 3. Central root & registry — `mapping.yaml`
 
 The **central root** (default = the home) is a plain directory — **not a store**. It
-holds the registry, an advisory lock (below), and a `stores/` directory with one
+holds the registry, its advisory locks (below), and a `stores/` directory with one
 subfolder per central store; each subfolder is a complete, ordinary store per
 TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`, `closed/`). The
 dedicated `stores/` directory keeps store names in their own namespace, so a store can
 never collide with the central root's own files (`config.yaml`, `mapping.yaml`, and the
-two lock files). Because a central store is an ordinary store, relocating one is a plain folder
+three lock files). Because a central store is an ordinary store, relocating one is a plain folder
 move plus a registry edit (§5).
 
 ```
@@ -125,6 +126,7 @@ move plus a registry edit (§5).
 ├── .config.lock         # advisory flock for config.yaml writes (empty; only its lock state matters)
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
+├── .publish.lock        # advisory flock that runs one publish at a time (SDK-SPEC §1)
 └── stores/              # all central stores live here
     └── my-project/      # a central store — a complete, ordinary store
         ├── config.yaml
@@ -133,9 +135,8 @@ move plus a registry edit (§5).
         └── closed/
 ```
 
-`stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory and a
-`.gitignore` file in it (CLI-SPEC §2.5). Neither is mistaken for a store, and no store
-can take either name. Nothing lists `stores/`: every path into it is
+`stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory in it
+(CLI-SPEC §2.5). It is not mistaken for a store, and no store can take its name. Nothing lists `stores/`: every path into it is
 `stores/<store>` for a name the registry holds, and the store-name grammar below admits
 no leading `.`. The same rule keeps the `.incoming-<name>` staging directory of a move
 (§5) out of the namespace.
@@ -213,7 +214,8 @@ a broken folder means external interference or a store edited by hand.
 **Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
 `<central_root>/.lock` — an empty file whose only role is its lock state, mirroring a
 store's `.tasks/.lock` (TASK-STORAGE-SPEC §4.5). The central root is not itself a store,
-so it carries this separate lock for registry mutations.
+so it carries this separate lock for registry mutations. A publish holds it too while it
+commits, so no store is created, moved in or renamed mid-commit (SDK-SPEC §1).
 
 ---
 

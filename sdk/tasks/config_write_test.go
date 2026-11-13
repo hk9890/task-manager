@@ -335,6 +335,23 @@ func TestUpdateGlobalConfig_MachineIDRoundTrips(t *testing.T) {
 	}
 }
 
+// A machine ID is used unescaped as a git ref component and an e-mail local
+// part, so one outside the grammar is refused before it is written.
+func TestUpdateGlobalConfig_RejectsAnInvalidMachineID(t *testing.T) {
+	m, e := memHome(t)
+	err := updateGlobalConfig(m, e, func(g *GlobalConfig) error {
+		g.MachineID = "Lap_Top"
+		return nil
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Field != "machine_id" {
+		t.Fatalf("updateGlobalConfig(Lap_Top) = %v, want a *ValidationError on machine_id", err)
+	}
+	if _, err := m.ReadFile("/home/config.yaml"); !vfs.IsNotExist(err) {
+		t.Errorf("a refused machine_id was written: %v", err)
+	}
+}
+
 // TestUpdateGlobalConfig_RemovesOneOfTwoMalformedEntries is the machine-wide
 // version of the brick: an unusable package here blocks every write in every
 // store, and validating the surviving entries meant the command that removes it

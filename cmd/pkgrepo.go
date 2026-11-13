@@ -22,15 +22,14 @@
 // to extract, so the only thing taskmgr adds over `git clone` is knowing where
 // the clone belongs and what it provides.
 //
-// git is spawned here and by `taskmgr sync` (sync.go), through runGit and
-// gitOutput, and never by the SDK. The SDK's contract stays "a directory
+// The git that installs a package is spawned here, never by the SDK, whose
+// git runs only to publish the central stores. The SDK's contract stays "a directory
 // that exists on disk", so nothing on the hook path — the resolution a create or
 // a close performs — has any notion of a network, a URL or a revision
 // (HOOK-SPEC §3.5).
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -444,36 +443,20 @@ func removeArgs(ref tasks.PackageRef) string {
 // missing key, a diverged branch are all its message to give — so it is carried
 // into the error rather than replaced with a summary of it.
 func runGit(dir string, args ...string) error {
-	_, err := gitOutput(dir, nil, args...)
-	return err
-}
-
-// gitOutput is runGit for a command whose output the caller reads, run with env
-// as its environment (nil: this process's). It returns git's stdout, trimmed;
-// stderr goes only into the error, so a warning git prints never becomes a
-// value the caller compares.
-func gitOutput(dir string, env []string, args ...string) (string, error) {
 	if _, err := exec.LookPath("git"); err != nil {
-		return "", fmt.Errorf("git is not on PATH: this command runs git, so git must be available")
+		return fmt.Errorf("git is not on PATH: installing a package repository clones it, so git must be available")
 	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	cmd.Env = env
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	raw, err := cmd.Output()
-	out := strings.TrimSpace(string(raw))
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(string(out))
 		if msg == "" {
-			msg = out
+			return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 		}
-		if msg == "" {
-			return out, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-		}
-		return out, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, msg)
 	}
-	return out, nil
+	return nil
 }
 
 func init() {

@@ -15,11 +15,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package env is the environment seam: the only package in sdk/tasks besides
-// vfs (disk) and exec (hook processes) permitted to import os. Store resolution
-// (CONFIG-SPEC) must read the user's home directory and the TASKMGR_* variables;
-// concentrating that here keeps the rest of sdk/tasks free of os, exactly as vfs
-// does for the filesystem and exec for processes, so resolution stays
-// hermetically testable with no real HOME or environment touched.
+// vfs (disk) and exec (processes) permitted to import os. Store resolution
+// (CONFIG-SPEC) must read the user's home directory and the TASKMGR_* variables,
+// and the machine ID defaults to the hostname; concentrating that here keeps the
+// rest of sdk/tasks free of os, exactly as vfs does for the filesystem and exec
+// for processes, so resolution stays hermetically testable with no real HOME or
+// environment touched.
 package env
 
 // Environment is the seam for reading the user environment during store
@@ -33,6 +34,10 @@ type Environment interface {
 	// UserHomeDir returns the current user's home directory (matching
 	// os.UserHomeDir): $HOME on unix.
 	UserHomeDir() (string, error)
+
+	// Hostname returns the host name the kernel reports (matching
+	// os.Hostname), from which the machine ID defaults (CONFIG-SPEC §2).
+	Hostname() (string, error)
 }
 
 // NewOS returns an Environment backed by the real process environment.

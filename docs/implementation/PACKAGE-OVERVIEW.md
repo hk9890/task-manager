@@ -16,6 +16,7 @@ sdk/tasks/                  package tasks — public facade + imperative shell
   query · criteria · search  (query surface)
   hooks · hookrun · hookpayload  (lifecycle gates)
   packages · packageload         (hook packages: the format, and reading one)
+  publish · publishrun           (publishing the central stores to git)
   log · watch · doc
   internal/query/           pure filter-expression engine: lex · parse · ast · eval · errors
   internal/vfs/             the disk seam: FS interface · osFS (prod) · Mem (test + faults)
@@ -38,7 +39,7 @@ cmd/                        taskmgr CLI (cobra); calls Store, never the FS
   returns `*ParseError`. `tasks` adapts `*Issue`→`Row` and re-exports
   `ParseError` (`type ParseError = query.ParseError`).
 - **`internal/vfs` · `internal/exec` · `internal/env`** — the three seams (disk,
-  hook processes, user environment) and the only SDK packages that call
+  processes — hooks and git — and user environment) and the only SDK packages that call
   `os`/`syscall`. Each has a real implementation and a test double. `vfs.FS` is
   `ReadDir`, `ReadFile`, `Stat`, `WriteAtomic`, `Append`, `Rename`, `MkdirAll`,
   `Remove`, `Lock`, `Watch`; `osFS` encapsulates temp+fsync+rename, flock and

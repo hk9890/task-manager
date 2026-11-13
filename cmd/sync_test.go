@@ -14,79 +14,76 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// sync_test.go — `taskmgr sync`, in-process through cmd.Run (CLI-SPEC §2.5),
-// and the machine-ID rules it reads (CONFIG-SPEC §2).
-//
-// Every remote here is a bare repository in a temp directory, so the tests
-// exercise the real commit and push paths without reaching a network.
+// sync_test.go — `taskmgr sync`, in-process through cmd.Run (CLI-SPEC §2.5):
+// the summary line, and the refusals the SDK makes before it runs git. The
+// operation itself is tested in the SDK; what needs real git here is in
+// sync_cli_test.go, behind the integration tag.
 package cmd
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// ── L1: the machine-ID rules ─────────────────────────────────────────────────
-
-func TestDeriveMachineID_NormalisesHostnames(t *testing.T) {
-	for _, tc := range []struct{ host, want string }{
-		{"laptop", "laptop"},
-		{"Hans-Laptop.local", "hans-laptop"},
-		{"build_01.example.com", "build-01"},
-		{"-edge-", "edge"},
-		{"my host", "my-host"},
-		{"ünïcode", "n-code"},
-		{"", ""},
-		{".local", ""},
-		{"___", ""},
-	} {
-		if got := deriveMachineID(tc.host); got != tc.want {
-			t.Errorf("deriveMachineID(%q) = %q, want %q", tc.host, got, tc.want)
-		}
-	}
-}
-
-func TestValidMachineID_EnforcesGrammar(t *testing.T) {
+func TestSyncSummary_OneLinePerOutcome(t *testing.T) {
 	for _, tc := range []struct {
-		id   string
-		want bool
+		in   syncDTO
+		want string
 	}{
-		{"laptop", true},
-		{"0", true},
-		{"build-01", true},
-		{"a" + strings.Repeat("b", 62), true},
-		{"a" + strings.Repeat("b", 63), false},
-		{"", false},
-		{"-laptop", false},
-		{"Laptop", false},
-		{"lap_top", false},
-		{"lap.top", false},
-		{"lap/top", false},
+		{syncDTO{Branch: "machine/laptop", Committed: true, Commit: "3f9c2a1e4b7d8c6a5f0e1d2c3b4a59687f6e5d4c", Pushed: true},
+			"Committed 3f9c2a1e4b7d and pushed machine/laptop to origin"},
+		{syncDTO{Branch: "machine/laptop", Pushed: true},
+			"Nothing new to commit; pushed machine/laptop to origin"},
+		{syncDTO{Branch: "machine/laptop"},
+			"Nothing to publish: machine/laptop has nothing new since its last push to origin"},
 	} {
-		if got := validMachineID(tc.id); got != tc.want {
-			t.Errorf("validMachineID(%q) = %v, want %v", tc.id, got, tc.want)
+		if got := syncSummary(tc.in); got != tc.want {
+			t.Errorf("syncSummary(%+v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
 
-// ── L4: sync init and sync ───────────────────────────────────────────────────
+func TestSync_BeforeInitIsAnError(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	mustRun(t, "config", "set", "machine_id", "laptop", "--global")
+	out, errOut, code := run(t, "sync")
+	if code != 1 || out != "" || !strings.Contains(errOut, "taskmgr sync init --remote <url>") {
+		t.Errorf("sync before init: exit %d, stdout %q, stderr %q; want 1 pointing at sync init", code, out, errOut)
+	}
+}
 
-// syncFixture isolates the home, names the machine, registers one central
-// store, and returns the project directory, the stores directory and a bare
-// remote.
-func syncFixture(t *testing.T) (project, stores, remote string) {
-	t.Helper()
+func TestSyncInit_RemoteIsRequired(t *testing.T) {
+	t.Setenv("TASKMGR_HOME", t.TempDir())
+	if _, errOut, code := run(t, "sync", "init"); code != 1 || !strings.Contains(errOut, "remote") {
+		t.Errorf("sync init without --remote: exit %d, stderr %q", code, errOut)
+	}
+}
+
+func TestMachineID_GrammarIsEnforced(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("TASKMGR_HOME", home)
-	mustRun(t, "config", "set", "machine_id", "laptop", "--global")
-	project = t.TempDir()
-	mustRun(t, "--dir", project, "init", "--central", "--store-name", "demo")
-	remote = filepath.Join(t.TempDir(), "remote.git")
-	git(t, "", "init", "--quiet", "--bare", remote)
-	return project, filepath.Join(home, "stores"), remote
+
+	_, errOut, code := run(t, "config", "set", "machine_id", "Lap_Top", "--global")
+	if code != 1 || !strings.Contains(errOut, "machine_id") || !strings.Contains(errOut, `"Lap_Top"`) {
+		t.Errorf("config set of a bad ID: exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, "config.yaml")); !os.IsNotExist(err) {
+		t.Errorf("a refused machine_id was written: %v", err)
+	}
+
+	// A hand-edited value is refused where it is read.
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("version: 1\nmachine_id: Lap_Top\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code = run(t, "sync", "init", "--remote", "/nowhere.git")
+	if code != 1 || !strings.Contains(errOut, "machine_id") || !strings.Contains(errOut, `"Lap_Top"`) {
+		t.Errorf("sync init with a bad ID: exit %d, stderr %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(home, "stores")); !os.IsNotExist(err) {
+		t.Errorf("a refused init created %s: %v", filepath.Join(home, "stores"), err)
+	}
 }
 
 func mustRun(t *testing.T, args ...string) string {
@@ -96,293 +93,4 @@ func mustRun(t *testing.T, args ...string) string {
 		t.Fatalf("%v: exit %d, stderr %q", args, code, errOut)
 	}
 	return out
-}
-
-func syncJSON(t *testing.T) syncDTO {
-	t.Helper()
-	var got syncDTO
-	if err := json.Unmarshal([]byte(mustRun(t, "--json", "sync")), &got); err != nil {
-		t.Fatal(err)
-	}
-	return got
-}
-
-func TestSyncInit_CreatesTheRepositoryAndIsIdempotent(t *testing.T) {
-	_, stores, remote := syncFixture(t)
-
-	mustRun(t, "sync", "init", "--remote", remote)
-	if got := git(t, stores, "symbolic-ref", "--short", "HEAD"); got != "machine/laptop" {
-		t.Errorf("branch = %q, want machine/laptop", got)
-	}
-	if got := git(t, stores, "remote", "get-url", "origin"); got != remote {
-		t.Errorf("origin = %q, want %q", got, remote)
-	}
-	data, err := os.ReadFile(filepath.Join(stores, ".gitignore"))
-	if err != nil || string(data) != syncGitignore {
-		t.Errorf(".gitignore = %q (%v), want the engine's transient patterns", data, err)
-	}
-
-	var again syncInitDTO
-	if err := json.Unmarshal([]byte(mustRun(t, "--json", "sync", "init", "--remote", remote)), &again); err != nil {
-		t.Fatal(err)
-	}
-	want := syncInitDTO{Machine: "laptop", Branch: "machine/laptop", Path: stores, Remote: remote}
-	if again != want {
-		t.Errorf("second init = %+v, want %+v", again, want)
-	}
-
-	_, errOut, code := run(t, "sync", "init", "--remote", "/somewhere/else.git")
-	if code != 1 || !strings.Contains(errOut, "already publishes to "+remote) {
-		t.Errorf("init with another remote: exit %d, stderr %q; want 1 naming the existing remote", code, errOut)
-	}
-	if got := git(t, stores, "remote", "get-url", "origin"); got != remote {
-		t.Errorf("origin = %q after a refused init, want it unchanged", got)
-	}
-}
-
-// The patterns are checked against the files the engine really leaves behind,
-// and against the names it uses for the ones it removes again.
-func TestSyncInit_GitignoreKeepsTheEngineTransientFilesOut(t *testing.T) {
-	project, stores, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	mustRun(t, "--dir", project, "create", "--title", "takes the lock")
-	if _, err := os.Stat(filepath.Join(stores, "demo", ".lock")); err != nil {
-		t.Fatalf("a write left no lock file to ignore: %v", err)
-	}
-
-	for _, p := range []string{"demo/.tmp-123", "demo/content/.dem-0001.incoming", ".incoming-demo/config.yaml"} {
-		if err := os.MkdirAll(filepath.Dir(filepath.Join(stores, p)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(stores, p), nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	git(t, stores, "add", "--all")
-	staged := git(t, stores, "diff", "--cached", "--name-only")
-	for _, ignored := range []string{".lock", ".tmp-", ".incoming"} {
-		if strings.Contains(staged, ignored) {
-			t.Errorf("staged %q, which holds an engine transient file:\n%s", ignored, staged)
-		}
-	}
-	for _, kept := range []string{".gitignore", "demo/config.yaml"} {
-		if !strings.Contains(staged, kept) {
-			t.Errorf("did not stage %s:\n%s", kept, staged)
-		}
-	}
-}
-
-func TestSync_CommitsPushesAndSkipsWhatIsPublished(t *testing.T) {
-	project, stores, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-
-	first := syncJSON(t)
-	if !first.Committed || !first.Pushed || first.Commit == "" || first.Machine != "laptop" || first.Branch != "machine/laptop" {
-		t.Fatalf("first sync = %+v, want a commit, pushed", first)
-	}
-	if got := git(t, remote, "rev-parse", "machine/laptop"); got != first.Commit {
-		t.Errorf("remote branch at %s, want the commit sync reported, %s", got, first.Commit)
-	}
-	if got := git(t, stores, "log", "-1", "--format=%an <%ae> %s"); got != "taskmgr <laptop@taskmgr.invalid> taskmgr sync: laptop" {
-		t.Errorf("commit = %q", got)
-	}
-
-	if again := syncJSON(t); again != (syncDTO{Machine: "laptop", Branch: "machine/laptop"}) {
-		t.Errorf("sync with nothing new = %+v, want no commit and no push", again)
-	}
-
-	mustRun(t, "--dir", project, "create", "--title", "a change")
-	next := syncJSON(t)
-	if !next.Committed || !next.Pushed || next.Commit == first.Commit {
-		t.Fatalf("sync after a change = %+v, want a new commit, pushed", next)
-	}
-	if got := git(t, remote, "rev-parse", "machine/laptop"); got != next.Commit {
-		t.Errorf("remote branch at %s, want %s", got, next.Commit)
-	}
-
-	// The work tree in stores/ does not disturb the registry or resolution.
-	var entries []storeEntryDTO
-	if err := json.Unmarshal([]byte(mustRun(t, "--json", "store", "list")), &entries); err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Store != "demo" || entries[0].Health != "ok" {
-		t.Errorf("store list = %+v, want the one store, ok", entries)
-	}
-}
-
-func TestSync_HumanOutputIsOneLine(t *testing.T) {
-	_, _, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	if out := mustRun(t, "sync"); !strings.HasPrefix(out, "Committed ") || strings.Count(out, "\n") != 1 {
-		t.Errorf("sync printed %q, want one 'Committed …' line", out)
-	}
-	if out := mustRun(t, "sync"); out != "Nothing to publish: machine/laptop has nothing new since its last push to origin\n" {
-		t.Errorf("sync with nothing new printed %q", out)
-	}
-}
-
-func TestSync_RejectedPushNamesTheMachineIDClash(t *testing.T) {
-	project, _, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	mustRun(t, "sync")
-
-	// A second machine set up under the same ID publishes first.
-	other := filepath.Join(t.TempDir(), "other")
-	git(t, "", "clone", "--quiet", "--branch", "machine/laptop", remote, other)
-	if err := os.WriteFile(filepath.Join(other, "elsewhere"), []byte("x\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	git(t, other, "add", "--all")
-	git(t, other, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "other")
-	git(t, other, "push", "--quiet", "origin", "machine/laptop")
-	pushed := git(t, remote, "rev-parse", "machine/laptop")
-
-	mustRun(t, "--dir", project, "create", "--title", "a change")
-	out, errOut, code := run(t, "sync")
-	if code != 1 || out != "" {
-		t.Fatalf("sync after another push: exit %d, stdout %q; want 1 and no output", code, out)
-	}
-	for _, want := range []string{"another machine publishes under the machine ID \"laptop\"", "taskmgr config set machine_id"} {
-		if !strings.Contains(errOut, want) {
-			t.Errorf("stderr %q does not say %q", errOut, want)
-		}
-	}
-	if got := git(t, remote, "rev-parse", "machine/laptop"); got != pushed {
-		t.Errorf("remote branch moved to %s; a rejected push must leave it at %s", got, pushed)
-	}
-}
-
-func TestSync_BeforeInitIsAnError(t *testing.T) {
-	syncFixture(t)
-	_, errOut, code := run(t, "sync")
-	if code != 1 || !strings.Contains(errOut, "taskmgr sync init --remote <url>") {
-		t.Errorf("sync before init: exit %d, stderr %q; want 1 pointing at sync init", code, errOut)
-	}
-}
-
-func TestSync_ChangedMachineIDIsRefused(t *testing.T) {
-	_, _, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	mustRun(t, "config", "set", "machine_id", "desktop", "--global")
-	for _, args := range [][]string{{"sync"}, {"sync", "init", "--remote", remote}} {
-		_, errOut, code := run(t, args...)
-		if code != 1 || !strings.Contains(errOut, "machine_id changed") || !strings.Contains(errOut, "machine/desktop") {
-			t.Errorf("%v on a renamed machine: exit %d, stderr %q", args, code, errOut)
-		}
-	}
-}
-
-// Once stores/ is a work tree, a missing git must still be reported as such,
-// not as a missing remote or a detached work tree.
-func TestSync_GitMissingIsReportedAsSuch(t *testing.T) {
-	_, _, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	t.Setenv("PATH", t.TempDir())
-	for _, args := range [][]string{{"sync"}, {"sync", "init", "--remote", remote}} {
-		_, errOut, code := run(t, args...)
-		if code != 1 || !strings.Contains(errOut, "git is not on PATH") {
-			t.Errorf("%v without git: exit %d, stderr %q", args, code, errOut)
-		}
-	}
-}
-
-// The user's global git config must neither stop an unattended sync (a failing
-// hook) nor change what it publishes (a global excludes file).
-func TestSync_GlobalGitConfigDoesNotApply(t *testing.T) {
-	project, stores, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	id := strings.TrimSpace(strings.TrimPrefix(mustRun(t, "--dir", project, "create", "--title", "kept"), "Created "))
-	hooks := t.TempDir()
-	for _, hook := range []string{"prepare-commit-msg", "post-commit"} {
-		if err := os.WriteFile(filepath.Join(hooks, hook), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	excludes := filepath.Join(t.TempDir(), "ignore")
-	if err := os.WriteFile(excludes, []byte("*.md\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	global := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(global, []byte("[core]\n\thooksPath = "+hooks+"\n\texcludesFile = "+excludes+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", global)
-	if got := syncJSON(t); !got.Committed || !got.Pushed {
-		t.Errorf("sync with failing global hooks = %+v, want a commit, pushed", got)
-	}
-	if got := git(t, stores, "ls-files", "demo/"+id+".md"); got == "" {
-		t.Errorf("demo/%s.md is not in the snapshot: the global excludes file applied", id)
-	}
-}
-
-// A sync run from inside another repository's git hook inherits GIT_DIR and
-// GIT_INDEX_FILE, and a shell profile can export the user's identity; neither
-// may redirect the snapshot or sign it with the user's name.
-func TestSync_InheritedGitEnvironmentIsIgnored(t *testing.T) {
-	_, stores, remote := syncFixture(t)
-	mustRun(t, "sync", "init", "--remote", remote)
-	other := t.TempDir()
-	git(t, other, "init", "--quiet")
-	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
-	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
-	t.Setenv("GIT_AUTHOR_EMAIL", "someone@example.com")
-	t.Setenv("GIT_COMMITTER_EMAIL", "someone@example.com")
-	got := syncJSON(t)
-	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
-		if err := os.Unsetenv(name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !got.Committed || !got.Pushed {
-		t.Fatalf("sync = %+v, want a commit, pushed", got)
-	}
-	if log := git(t, stores, "log", "-1", "--format=%ae %ce"); log != "laptop@taskmgr.invalid laptop@taskmgr.invalid" {
-		t.Errorf("commit identity = %q, want the fixed sync identity", log)
-	}
-	if _, err := os.Stat(filepath.Join(other, ".git", "index")); !os.IsNotExist(err) {
-		t.Errorf("sync wrote the other repository's index: %v", err)
-	}
-}
-
-func TestAbsRemote_ResolvesOnlyLocalRelativePaths(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct{ in, want string }{
-		{"./stores.git", filepath.Join(wd, "stores.git")},
-		{"stores.git", filepath.Join(wd, "stores.git")},
-		{"../a/b.git", filepath.Join(filepath.Dir(wd), "a", "b.git")},
-		{"/srv/stores.git", "/srv/stores.git"},
-		{"git@github.com:you/stores.git", "git@github.com:you/stores.git"},
-		{"https://github.com/you/stores.git", "https://github.com/you/stores.git"},
-		{"file:///srv/stores.git", "file:///srv/stores.git"},
-	} {
-		got, err := absRemote(tc.in)
-		if err != nil || got != tc.want {
-			t.Errorf("absRemote(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
-		}
-	}
-}
-
-func TestMachineID_GrammarIsEnforced(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("TASKMGR_HOME", home)
-
-	_, errOut, code := run(t, "config", "set", "machine_id", "Lap_Top", "--global")
-	if code != 1 || !strings.Contains(errOut, `invalid machine_id "Lap_Top"`) {
-		t.Errorf("config set of a bad ID: exit %d, stderr %q", code, errOut)
-	}
-
-	// A hand-edited value is refused where it is read.
-	if err := os.WriteFile(filepath.Join(home, "config.yaml"), []byte("version: 1\nmachine_id: Lap_Top\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, errOut, code = run(t, "sync", "init", "--remote", "/nowhere.git")
-	if code != 1 || !strings.Contains(errOut, `invalid machine_id "Lap_Top"`) {
-		t.Errorf("sync init with a bad ID: exit %d, stderr %q", code, errOut)
-	}
-	if _, err := os.Stat(filepath.Join(home, "stores")); !os.IsNotExist(err) {
-		t.Errorf("a refused init created %s: %v", filepath.Join(home, "stores"), err)
-	}
 }

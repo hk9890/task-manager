@@ -15,8 +15,8 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 │   └── taskmgr/                  package main
 ├── sdk/tasks/                    separate module — the storage engine and the public API
 │   ├── internal/vfs/             the disk seam: FS interface, osFS, and Mem for tests
-│   ├── internal/exec/            the process seam: hook processes
-│   ├── internal/env/             the environment seam: HOME and TASKMGR_* for resolution
+│   ├── internal/exec/            the process seam: hooks, and git for publishing
+│   ├── internal/env/             the environment seam: HOME, TASKMGR_* and the hostname
 │   ├── internal/query/           the filter-expression engine — pure, imports nothing of tasks
 │   └── internal/storetest/       fixture builder; every test store is built through it
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
@@ -75,7 +75,7 @@ rg -n 'Use:\s+"' cmd/                                    # every command the CLI
 rg -n '^func \(s \*Store\)' sdk/tasks/                   # every operation the engine offers
 rg -n '^\tErr\w+' sdk/tasks/store.go                     # the error sentinels callers match with errors.Is
 rg -n 'kind: field' sdk/tasks/internal/query/parse.go    # every query field and the operators it allows
-rg -n 'mayImport\w+|mayDeclareStoreMethods' -A12 sdk/tasks/importboundary_test.go  # the four shell exemption lists
+rg -n 'mayImport\w+|mayDeclareStoreMethods' -A20 sdk/tasks/importboundary_test.go  # the four shell exemption lists
 rg -n '^func validateFields' -A90 sdk/tasks/validate.go  # every field constraint enforced before a write
 rg -n 'MaxInlineBody|joinInlineBody' sdk/tasks/overflow.go      # the body-overflow watermarks
 rg -n '<field-name>' sdk/tasks/frontmatter.go            # how a stored field is read and written

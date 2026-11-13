@@ -91,6 +91,22 @@ func TestOSRunner_InheritsParentEnv(t *testing.T) {
 	}
 }
 
+// An unset variable is gone, not set empty: git tells the two apart for
+// GIT_DIR, and a caller that must not pass one through needs the first.
+func TestOSRunner_UnsetDropsInheritedVariable(t *testing.T) {
+	t.Setenv("TASKMGR_OS_RUNNER_DROPPED", "inherited")
+	t.Setenv("TASKMGR_OS_RUNNER_KEPT", "kept")
+	r := NewOS()
+	res := r.Run(Spec{
+		Argv:  []string{"sh", "-c", "printf %s \"${TASKMGR_OS_RUNNER_DROPPED-unset} $TASKMGR_OS_RUNNER_KEPT $TASKMGR_OS_RUNNER_ADDED\""},
+		Env:   []string{"TASKMGR_OS_RUNNER_ADDED=added"},
+		Unset: []string{"TASKMGR_OS_RUNNER_DROPPED", "TASKMGR_OS_RUNNER_ADDED"},
+	})
+	if got := string(res.Stdout); got != "unset kept added" {
+		t.Fatalf("stdout = %q, want the unset variable gone, the rest inherited, and Env still layered on", got)
+	}
+}
+
 func TestOSRunner_WorkingDir(t *testing.T) {
 	dir := t.TempDir()
 	r := NewOS()

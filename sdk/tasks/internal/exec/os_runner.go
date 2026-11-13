@@ -24,6 +24,8 @@ import (
 	"errors"
 	"os"
 	osexec "os/exec"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -60,6 +62,22 @@ func killGroup(pid int, sig syscall.Signal) error {
 	return syscall.Kill(-pid, sig)
 }
 
+// inherited is this process's environment without the variables named in unset.
+func inherited(unset []string) []string {
+	env := os.Environ()
+	if len(unset) == 0 {
+		return env
+	}
+	kept := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(unset, name) {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
 func (osRunner) Run(spec Spec) Result {
 	if len(spec.Argv) == 0 {
 		return Result{Category: SpawnError, Err: errors.New("exec: empty argv")}
@@ -74,7 +92,7 @@ func (osRunner) Run(spec Spec) Result {
 
 	cmd := osexec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(os.Environ(), spec.Env...)
+	cmd.Env = append(inherited(spec.Unset), spec.Env...)
 	cmd.Stdin = bytes.NewReader(spec.Stdin)
 
 	var stdout, stderr bytes.Buffer

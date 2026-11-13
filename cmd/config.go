@@ -204,13 +204,7 @@ var configKeyDefs = []configKeyDef{
 		name: "machine_id", scope: scopeGlobal, writable: true,
 		desc: "this machine's name to 'taskmgr sync', which publishes on branch machine/<id>; unset means the hostname",
 		get:  func(t *configTarget) string { return t.gcfg.MachineID },
-		set: func(t *configTarget, v string) error {
-			if v != "" && !validMachineID(v) {
-				return errInvalidMachineID(v)
-			}
-			t.gcfg.MachineID = v
-			return nil
-		},
+		set:  func(t *configTarget, v string) error { t.gcfg.MachineID = v; return nil },
 	},
 }
 

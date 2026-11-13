@@ -25,7 +25,9 @@ func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // 
 func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
 func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
-func CentralStoresDir() (string, error)                          // <central_root>/stores, whether or not it exists
+func MachineID() (string, error)                                 // this machine's ID: machine_id, else from the hostname
+func InitPublish(remote string) (PublishInfo, error)             // make <central_root>/stores a work tree publishing to remote
+func Publish() (PublishResult, error)                            // commit the central stores and push machine/<id>
 func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
@@ -91,11 +93,35 @@ const FileExt        = ".md"         // the per-issue file extension
   override could select. Each entry carries its `Health`, classified by the same
   test resolution applies, so enumerating the registry costs one `stat` per entry
   and never reports a dangling or broken entry as usable.
-- **`CentralStoresDir`** returns `<central_root>/stores`, the directory every central
-  store lives in (CONFIG-SPEC §3). It reads the per-user config to find the central root,
-  never writes, and does not check that the directory exists. It is the whole of the
-  SDK's share of `taskmgr sync` ([CLI-SPEC](CLI-SPEC.md) §2.5): the CLI runs git in that
-  directory, so the SDK stays free of git and of any network.
+- **`MachineID`** returns this machine's ID (CONFIG-SPEC §2): the per-user `machine_id`,
+  else one derived from the hostname, which it reads through the environment seam. A
+  `machine_id` outside the grammar is a `*ValidationError` on `machine_id`; a hostname
+  that derives no valid ID is an error telling the user to set one.
+- **`InitPublish`** and **`Publish`** publish the central stores to a git remote, the
+  operation behind `taskmgr sync init` and `taskmgr sync`
+  ([Publishing the central stores](#publishing-the-central-stores) below).
+
+  ```go
+  type PublishInfo struct {
+      Machine string // the machine ID
+      Branch  string // machine/<Machine>
+      Path    string // <central_root>/stores, the git work tree
+      Remote  string // the URL of the remote "origin"
+  }
+
+  type PublishResult struct {
+      Machine   string
+      Branch    string
+      Committed bool   // this run made a commit
+      Commit    string // its full SHA; "" when Committed is false
+      Pushed    bool   // this run pushed
+  }
+  ```
+
+  `InitPublish` resolves a relative local `remote` against the working directory, as
+  `ResolveOptions.WorkDir` is resolved: git runs in the stores directory and would resolve
+  it there instead. A URL with a scheme, or in scp form (`host:path`), is kept as given;
+  an empty one is a `*ValidationError` on `remote`.
 - **`DerivePrefix`** turns a project path into the default ID prefix for a store
   tracking it (CONFIG-SPEC §5): base name lowercased, non-alphanumerics stripped,
   leading digits removed, truncated to 8, falling back to `task`. `Init` and
@@ -271,6 +297,150 @@ mutation ([HOOK-SPEC](HOOK-SPEC.md) §3.4) is refused here instead. A malformed 
 already on disk is not re-validated: it would otherwise refuse the write that removes
 it. On success the store's compiled hook set is invalidated, so a long-lived handle runs
 the hooks it just wrote rather than the ones it opened with.
+
+### Publishing the central stores
+
+`InitPublish` and `Publish` publish this machine's central stores to a git remote, as a
+read-only mirror for every other reader. What is published is `<central_root>/stores/` and
+nothing else: a project-local `.tasks/` already travels with its repository, and the
+registry and the per-user config are machine-local by construction (CONFIG-SPEC §2, §3).
+
+- **The work tree is `<central_root>/stores/` itself**, so a commit is a snapshot of the
+  stores exactly as the engine left them. History is kept: every publish that finds a
+  change is one ordinary commit.
+- **One branch per machine:** `machine/<machine-id>`, where the ID is `MachineID`'s.
+- **One writer per branch.** Only the machine with that ID pushes it, so every push is a
+  fast-forward. A publish never merges, rebases, fetches or force-pushes. Why the design
+  stops at a mirror is [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §9.
+
+A git that cannot be started is reported as git not on `PATH`; git's own stderr is carried
+into any other failure. Where git's exit status is read as an answer, only exit `1` means
+"absent" — no such key, not a symbolic ref, no such ref, staged differences; any other
+status is a failure.
+
+**`InitPublish(remote)`:**
+
+1. Read the machine ID. An invalid one is returned before anything is created.
+2. Resolve `remote` (§1 above) and create `<central_root>/stores/` when it is missing.
+3. When it holds no `.git`, run `git init` and point the unborn `HEAD` at
+   `refs/heads/machine/<machine-id>` (`git symbolic-ref`, not `--initial-branch`, which
+   needs git 2.28). When it does, `HEAD` must be that branch, as for `Publish`.
+4. Add `origin` with the URL. An `origin` that already has it is left alone; one with
+   another URL is refused, naming both, and is **not** overwritten — changing where a
+   machine publishes is the user's call. The message names `git remote remove origin`
+   followed by `init` again, not `git remote set-url`: removing the remote also removes its
+   remote-tracking ref, which `Publish` reads as what was last published (step 4 below),
+   so the next publish pushes the whole branch to the new remote.
+5. Write the exclude file (below).
+
+Running it again with the same remote changes nothing.
+
+**`Publish()`:**
+
+1. **Preconditions.** `<central_root>/stores/` must hold a `.git` with a remote `origin`;
+   otherwise the error names `taskmgr sync init --remote <url>`, and without a `.git` no
+   git runs at all. `git symbolic-ref --quiet HEAD` must print the full ref
+   `refs/heads/machine/<machine-id>` — not `--short`, which prints `heads/machine/<id>`
+   when a tag of that name exists. A work tree on another branch means `machine_id`
+   changed since the init, and the error names both branches and the `git branch -m` that
+   moves the work tree to the new ID.
+2. **Exclude file.** Rewritten (below).
+3. **Commit, under the locks.** `git add --all`. When `git diff --cached --quiet` finds
+   nothing staged, no commit is made. Otherwise one commit with the message
+   `taskmgr sync: <machine-id>`, with `--no-verify`.
+4. **Push.** `git push --no-verify origin machine/<machine-id>`, only when `HEAD` differs
+   from `refs/remotes/origin/machine/<machine-id>`, the ref the last successful push
+   left — or there is no such ref yet. The branch has one writer, so that ref records what
+   the remote held after the last push, and a publish with nothing new reaches no
+   network. The cost is accepted: a remote branch deleted or a remote recreated since that
+   push is not seen, and is published again at the next change. Checking the remote on
+   every run (`git ls-remote`) was rejected because it would make every no-op publish a
+   network call.
+
+**What the locks cover, and why the push is outside them.** Step 3 runs under the
+central-root lock (CONFIG-SPEC §3), then the write lock of every store the registry holds,
+taken in store-name order so that two holders of store locks cannot each hold one the
+other waits for, and all of them are released before step 4. The central lock comes first,
+the order every registry operation takes the two in, and the registry is read under it, so
+no store is created, moved in or renamed between that read and the commit. A commit is
+therefore a settled state: no write is half done in it, no issue sits in both partitions or
+in neither, and no comment sidecar is caught mid-append. The hold is two local git
+commands; the push, the one network call, holds none of these locks, because a lock held
+across it would stall every writer for as long as the remote takes. Reads never wait, as
+for any write (§7). Two cases are not covered:
+
+- a registered store whose directory is gone has nothing to lock and is skipped;
+- a directory under `stores/` that the registry does not hold is not locked, and is
+  published as it is found. Every engine write to one — a store being created or moved
+  in — happens under the central-root lock, so only a hand edit is published mid-write;
+  the staging directory of a move is excluded (below).
+
+**One publish at a time.** Both calls run whole, push included, under a third lock,
+`<central_root>/.publish.lock`, which no writer takes. Two publishes on one machine — a
+timer and a manual run — would otherwise push the same branch at once, and the remote
+refuses one of the two ref updates. Holding it across the network stalls nothing but the
+second publish, which then finds the branch already pushed or pushes a fast-forward.
+
+A pre-hook that runs a publish waits on the lock its own mutation holds, and so does a
+pre-hook that writes to a central store while a publish holds the locks of the stores
+before it in name order: each waits on the other until `hook_timeout` kills the hook
+([HOOK-SPEC](HOOK-SPEC.md) §7), and with `hook_timeout: 0`, which disables the limit, until
+the user interrupts it. The locks the publish has already taken stay held for that time.
+
+**The exclude file.** Both calls rewrite `<central_root>/stores/.git/info/exclude` with
+one pattern per file the engine creates and removes on its own, because a snapshot of one
+is a state no reader can use. Each pattern is built from the name the engine itself uses,
+so renaming one in the engine cannot leave the mirror publishing it under the new name:
+
+| Pattern | The engine's file |
+|---|---|
+| `/*/.lock` | each store's advisory write lock (TASK-STORAGE-SPEC §4.5) |
+| `.tmp-*` | the temp file of an atomic write, before its rename |
+| `/*/content/.*.incoming` | new body bytes staged before they replace a content sidecar (TASK-STORAGE-SPEC §4.6) |
+| `/.incoming-*/` | a store assembled by a move before it is published (CONFIG-SPEC §5) |
+
+The file is the repository's own and is never committed, so a commit cannot edit a pattern
+away and a reader of the mirror never sees it; an edit made to it by hand is lost at the
+next publish. A `.gitignore` in `stores/` is the user's: the engine neither writes nor
+removes one. A tracked `.gitignore` written once by the init was rejected: it went stale
+the moment the engine renamed a transient file.
+
+**git runs unattended and in the stores' repository only.** Every git command both calls
+run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/stores/`, and:
+
+- runs without the variables `git rev-parse --local-env-vars` lists (`GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the rest). A publish started from inside another
+  repository's git hook inherits them, and they would point `git add` and `git commit` at
+  that repository's index instead of the stores';
+- takes the identity `taskmgr <machine-id@taskmgr.invalid>` through `GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. git ranks these
+  variables above any config, so a value the user exports is replaced, not merely
+  outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
+  to;
+- takes `core.hooksPath=/dev/null`, `core.excludesFile=/dev/null`,
+  `commit.gpgSign=false` and `push.gpgSign=false`. `--no-verify` skips only some hooks; a
+  `prepare-commit-msg` or `post-commit` hook from a global `core.hooksPath` would otherwise
+  run, and could fail, in the stores' work tree. A global excludes file could silently
+  keep store files out of the mirror, and signing needs a key or a prompt;
+- has no timeout, unlike a hook. Every command but the push is local, and a push that
+  hangs on the network is the caller's to interrupt: the process stays in the caller's
+  process group, so a Ctrl-C reaches it.
+
+The user's own git identity is deliberately not used. A publish commit is a snapshot, not
+an authored change — who made each change is already in the issue's `creator`, `agent`
+and comment fields (TASK-STORAGE-SPEC §4.3, §4.4) — and a fixed identity means publishing
+needs no git setup on the machine and no signing key, which is what lets it run from a
+timer or a service. The e-mail names the machine, so `git log` across branches still says
+where each snapshot came from.
+
+**A rejected push is a clash, not a race.** When the remote refuses the push because its
+`machine/<machine-id>` holds commits this work tree lacks (git reports it `[rejected]`), a
+second writer exists: another machine publishes under this ID, or this machine was set up
+again from scratch. `Publish` returns an error saying exactly that, telling the user to
+pick another `machine_id` (`taskmgr config set machine_id <id> --global`), move the work
+tree to it with `git branch -m machine/<id>`, and publish again. It never forces:
+overwriting the branch would delete the other writer's snapshots. A clash is found only
+by a publish that pushes, so a machine with nothing new reports it at its next change.
 
 ---
 
@@ -486,7 +656,7 @@ type GlobalConfig struct {
     CentralRoot string `yaml:"central_root,omitempty"` // registry + central stores; "" = the taskmgr home
     HookTimeout string `yaml:"hook_timeout,omitempty"` // fallback limit for a store that sets none
     Use         []PackageRef `yaml:"use,omitempty"`    // hook packages applied to every store on this machine
-    MachineID   string `yaml:"machine_id,omitempty"`   // this machine's name to `taskmgr sync`; "" = derived from the hostname
+    MachineID   string `yaml:"machine_id,omitempty"`   // this machine's name to Publish; "" = derived from the hostname
 }
 
 // PackageRef is one entry of a use: list. Exactly one field is set.
@@ -550,7 +720,7 @@ for a `path:` one.
 The four repository functions are the SDK's whole share of installing a package: they
 read the directory and remove one, and know nothing of URLs, revisions or networks.
 Cloning is the CLI's (`taskmgr package repo add`, [CLI-SPEC](CLI-SPEC.md) §2.4), so an SDK
-consumer inherits no dependency on git and no network reach on the hook path.
+consumer reaches git only by calling `InitPublish` or `Publish`, and never on the hook path.
 `RemovePackageRepo` takes a name rather than a path, so nothing outside
 `<taskmgr home>/packages` is reachable through it.
 
@@ -561,9 +731,10 @@ that could never resolve would fail mutations in every store on the machine, so 
 refused at the call that caused it — and neither re-checks one already on disk, which is
 what leaves a bad entry removable.
 
-`MachineID` is carried, not used: the engine never reads it, and neither write call
-checks it. Its grammar and its hostname default (CONFIG-SPEC §2) are applied by the
-front end that publishes under it, which is `taskmgr sync` alone.
+Both also refuse a `machine_id` the write introduces that fails the machine-ID grammar
+(CONFIG-SPEC §2), with a `*ValidationError` on `machine_id`. A value already on disk is
+not re-checked by a write, for the same reason as a `use:` entry; `MachineID` refuses it
+where it is read.
 
 ---
 

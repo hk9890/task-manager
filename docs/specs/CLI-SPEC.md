@@ -576,56 +576,28 @@ warnings and one name in `still_used`.
 ## 2.5 Publishing the central stores
 
 `taskmgr sync` publishes this machine's central stores to a git remote, as a read-only
-mirror for every other reader. What is published is `<central_root>/stores/` and nothing
-else: a project-local `.tasks/` already travels with its repository, and the registry and
-the per-user config are machine-local by construction (CONFIG-SPEC §2, §3).
-
-- **The work tree is `<central_root>/stores/` itself**, so a commit is a snapshot of the
-  stores exactly as the engine left them. History is kept: every sync that finds a change
-  is one ordinary commit.
-- **One branch per machine:** `machine/<machine-id>`, where the ID is the per-user
-  `machine_id` or its hostname default (CONFIG-SPEC §2).
-- **One writer per branch.** Only the machine with that ID pushes it, so every push is a
-  fast-forward. `sync` never merges, rebases, fetches or force-pushes. Why the design
-  stops at a mirror is [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §9.
+mirror on the branch `machine/<machine-id>` that only this machine pushes. The operation
+is the SDK's — `InitPublish` and `Publish` — and every step, the locks it takes, the files
+it keeps out and the git settings it runs under are stated in
+[SDK-SPEC § Publishing the central stores](SDK-SPEC.md#publishing-the-central-stores).
+This section is the command surface over it.
 
 Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
-`git` must be on `PATH`; its absence is reported as such, and git's own stderr is carried
-into any other failure, as for §2.4.
+`git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
+`sync init` yet, another remote, another machine's branch, a rejected push — exits `1`
+with its message on stderr and prints nothing on stdout.
 
 ### `taskmgr sync init --remote <url>`
 
-Make `<central_root>/stores/` a git repository that publishes to `url`.
+Make `<central_root>/stores/` a git repository on the branch `machine/<machine-id>` that
+publishes to `url`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--remote` | — (required) | The git URL to publish to. It becomes the remote `origin`. A relative local path is made absolute against the working directory first: git runs in the stores directory and would resolve it there. A URL with a scheme or in scp form (`host:path`) is kept as typed. |
+| `--remote` | — (required) | The git URL to publish to, as the remote `origin`. A relative local path is relative to the working directory the command runs in. A URL with a scheme or in scp form (`host:path`) is kept as typed. |
 
-1. Read the machine ID. An invalid one exits `1` before anything is created.
-2. Create `<central_root>/stores/` when it is missing.
-3. When it holds no `.git`, run `git init` and point the unborn `HEAD` at
-   `machine/<machine-id>` (`git symbolic-ref`, not `--initial-branch`, which needs git
-   2.28). When it does, its current branch must be that branch, as for `sync` below.
-4. Add `origin` with `url`. An `origin` that already has `url` is left alone; one with
-   another URL exits `1` naming both and is **not** overwritten — changing where a
-   machine publishes is the user's call. The message names `git remote remove origin`
-   followed by `init` again, not `git remote set-url`: removing the remote also removes
-   its remote-tracking ref, which `sync` reads as what was last published (step 3 below),
-   so the next sync pushes the whole branch to the new remote.
-5. Write `.gitignore` when it is absent. A file that is already there is kept as it is,
-   so an edit the user made survives a second init.
-
-Running `init` again with the same remote changes nothing and exits `0`.
-
-The `.gitignore` keeps out the files the engine creates and removes on its own, because a
-snapshot of one is a state no reader can use:
-
-| Pattern | The engine's file |
-|---|---|
-| `/*/.lock` | each store's advisory write lock (TASK-STORAGE-SPEC §4.5) |
-| `.tmp-*` | the temp file of an atomic write, before its rename |
-| `/*/content/.*.incoming` | new body bytes staged before they replace a content sidecar (TASK-STORAGE-SPEC §4.6) |
-| `/.incoming-*/` | a store assembled by `store move` before it is published (CONFIG-SPEC §5) |
+Running `init` again with the same remote changes nothing and exits `0`. Another remote
+exits `1`, and the message names `git remote remove origin` to run before `init` again.
 
 - **Output:** the stores directory, the remote and the branch, and a `next: taskmgr sync`
   line (`syncInitDTO` in JSON, §6).
@@ -634,76 +606,9 @@ snapshot of one is a state no reader can use:
 
 Commit what changed under `<central_root>/stores/` and push it to `machine/<machine-id>`.
 
-1. **Preconditions.** `<central_root>/stores/` must hold a `.git` with a remote `origin`;
-   otherwise `sync` exits `1` and names `sync init --remote <url>`. The current branch
-   must be `machine/<machine-id>`; a work tree on another branch means `machine_id`
-   changed since `init`, and `sync` exits `1` naming both branches and the
-   `git branch -m` that moves the work tree to the new ID.
-2. **Commit.** `git add --all`. When nothing is staged, no commit is made. Otherwise one
-   commit with the message `taskmgr sync: <machine-id>`.
-3. **Push.** `git push origin machine/<machine-id>`, only when `HEAD`
-   differs from the remote-tracking ref the last successful push left — or there is no
-   such ref yet. The branch has one writer, so that ref records what the remote held
-   after the last push, and a sync with nothing new reaches no network. The cost is
-   accepted: a remote branch deleted or a remote recreated since that push is not seen,
-   and is published again at the next change. Checking the remote on every run
-   (`git ls-remote`) was rejected because it would make every no-op sync a network call.
-   The human summary therefore says "nothing new since its last push", not that the
-   remote is up to date.
-
-**Git runs unattended and in the stores' repository only.** Every git command `sync` and
-`sync init` run:
-
-- runs without the variables `git rev-parse --local-env-vars` lists (`GIT_DIR`,
-  `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the rest). A sync started from inside another
-  repository's git hook inherits them, and they would point `git add` and `git commit`
-  at that repository's index instead of the stores';
-- takes the identity `taskmgr <machine-id@taskmgr.invalid>` through `GIT_AUTHOR_NAME`,
-  `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL`. Git ranks these
-  variables above any config, so a value the user exports is replaced, not merely
-  outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be
-  delivered to;
-- takes `core.hooksPath=/dev/null`, `core.excludesFile=/dev/null`,
-  `commit.gpgSign=false` and `push.gpgSign=false`. `--no-verify`, which the commit and
-  the push also take, skips only some hooks; a `prepare-commit-msg` or `post-commit`
-  hook from a global `core.hooksPath` would otherwise run, and could fail, in the stores'
-  work tree. A global excludes file could silently keep store files out of the mirror,
-  and signing needs a key or a prompt.
-
-The user's own git identity is deliberately not used. A sync
-commit is a snapshot, not an authored change — who made each change is already in the
-issue's `creator`, `agent` and comment fields (TASK-STORAGE-SPEC §4.3, §4.4) — and a fixed
-identity means `sync` needs no git setup on the machine and no signing key, which is what
-lets it run from a timer or a service. The e-mail names the machine, so `git log` across
-branches still says where each snapshot came from.
-
-**A rejected push is a clash, not a race.** When the remote refuses the push because its
-`machine/<machine-id>` holds commits this work tree lacks, a second writer exists: another
-machine publishes under this ID, or this machine was set up again from scratch. `sync`
-exits `1` saying exactly that, and tells the user to pick another `machine_id`
-(`config set machine_id <id> --global`), move the work tree to it with
-`git branch -m machine/<id>`, and sync again. It never forces: overwriting the branch
-would delete the other writer's snapshots. A clash is found only by a sync that pushes,
-so a machine with nothing new to publish reports it at its next change.
-
-**No store lock is taken.** Holding a store's lock across a network call would stall
-every writer on it for as long as the remote takes. The cost is accepted: a snapshot
-taken during a write can capture the middle of it. Issue files are replaced atomically,
-so none is torn, but:
-
-- a write that touches several files can be caught half done — a close with the issue
-  in both partitions, a reopen with it in neither, a `.md` beside the sidecar it is
-  about to replace;
-- a comment sidecar is appended in place (TASK-STORAGE-SPEC §6), so its last comment
-  can be caught cut short;
-- a file renamed between git's scan of the tree and its add makes `git add` fail, and
-  `sync` exits `1` with git's message.
-
-Each is transient: the next sync publishes the settled state, or succeeds where this one
-failed. Nothing is lost from the stores themselves, which `sync` only reads.
-
 - **Output (human):** one line — the commit and the push, the push alone, or that the
-  branch has nothing new since its last push.
+  branch has nothing new since its last push. It says "nothing new since its last push",
+  not that the remote is up to date: a sync with nothing new reaches no network.
 - **Output (JSON):** `syncDTO` (§6).
 
 ---

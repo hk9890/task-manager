@@ -43,6 +43,10 @@ const (
 	storesSubdir = "stores"
 	// centralLockName is the advisory lock for registry writes (CONFIG-SPEC §3).
 	centralLockName = ".lock"
+	// publishLockName serializes whole publishes, push included, against each
+	// other. No writer takes it, so holding it across the network stalls nothing
+	// but another publish (SDK-SPEC §1).
+	publishLockName = ".publish.lock"
 	// globalConfigLockName is the advisory lock for per-user config writes. It is
 	// a second lock file rather than centralLockName because the two guard
 	// different files: the home and the central root are the same directory only
@@ -80,9 +84,9 @@ type GlobalConfig struct {
 	// config, not here.
 	Use []PackageRef `yaml:"use,omitempty"`
 
-	// MachineID names this machine to `taskmgr sync` (CONFIG-SPEC §2), which
-	// publishes the central stores on the branch machine/<MachineID>. The engine
-	// never reads it; it lives here because this is the machine's own file.
+	// MachineID names this machine to Publish (CONFIG-SPEC §2), which pushes
+	// the central stores to the branch machine/<MachineID>. "" means one derived
+	// from the hostname; MachineID resolves either.
 	MachineID string `yaml:"machine_id,omitempty"`
 
 	// defects records what is wrong with this file's own package keys, on the
@@ -184,6 +188,9 @@ func updateGlobalConfig(fs vfs.FS, e env.Environment, mutate func(*GlobalConfig)
 			return err
 		}
 	}
+	if next.MachineID != cur.MachineID && next.MachineID != "" && !validMachineID(next.MachineID) {
+		return invalidMachineID(next.MachineID)
+	}
 	if err := checkUseChange(cur.Use, next.Use); err != nil {
 		return fmt.Errorf("per-user config: %w", err)
 	}
@@ -208,6 +215,9 @@ func LoadGlobalConfig() (GlobalConfig, error) {
 //
 // mutate receives the configuration as it is on disk right now, not a snapshot
 // read earlier. Returning an error from it abandons the write.
+//
+// A machine_id the write introduces must match the machine-ID grammar, or the
+// write is refused with a *ValidationError naming the key (CONFIG-SPEC §2).
 //
 // A `use:` entry the write introduces is checked before anything is written: a
 // malformed reference here blocks mutations in *every* store on the machine

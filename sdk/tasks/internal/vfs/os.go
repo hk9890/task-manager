@@ -56,9 +56,10 @@ func fsyncDir(dir string) error {
 	return nil
 }
 
-// tempPrefix starts the name of every temp file WriteAtomic creates, so Watch
-// can tell one from an entry of the store.
-const tempPrefix = ".tmp-"
+// TempPrefix starts the name of every temp file WriteAtomic creates, so Watch
+// can tell one from an entry of the store, and publishing can keep one out of
+// the mirror.
+const TempPrefix = ".tmp-"
 
 // osFS is the real filesystem implementation of FS. It is the only type in
 // the entire sdk that is allowed to call os.*, filepath.*, and syscall.*.
@@ -84,7 +85,7 @@ func (osFS) Stat(name string) (os.FileInfo, error) {
 // guaranteed to be on the same filesystem), syncs, and renames over name.
 func (osFS) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(name)
-	tmp, err := os.CreateTemp(dir, tempPrefix+"*")
+	tmp, err := os.CreateTemp(dir, TempPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("vfs.WriteAtomic create temp: %w", err)
 	}

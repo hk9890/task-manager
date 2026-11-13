@@ -15,16 +15,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package exec is the process seam: the only package in sdk/tasks besides vfs
-// that is permitted to import os, os/exec, and syscall. Hook execution spawns
-// external programs, which needs the parent environment, signals, and the
-// process API; concentrating that here keeps the pure core (and the rest of
-// sdk/tasks) free of os/syscall, exactly as vfs does for the filesystem.
+// that is permitted to import os, os/exec, and syscall. The engine spawns two
+// kinds of process — hooks, and git for publishing the central stores — which
+// needs the parent environment, signals, and the process API; concentrating
+// that here keeps the pure core (and the rest of sdk/tasks) free of os/syscall,
+// exactly as vfs does for the filesystem.
 //
-// Callers build a Spec (argv, env extras, stdin, working dir, timeout) and get
+// Callers build a Spec (argv, env changes, stdin, working dir, timeout) and get
 // back a Result describing how the process ended (Category) plus its exit code,
 // captured stdout/stderr, and wall-clock duration. The seam reports mechanics
 // only — interpreting an exit code as allow/deny is the hook orchestration's
-// job (HOOK-SPEC §6.1), not this package's.
+// job (HOOK-SPEC §6.1), and as "absent" or "failed" the git caller's, not this
+// package's.
 package exec
 
 import "time"
@@ -51,6 +53,9 @@ type Spec struct {
 	// parent process environment, which the OS runner inherits. The seam owns
 	// the os.Environ() read so callers stay free of the os import.
 	Env []string
+	// Unset names inherited variables the OS runner drops before Env is
+	// layered on, for a caller that must not pass one through at any value.
+	Unset []string
 	// Stdin is written to the process's standard input, which is then closed.
 	Stdin []byte
 	// Timeout bounds the process wall-clock time. Zero disables the limit. On

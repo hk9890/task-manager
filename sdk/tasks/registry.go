@@ -237,7 +237,7 @@ const stagingPrefix = ".incoming-"
 // lock serializes attempts, so anything staged is a leftover and never the only
 // copy of the data.
 func moveStoreDir(fs vfs.FS, src, dst string) error {
-	unlock, err := fs.Lock(filepath.Join(src, lockFileName))
+	unlock, err := lockStoreDir(fs, src)
 	if err != nil {
 		return err
 	}
@@ -414,17 +414,6 @@ func storesWith(fs vfs.FS, e env.Environment) ([]StoreEntry, error) {
 		out = append(out, entry)
 	}
 	return out, nil
-}
-
-// CentralStoresDir returns <central_root>/stores, the directory every central
-// store lives in (CONFIG-SPEC §3), whether or not it exists. It reads the
-// per-user config to find the central root and never writes.
-func CentralStoresDir() (string, error) {
-	_, croot, err := centralPaths(vfs.NewOS(), env.NewOS())
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(croot, storesSubdir), nil
 }
 
 // InitCentral creates a central store at <central_root>/stores/<name> and

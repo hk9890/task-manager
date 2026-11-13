@@ -27,6 +27,8 @@ type Fake struct {
 	// Home is the UserHomeDir result. When empty, UserHomeDir returns an error,
 	// matching os.UserHomeDir on a machine with no $HOME.
 	Home string
+	// Host is the Hostname result. When empty, Hostname returns an error.
+	Host string
 }
 
 func (f Fake) Getenv(key string) string { return f.Vars[key] }
@@ -36,6 +38,13 @@ func (f Fake) UserHomeDir() (string, error) {
 		return "", errors.New("env: $HOME is not defined")
 	}
 	return f.Home, nil
+}
+
+func (f Fake) Hostname() (string, error) {
+	if f.Host == "" {
+		return "", errors.New("env: no hostname")
+	}
+	return f.Host, nil
 }
 
 // compile-time check that Fake satisfies Environment.
