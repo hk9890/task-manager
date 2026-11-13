@@ -967,6 +967,10 @@ func (s *Store) lock() (release func(), err error) {
 				t.release()
 			}
 		}()
+		s.logger.LogAttrs(context.Background(), slog.LevelWarn, "store_busy",
+			slog.String("store", s.dir),
+			slog.Int64("waited_ms", s.lockTimeout.Milliseconds()),
+		)
 		return nil, fmt.Errorf("%w: %s: another writer held the write lock for %s", ErrStoreBusy, s.dir, s.lockTimeout)
 	}
 }

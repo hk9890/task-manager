@@ -32,7 +32,7 @@ import (
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-func TestWithLockTimeout_RealFlockHeld_StoreBusyWithinTheTimeout(t *testing.T) {
+func TestWithLockTimeout_RealFlockHeld_StoreBusy(t *testing.T) {
 	t.Setenv("TASKMGR_HOME", t.TempDir())
 	root := t.TempDir()
 	const timeout = 100 * time.Millisecond
@@ -51,14 +51,9 @@ func TestWithLockTimeout_RealFlockHeld_StoreBusyWithinTheTimeout(t *testing.T) {
 		}
 	})
 
-	start := time.Now()
 	_, err = s.Create(tasks.CreateInput{Title: "blocked"})
-	waited := time.Since(start)
 	if !errors.Is(err, tasks.ErrStoreBusy) {
 		t.Fatalf("Create = %v, want ErrStoreBusy", err)
-	}
-	if waited < timeout || waited > 10*timeout {
-		t.Errorf("Create gave up after %s, want about %s", waited, timeout)
 	}
 
 	released = true

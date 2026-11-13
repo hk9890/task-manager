@@ -21,7 +21,9 @@ package tasks
 // the whole timeout (SDK-SPEC §7).
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -57,13 +59,22 @@ func holdLock(t *testing.T, m *vfs.Mem, lockPath string) (release func()) {
 	return release
 }
 
-func TestWithLockTimeout_LockHeldForTheWholeTimeout_StoreBusyAndNothingWritten(t *testing.T) {
-	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond))
+func TestWithLockTimeout_LockHeldForTheWholeTimeout_StoreBusyLoggedAndNothingWritten(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond), WithLogger(lg))
 	release := holdLock(t, m, lockPath)
 
 	_, err := s.Create(CreateInput{Title: "blocked"})
 	if !errors.Is(err, ErrStoreBusy) {
 		t.Fatalf("Create = %v, want ErrStoreBusy", err)
+	}
+	busy := find(records(t, &buf), "store_busy")
+	if busy == nil {
+		t.Fatal("a busy write logged no store_busy record")
+	}
+	if busy["level"] != "WARN" || busy["store"] != s.dir || busy["waited_ms"] != float64(20) {
+		t.Errorf("store_busy record = %v", busy)
 	}
 	release()
 	all, err := s.All()
