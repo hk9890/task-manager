@@ -117,11 +117,11 @@ const FileExt        = ".md"         // the per-issue file extension
   }
 
   type PublishState struct {
-      SetUp        bool      // <central_root>/stores holds a .git: sync init has run
+      SetUp        bool      // stores/ holds a .git and an init or a publish recorded its remote
       Machine      string    // the machine ID
       Branch       string    // machine/<Machine>
-      Remote       string    // the URL the last init or successful publish used, without its user and password
-      LastSync     time.Time // when the last successful publish ended; zero when none is recorded
+      Remote       string    // origin's URL as the last init or successful publish read it, without its user and password
+      LastSync     time.Time // when the last successful publish of Branch ended, whole seconds; zero when none is recorded
       Commit       string    // HEAD after that publish; "" when the branch had no commit
       Running      bool      // a publish or an init holds the publish lock now
       RunningPID   int       // its process ID; 0 when the lock file does not name one
@@ -365,9 +365,13 @@ ancestor; any other status is a failure.
    either credential, so it says that they differ and names
    `git remote set-url origin <url>`, which keeps that ref.
 5. Write the exclude file (below).
-6. Record the remote, without its user and password, in the publish state file
-   (CONFIG-SPEC §3), keeping what the last publish recorded there. A damaged file is
-   replaced, because the init is the repair.
+6. Record the remote, without its user and password, and the branch in the publish
+   state file (CONFIG-SPEC §3). The last sync recorded there is kept only for the same
+   remote and branch in a repository this init did not create: a sync of another remote,
+   another machine ID or a deleted repository says nothing about this one. A file that
+   is not a record is replaced, because the init is the repair; a file that cannot be
+   read refuses the init, so a passing read error erases nothing. A record that would
+   not change is not written.
 
 Running it again with the same remote changes nothing.
 
@@ -404,17 +408,25 @@ Running it again with the same remote changes nothing.
    push is not seen, and is published again at the next change. Checking the remote on
    every run (`git ls-remote`) was rejected because it would make every no-op publish a
    network call.
-5. **Record.** Replace the publish state file (CONFIG-SPEC §3) with the remote, the time
-   the run ended and `HEAD`, still under the publish lock. A run with nothing new records
-   too: it is a successful sync. A failed run records nothing, so the file keeps the last
-   success. A failed write of the file fails the run, after the push, and the next run
-   records again.
+5. **Record.** Replace the publish state file (CONFIG-SPEC §3) with origin's URL, the
+   branch, the time the run ended and `HEAD`, still under the publish lock. A run with
+   nothing new records too: it is a successful sync, and its only write. A failed run
+   records nothing, so the file keeps the last success. A failed write of the file fails
+   nothing, because the publish has already done its job: it is logged as
+   `publish_record_error` ([MONITORING.md](../MONITORING.md)), and the status shows the
+   run before until the next run records.
 
 **`PublishStatus()`** reads the sync state without running a sync. It reads the
 per-user config for the machine ID, so an invalid one is refused as in the two other
-calls. `SetUp` is whether `stores/` holds a `.git`. `Remote`, `LastSync` and `Commit`
-come from the publish state file: a missing one is the zero value of each, with no
-error, and a damaged one is an error naming the file. `Running`, `RunningPID` and
+calls. `Remote`, `LastSync` and `Commit` come from the publish state file: a missing
+one is the zero value of each, with no error, and a damaged one is an error naming the
+file. `LastSync` and `Commit` are shown only when the record is of this machine's
+branch, so a `machine_id` changed since the last sync shows no sync. `SetUp` is a
+`.git` in `stores/` and a recorded remote: an init that stopped before its remote, or
+a `stores/` under git before any init, makes every publish fail and is not set up. A
+machine set up before the record existed shows `SetUp == false` until its next
+successful publish records. `Remote` is origin's URL, not its push URL, where the two
+differ. `Running`, `RunningPID` and
 `RunningSince` come from `.publish.lock` (below): empty content means no publish runs,
 and no lock is tried. Content is tried with the lock, without waiting, because a holder
 killed before it emptied the file leaves content under a free lock. While that try

@@ -21,6 +21,10 @@ package tasks
 // fixture of publishrun_test.go.
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -169,5 +173,135 @@ func TestPublishStatus_DamagedStateFile_ErrorNamingTheFile(t *testing.T) {
 
 	if _, err := publishStatusWith(fs, e); err == nil || !strings.Contains(err.Error(), path) {
 		t.Errorf("publishStatusWith = %v, want an error naming %s", err, path)
+	}
+}
+
+// The publish has done its job when the record is written, so a failed write
+// fails nothing: it is logged, and the status keeps the run before.
+func TestPublish_RecordWriteFails_RunSucceedsWarnsAndKeepsTheLastRecord(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	first := time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC)
+	if _, err := publishWith(fs, e, runner, clockAt(first)); err != nil {
+		t.Fatal(err)
+	}
+	g.staged = true
+	fs.FailOn("WriteAtomic", filepath.Join("/home", publishStateName), errors.New("disk full"))
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	res, err := publishWith(fs, e, runner, clockAt(first.Add(time.Hour)), WithLogger(lg))
+	if err != nil || !res.Pushed {
+		t.Fatalf("publishWith = %+v, %v, want a pushed run", res, err)
+	}
+	if rec := find(records(t, &buf), "publish_record_error"); rec == nil || !strings.Contains(fmt.Sprint(rec["error"]), "disk full") {
+		t.Errorf("publish_record_error record = %v, want one naming the cause", rec)
+	}
+	if st := publishStatus(t, fs, e); !st.LastSync.Equal(first) {
+		t.Errorf("LastSync = %s, want the run before, %s", st.LastSync, first)
+	}
+}
+
+func TestInitPublish_SameRemoteAgain_KeepsTheRecordUnwritten(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner, clockAt(time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("/home", publishStateName)
+	before, _ := fs.ReadFile(path)
+	fs.FailOn("WriteAtomic", path, errors.New("an init with the same remote must not write"))
+
+	if _, err := initPublishWith("/remote.git", fs, e, runner); err != nil {
+		t.Fatalf("initPublishWith: %v", err)
+	}
+	if after, _ := fs.ReadFile(path); !bytes.Equal(before, after) {
+		t.Errorf("the record changed:\n%s\nwant\n%s", after, before)
+	}
+}
+
+// The documented way to change the remote is to remove origin and init again;
+// a sync recorded for the old remote says nothing about the new one.
+func TestInitPublish_AnotherRemote_DropsTheSyncOfTheOldOne(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner, clockAt(time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatal(err)
+	}
+	g.remote = ""
+	if _, err := initPublishWith("/other.git", fs, e, runner); err != nil {
+		t.Fatalf("initPublishWith: %v", err)
+	}
+
+	st := publishStatus(t, fs, e)
+	if st.Remote != "/other.git" || !st.LastSync.IsZero() || st.Commit != "" {
+		t.Errorf("status = %+v, want the new remote and no sync", st)
+	}
+}
+
+func TestInitPublish_DamagedRecord_Replaced(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if err := fs.WriteAtomic(filepath.Join("/home", publishStateName), []byte("last_sync: [not a time"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initPublishWith("/remote.git", fs, e, runner); err != nil {
+		t.Fatalf("initPublishWith over a damaged record: %v", err)
+	}
+	if st := publishStatus(t, fs, e); st.Remote != "/remote.git" {
+		t.Errorf("Remote = %q, want /remote.git", st.Remote)
+	}
+}
+
+func TestInitPublish_RecordUnreadable_RefusesAndErasesNothing(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner, clockAt(time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("EIO")
+	fs.FailOn("ReadFile", filepath.Join("/home", publishStateName), boom)
+
+	if _, err := initPublishWith("/remote.git", fs, e, runner); !errors.Is(err, boom) {
+		t.Fatalf("initPublishWith = %v, want the read error", err)
+	}
+	if st := publishStatus(t, fs, e); st.LastSync.IsZero() {
+		t.Error("an unreadable record was erased")
+	}
+}
+
+// After machine_id changes, the record is of the old branch: it says nothing
+// about when the new one synced.
+func TestPublishStatus_RecordOfAnotherBranch_NoSyncShown(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner, clockAt(time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC))); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateGlobalConfig(fs, e, func(g *GlobalConfig) error { g.MachineID = "desk-1"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	st := publishStatus(t, fs, e)
+	if st.Branch != "machine/desk-1" || !st.LastSync.IsZero() || st.Commit != "" {
+		t.Errorf("status = %+v, want machine/desk-1 with no sync", st)
+	}
+}
+
+// A .git with no recorded remote is an init that stopped, or a stores/ under
+// git before any init: every sync would fail, so it is not set up.
+func TestPublishStatus_RepositoryWithoutARecordedRemote_NotSetUp(t *testing.T) {
+	fs, e, _, _ := publishFixture(t, true)
+	if st := publishStatus(t, fs, e); st.SetUp {
+		t.Errorf("status = %+v, want not set up", st)
+	}
+}
+
+func TestPublishStatus_LastSync_WholeSecondsUTC(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	at := time.Date(2026, 11, 13, 15, 0, 7, 123456789, time.FixedZone("CET", 3600))
+	if _, err := publishWith(fs, e, runner, clockAt(at)); err != nil {
+		t.Fatal(err)
+	}
+	content, err := fs.ReadFile(filepath.Join("/home", publishStateName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "last_sync: 2026-11-13T14:00:07Z\n") {
+		t.Errorf("state file = %q, want last_sync in whole seconds, UTC", content)
 	}
 }

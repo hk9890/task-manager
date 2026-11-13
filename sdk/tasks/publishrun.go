@@ -117,10 +117,12 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	defer func() { _ = unlock() }()
 
 	p.enter(stageInit)
+	created := false
 	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		if _, err := p.git("init", "--quiet"); err != nil {
 			return PublishInfo{}, err
 		}
+		created = true
 	} else if err != nil {
 		return PublishInfo{}, err
 	}
@@ -145,7 +147,7 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	if err := p.writeExcludes(); err != nil {
 		return PublishInfo{}, err
 	}
-	if err := p.recordRemote(url); err != nil {
+	if err := p.recordInit(redactUserinfo(url), created); err != nil {
 		return PublishInfo{}, err
 	}
 	// Remote is for display, and nothing reads the credentials back from it.
@@ -270,14 +272,25 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		}
 		out.Pushed = true
 	}
-	// Recorded under the publish lock, so a status never reads a half-written
-	// file from a publish and an init at once.
-	rec := publishRecord{Remote: redactUserinfo(remote), LastSync: p.now(), Commit: head}
-	if err := p.writeRecord(rec); err != nil {
-		return PublishResult{}, err
-	}
+	p.record(publishRecord{Remote: redactUserinfo(remote), Branch: p.branch(), LastSync: p.now(), Commit: head})
 	return out, nil
 }
+
+// record writes what a successful publish did, under the publish lock, so a
+// status never reads a file a publish and an init write at once. The publish
+// has already done its job, so a failed write fails nothing: it is logged, and
+// the status shows the run before until the next one records.
+func (p *publisher) record(rec publishRecord) {
+	p.enter(stageRecord)
+	if err := p.writeRecord(rec); err != nil {
+		p.logger.LogAttrs(context.Background(), slog.LevelWarn, "publish_record_error",
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+// lockPath is the publish lock (CONFIG-SPEC §3).
+func (p *publisher) lockPath() string { return filepath.Join(p.croot, publishLockName) }
 
 // statePath is the publish state file (CONFIG-SPEC §3).
 func (p *publisher) statePath() string { return filepath.Join(p.croot, publishStateName) }
@@ -304,16 +317,30 @@ func (p *publisher) writeRecord(r publishRecord) error {
 	return p.fs.WriteAtomic(p.statePath(), content, 0o644)
 }
 
-// recordRemote records the remote an init set up, keeping what the last
-// publish recorded. A damaged file is replaced rather than refusing the init
-// that can repair it.
-func (p *publisher) recordRemote(url string) error {
-	rec, err := p.readRecord()
-	if err != nil {
-		rec = publishRecord{}
+// recordInit records the remote an init set up. It keeps what the last publish
+// recorded only for the same remote, branch and repository: a sync recorded
+// for another remote, another machine ID, or a repository the init has just
+// created says nothing about this one. A file that is not a record is
+// replaced rather than refusing the init that repairs it; a file that cannot
+// be read refuses, so a passing read error does not erase the record. A record
+// that would not change is not written, so an init run again changes nothing.
+func (p *publisher) recordInit(remote string, created bool) error {
+	content, err := p.fs.ReadFile(p.statePath())
+	if err != nil && !vfs.IsNotExist(err) {
+		return err
 	}
-	rec.Remote = redactUserinfo(url)
-	return p.writeRecord(rec)
+	rec, decodeErr := decodePublishRecord(p.statePath(), content)
+	if decodeErr != nil || created || rec.Remote != remote || rec.Branch != p.branch() {
+		rec = publishRecord{Remote: remote, Branch: p.branch()}
+	}
+	want, err := encodePublishRecord(rec)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(content, want) {
+		return nil
+	}
+	return p.fs.WriteAtomic(p.statePath(), want, 0o644)
 }
 
 // PublishStatus reports this machine's sync state without running a sync
@@ -333,16 +360,21 @@ func publishStatusWith(fs vfs.FS, e env.Environment) (PublishState, error) {
 		return PublishState{}, err
 	}
 	st := PublishState{Machine: p.id, Branch: p.branch()}
-	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); err == nil {
-		st.SetUp = true
-	} else if !vfs.IsNotExist(err) {
+	repo := true
+	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
+		repo = false
+	} else if err != nil {
 		return PublishState{}, err
 	}
 	rec, err := p.readRecord()
 	if err != nil {
 		return PublishState{}, err
 	}
-	st.Remote, st.LastSync, st.Commit = rec.Remote, rec.LastSync, rec.Commit
+	st.Remote = rec.Remote
+	st.SetUp = repo && rec.Remote != ""
+	if rec.Branch == st.Branch {
+		st.LastSync, st.Commit = rec.LastSync, rec.Commit
+	}
 	if st.Running, st.RunningPID, st.RunningSince, err = p.publishRunning(); err != nil {
 		return PublishState{}, err
 	}
@@ -357,7 +389,7 @@ func publishStatusWith(fs vfs.FS, e env.Environment) (PublishState, error) {
 // holds the lock, a publish that starts is refused with ErrPublishBusy, which
 // a stale file makes rare and the next run repairs.
 func (p *publisher) publishRunning() (running bool, pid int, since time.Time, err error) {
-	path := filepath.Join(p.croot, publishLockName)
+	path := p.lockPath()
 	content, err := p.fs.ReadFile(path)
 	if vfs.IsNotExist(err) || (err == nil && len(content) == 0) {
 		return false, 0, time.Time{}, nil
@@ -783,7 +815,7 @@ func (p *publisher) tryLockStores() (unlock func(), busy string, err error) {
 // lock, not the content, says whether a publish runs: a holder killed before
 // it emptied the file leaves its content, which the next holder overwrites.
 func (p *publisher) lockPublish() (func() error, error) {
-	path := filepath.Join(p.croot, publishLockName)
+	path := p.lockPath()
 	unlock, ok, err := p.fs.TryLock(path)
 	if err != nil {
 		return nil, err

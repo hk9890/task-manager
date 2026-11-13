@@ -155,8 +155,9 @@ holder and never refuses one.
 out while it has no value:
 
 ```
-remote: https://github.com/me/tasks-mirror.git   # without its user and password
-last_sync: 2026-11-13T14:02:07Z                  # UTC, when the last successful publish ended
+remote: https://github.com/me/tasks-mirror.git   # origin's URL, without its user and password
+branch: machine/laptop                           # the branch the record is of
+last_sync: 2026-11-13T14:02:07Z                  # UTC, whole seconds, when the last successful publish ended
 commit: 4f0c3b9e8d…                              # HEAD after it
 ```
 

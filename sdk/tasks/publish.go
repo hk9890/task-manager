@@ -46,11 +46,11 @@ type PublishInfo struct {
 // PublishState is this machine's sync state, as PublishStatus reads it without
 // running a sync (SDK-SPEC §1).
 type PublishState struct {
-	SetUp        bool      // <central_root>/stores holds a .git: sync init has run
+	SetUp        bool      // stores/ holds a .git and an init or a publish recorded its remote
 	Machine      string    // the machine ID
 	Branch       string    // machine/<Machine>, the branch published to
-	Remote       string    // the URL the last init or successful publish used, without its user and password; "" before either
-	LastSync     time.Time // when the last successful publish ended; zero when none is recorded
+	Remote       string    // origin's URL as the last init or successful publish read it, without its user and password; "" before either
+	LastSync     time.Time // when the last successful publish of Branch ended, whole seconds; zero when none is recorded
 	Commit       string    // HEAD after that publish; "" when the branch had no commit
 	Running      bool      // a publish or an init holds the publish lock now
 	RunningPID   int       // its process ID; 0 when the lock file does not name one
@@ -116,6 +116,7 @@ const (
 	stageCheck  = "check"  // publish only: the remote, the branch, the excludes
 	stageCommit = "commit" // take the store locks, add, release them, commit
 	stagePush   = "push"   // push the branch
+	stageRecord = "record" // publish only: record the run for PublishStatus
 )
 
 // publishHolder is what the publish lock file holds while a publish runs: the
@@ -164,12 +165,15 @@ func parsePublishHolder(content []byte) (pid int, since time.Time, ok bool) {
 // what the last init or successful publish did.
 type publishRecord struct {
 	Remote   string    `yaml:"remote,omitempty"`
+	Branch   string    `yaml:"branch,omitempty"`
 	LastSync time.Time `yaml:"last_sync,omitempty"`
 	Commit   string    `yaml:"commit,omitempty"`
 }
 
+// encodePublishRecord writes LastSync in UTC and whole seconds, as the publish
+// lock holder writes its start time.
 func encodePublishRecord(r publishRecord) ([]byte, error) {
-	r.LastSync = r.LastSync.UTC()
+	r.LastSync = r.LastSync.UTC().Truncate(time.Second)
 	return yaml.Marshal(r)
 }
 
