@@ -484,8 +484,12 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
 - runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
-  fails at once with git's message instead of waiting on a terminal nobody watches until
-  the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are deliberately not set:
+  fails at once instead of waiting on a terminal nobody watches until the push times out.
+  `Publish` returns that failure as `ErrPublishAuth`, with the remote, the fix (for
+  GitHub over HTTPS `gh auth setup-git`, else a credential helper or an ssh key in
+  ssh-agent) and git's own message. It is recognised by git's message: "could not read
+  Username" or "could not read Password" (no credentials), "Authentication failed"
+  (HTTPS credentials refused), "Permission denied (publickey" (ssh key refused). `GIT_SSH_COMMAND` and ssh's `BatchMode` are deliberately not set:
   either would replace the user's own ssh setup — the command, the key, the agent — that
   the remote may need;
 - runs with `GIT_ATTR_NOSYSTEM=1`, so the system attributes file applies no more than the
@@ -1502,15 +1506,17 @@ var (
     ErrNotPublishing      // stores/ has no .git, or no remote origin: run sync init
     ErrPublishBranch      // stores/ is detached, or on a branch other than machine/<machine-id>
     ErrMachineIDClash     // the remote rejected the push: another writer of the branch
+    ErrPublishAuth        // git could not authenticate the push to the remote
     ErrGitMissing         // git is not on PATH
     ErrPublishBusy        // another publish or init holds the publish lock
 )
 ```
 
-The five publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
+The six publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
 command that fixes it, except `ErrPublishBusy`, which names the running publish's
-process ID and start time instead.
+process ID and start time instead, and `ErrPublishAuth`, which names the remote and how
+to give git credentials.
 
 `ErrNotFound` is returned by every method that takes the ID of the issue to act on —
 `Get`, `Detail`, `Details`, `Comments`, `Update`, `Close`, `Reopen`, the three comment

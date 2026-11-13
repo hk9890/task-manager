@@ -108,6 +108,7 @@ repository.
 | already publishes to ... with other credentials | `sync init` was given the same URL with a new user or token in it | run the `git remote set-url origin` the message prints, with the new URL |
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
 | another taskmgr sync is running | a sync or `sync init` is running on this machine, with the process ID and start time the message gives | wait for it and run `taskmgr sync` again; a process that is no longer there holds nothing, so the next sync runs |
+| git has no credentials for the remote | git found no login for the remote, or the remote refused it. A sync never lets git ask for a password | for GitHub over HTTPS run `gh auth setup-git`; else set up a git credential helper, or use an ssh remote with a key in ssh-agent. Then run `taskmgr sync` again; the commit was kept |
 | push timed out after 10m0s | the remote did not finish receiving the push in 10 minutes: no network, a remote that does not answer, or a push too large for the connection | check the connection and run `taskmgr sync` again; the commit was kept |
 | gave up after waiting 2m0s for the write lock of store | another `taskmgr` on this machine kept writing to that store, or a hook of its kept running, for 2 minutes | let it finish and run `taskmgr sync` again |
 

@@ -432,6 +432,26 @@ func TestPublish_OtherPushFailureCarriesGitsMessage(t *testing.T) {
 	}
 }
 
+// git's message names only the host; the engine names the remote, the fix,
+// and never the token in the URL.
+func TestPublish_UnauthenticatedPushIsErrPublishAuthWithTheFix(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.remote = "https://hans:s3cret@github.com/hk9890/stores.git"
+	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read Username for 'https://github.com': terminal prompts disabled")}
+	_, err := publishWith(fs, e, runner)
+	if !errors.Is(err, ErrPublishAuth) {
+		t.Fatalf("unauthenticated push: %v, want ErrPublishAuth", err)
+	}
+	for _, want := range []string{"https://github.com/hk9890/stores.git", "gh auth setup-git", "could not read Username"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("unauthenticated push: %v, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "s3cret") {
+		t.Errorf("unauthenticated push: %v, carries the token", err)
+	}
+}
+
 func TestPublish_GitMissingIsReportedAsSuch(t *testing.T) {
 	fs, e, _, _ := publishFixture(t, true)
 	missing := &exec.Fake{Func: func(exec.Spec) exec.Result {

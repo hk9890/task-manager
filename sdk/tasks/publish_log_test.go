@@ -157,6 +157,49 @@ func TestPublish_FailedPushLogsGitsStderrAndTheStage(t *testing.T) {
 	}
 }
 
+// The commit a failed push leaves behind is local only; the record says
+// whether this run made it, so the next run's push is not a surprise.
+func TestPublish_FailedPushLogsWhetherThisRunCommitted(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read from remote repository")}
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish with a failing push succeeded")
+	}
+	g.staged = false
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("second publish with a failing push succeeded")
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 2 {
+		t.Fatalf("publish_error records = %v, want two", failed)
+	}
+	if failed[0]["committed"] != true || failed[0]["commit"] != sha(1) {
+		t.Errorf("first failure = %v, want committed=true and the commit", failed[0])
+	}
+	if failed[1]["committed"] != false || failed[1]["commit"] != "" {
+		t.Errorf("second failure = %v, want committed=false and no commit", failed[1])
+	}
+}
+
+// Before the push stage nothing is committed yet, so the fields would only
+// mislead.
+func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.head = ""
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); !errors.Is(err, ErrPublishBranch) {
+		t.Fatalf("detached publish: %v", err)
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 1 || failed[0]["stage"] != "check" {
+		t.Fatalf("publish_error records = %v, want one at stage check", failed)
+	}
+	if _, ok := failed[0]["committed"]; ok {
+		t.Errorf("a failure before the push carries committed: %v", failed[0])
+	}
+}
+
 // Exit 1 from config --get, diff --quiet, rev-parse --verify and symbolic-ref
 // --quiet answers a question; a warn for each would bury the real failures.
 // A rejected push also exits 1, and is one.

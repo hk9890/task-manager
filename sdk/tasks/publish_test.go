@@ -227,6 +227,27 @@ func TestGitRejected_ReadsGitsMessage(t *testing.T) {
 	}
 }
 
+func TestGitAuthFailed_ReadsGitsMessage(t *testing.T) {
+	for _, tc := range []struct {
+		msg  string
+		want bool
+	}{
+		{"fatal: could not read Username for 'https://github.com': terminal prompts disabled", true},
+		{"fatal: could not read Password for 'https://hans@github.com': terminal prompts disabled", true},
+		{"remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/hk9890/stores.git/'", true},
+		{"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", true},
+		{"fatal: could not read from remote repository", false},
+		{" ! [rejected]        machine/laptop -> machine/laptop (fetch first)", false},
+	} {
+		if got := gitAuthFailed(&gitError{Args: []string{"push"}, ExitCode: 128, Message: tc.msg}); got != tc.want {
+			t.Errorf("gitAuthFailed(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+	if gitAuthFailed(errors.New("could not read Username")) {
+		t.Error("an error that is not git's is read as an auth failure")
+	}
+}
+
 // Each pattern is built from the engine's own name for the file, so the list
 // follows a rename; tempPrefix is taken as given, not copied from the vfs seam.
 func TestPublishExcludes_BuiltFromTheEngineNames(t *testing.T) {

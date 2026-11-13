@@ -64,6 +64,9 @@ var (
 	// ErrMachineIDClash is a push the remote rejected as not a fast-forward:
 	// the branch has a second writer.
 	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
+	// ErrPublishAuth is a push git could not authenticate: it has no
+	// credentials for the remote that it can read without a prompt.
+	ErrPublishAuth = errors.New("git has no credentials for the remote")
 	// ErrGitMissing is git not found on PATH.
 	ErrGitMissing = errors.New("git is not on PATH")
 	// ErrPublishBusy is another publish or init holding the publish lock. The
@@ -358,6 +361,23 @@ func gitRejected(err error) bool {
 	return errors.As(err, &g) && strings.Contains(g.Message, "[rejected]")
 }
 
+// gitAuthFailed reports whether err is a push git could not authenticate.
+// Prompts are off (publishEnv), so missing credentials end the push with
+// "could not read Username"; refused ones end it with "Authentication failed"
+// over HTTPS and "Permission denied (publickey" over ssh.
+func gitAuthFailed(err error) bool {
+	var g *gitError
+	if !errors.As(err, &g) {
+		return false
+	}
+	for _, sign := range []string{"could not read Username", "could not read Password", "Authentication failed", "Permission denied (publickey"} {
+		if strings.Contains(g.Message, sign) {
+			return true
+		}
+	}
+	return false
+}
+
 // errGitMissing is git that could not be started because it is not on PATH.
 func errGitMissing(cause error) error {
 	return fmt.Errorf("%w: publishing runs git, so git must be available (%w)", ErrGitMissing, cause)
@@ -464,4 +484,13 @@ func errNotFastForward(dir, id, gitMsg string) error {
 	return fmt.Errorf("%w %q: the remote rejected the push of %s because it holds commits this machine never made, so another machine uses this ID, or this machine was set up again. "+
 		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again. git said: %s",
 		ErrMachineIDClash, id, machineBranch(id), dir, redactUserinfo(gitMsg))
+}
+
+// errPushAuth explains a push git could not authenticate. A publish runs
+// unattended, from a timer, so the fix is credentials git reads without
+// asking.
+func errPushAuth(remote, gitMsg string) error {
+	return fmt.Errorf("%w %s: a sync never lets git prompt, so git needs credentials it can read on its own. "+
+		"For a GitHub HTTPS remote, run 'gh auth setup-git'; otherwise set up a git credential helper, or use an ssh remote with a key in ssh-agent. git said: %s",
+		ErrPublishAuth, redactUserinfo(remote), redactUserinfo(gitMsg))
 }

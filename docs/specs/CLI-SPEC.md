@@ -605,7 +605,8 @@ list is SDK-SPEC's.
   during a push ends both `taskmgr` and the push. On Linux any signal that kills
   `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
   pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for
-  credentials: a push that needs them fails at once with git's message.
+  credentials: a push that has none, or whose credentials the remote refuses, fails at
+  once with `git has no credentials for the remote <url>`, the fix, and git's message.
 - **A busy store has 2 minutes.** `sync` waits for a store another `taskmgr` writes to,
   holding no store lock, and exits `1` with `gave up after waiting 2m0s for the write lock of
   store "<name>"…` when it is still busy then; the next `sync` tries again.

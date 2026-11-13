@@ -206,7 +206,8 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	defer func() { _ = unlock() }()
 
 	p.enter(stageCheck)
-	if _, err := p.git("config", "--get", "remote."+publishRemote+".url"); err != nil {
+	remote, err := p.git("config", "--get", "remote."+publishRemote+".url")
+	if err != nil {
 		if !gitAbsent(err) {
 			return PublishResult{}, err
 		}
@@ -235,6 +236,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if out.Committed {
 		out.Commit = head
 	}
+	p.committed, p.newCommit = out.Committed, out.Commit
 	published, err := p.revision("refs/remotes/" + publishRemote + "/" + p.branch())
 	if err != nil {
 		return PublishResult{}, err
@@ -247,6 +249,9 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 			var g *gitError
 			if gitRejected(err) && errors.As(err, &g) {
 				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			}
+			if gitAuthFailed(err) && errors.As(err, &g) {
+				return PublishResult{}, errPushAuth(remote, g.Message)
 			}
 			return PublishResult{}, err
 		}
@@ -275,9 +280,11 @@ type publisher struct {
 	id    string
 
 	// Set as the run goes, for its log records.
-	stage    string        // the stage running
-	retries  int           // tries of the store locks that found one busy
-	lockWait time.Duration // how long taking the store locks took
+	stage     string        // the stage running
+	retries   int           // tries of the store locks that found one busy
+	lockWait  time.Duration // how long taking the store locks took
+	committed bool          // this run made a commit
+	newCommit string        // its full SHA; "" when committed is false
 }
 
 // newPublisher reads the options into a publisher. Option configures a Store,
@@ -319,16 +326,21 @@ func (p *publisher) enter(stage string) {
 
 // logFailure records a failed publish or init with the stage it failed in. A
 // busy publish lock is info, not error: a timer that fires while a manual sync
-// runs expects it, and the next tick publishes.
+// runs expects it, and the next tick publishes. A failed push also says
+// whether this run committed: that commit stays local until a push succeeds.
 func (p *publisher) logFailure(err error) {
 	level := slog.LevelError
 	if errors.Is(err, ErrPublishBusy) {
 		level = slog.LevelInfo
 	}
-	p.logger.LogAttrs(context.Background(), level, "publish_error",
+	attrs := []slog.Attr{
 		slog.String("stage", p.stage),
 		slog.String("error", redactUserinfo(err.Error())),
-	)
+	}
+	if p.stage == stagePush {
+		attrs = append(attrs, slog.Bool("committed", p.committed), slog.String("commit", p.newCommit))
+	}
+	p.logger.LogAttrs(context.Background(), level, "publish_error", attrs...)
 }
 
 func (p *publisher) branch() string { return machineBranch(p.id) }
