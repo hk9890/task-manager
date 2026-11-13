@@ -63,7 +63,7 @@ func (osFS) Watch(ctx context.Context, dir string, subdirs []string) (<-chan str
 				if ev.Name == dir && (ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename)) {
 					return
 				}
-				if ev.Op == fsnotify.Chmod || strings.HasPrefix(filepath.Base(ev.Name), tempPrefix) {
+				if ev.Op == fsnotify.Chmod || strings.HasPrefix(filepath.Base(ev.Name), TempPrefix) {
 					continue
 				}
 				if isSubdir[ev.Name] && ev.Has(fsnotify.Create) {

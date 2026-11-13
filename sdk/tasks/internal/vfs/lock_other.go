@@ -29,3 +29,9 @@ import (
 func (osFS) Lock(path string) (func() error, error) {
 	return nil, fmt.Errorf("vfs.Lock: file locking unsupported on %s; build for a unix target", runtime.GOOS)
 }
+
+// TryLock fails closed for the same reason as Lock.
+func (fs osFS) TryLock(path string) (func() error, bool, error) {
+	_, err := fs.Lock(path)
+	return nil, false, err
+}

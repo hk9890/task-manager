@@ -24,6 +24,8 @@ import (
 	"errors"
 	"os"
 	osexec "os/exec"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -60,6 +62,22 @@ func killGroup(pid int, sig syscall.Signal) error {
 	return syscall.Kill(-pid, sig)
 }
 
+// inherited is this process's environment without the variables named in unset.
+func inherited(unset []string) []string {
+	env := os.Environ()
+	if len(unset) == 0 {
+		return env
+	}
+	kept := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(unset, name) {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
+}
+
 func (osRunner) Run(spec Spec) Result {
 	if len(spec.Argv) == 0 {
 		return Result{Category: SpawnError, Err: errors.New("exec: empty argv")}
@@ -74,7 +92,7 @@ func (osRunner) Run(spec Spec) Result {
 
 	cmd := osexec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(os.Environ(), spec.Env...)
+	cmd.Env = append(inherited(spec.Unset), spec.Env...)
 	cmd.Stdin = bytes.NewReader(spec.Stdin)
 
 	var stdout, stderr bytes.Buffer
@@ -93,20 +111,34 @@ func (osRunner) Run(spec Spec) Result {
 	// would be bounded by nothing and interruptible by nothing — a hang the user
 	// has to find with ps. An unlimited hook therefore stays in taskmgr's group,
 	// where Ctrl-C still reaches both.
+	//
+	// A KeepGroup process stays in taskmgr's group even with a timeout, so a
+	// Ctrl-C ends it together with taskmgr instead of leaving it to run on
+	// unbounded; its timeout then signals it alone. runKeptInGroup also ends
+	// it when taskmgr dies by a signal the group does not get, where the
+	// platform can.
+	detached := spec.Timeout > 0 && !spec.KeepGroup
 	if spec.Timeout > 0 {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 		// On timeout, send SIGTERM to the whole group (the default would SIGKILL
 		// the spawned process alone); WaitDelay then upgrades to SIGKILL after
 		// KillGrace if it has not exited. A hook that ignores SIGTERM therefore
 		// still costs hook_timeout + KillGrace, the documented ceiling
 		// (HOOK-SPEC §8).
-		cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		if detached {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
+		}
 		cmd.WaitDelay = KillGrace
 	}
 
 	start := time.Now()
-	err := cmd.Run()
+	var err error
+	if spec.KeepGroup {
+		err = runKeptInGroup(cmd)
+	} else {
+		err = cmd.Run()
+	}
 	dur := time.Since(start)
 
 	// Captured after Run: Process is set by Start and survives Wait, and the
@@ -138,8 +170,11 @@ func (osRunner) Run(spec Spec) Result {
 		// the group SIGTERM — the ["sh", "-c", ...] tree killGroup exists for —
 		// outlives the run as an orphan. SIGTERM went to the group; SIGKILL has
 		// to as well, or the escalation only half happens. ESRCH (nothing left)
-		// is the expected case and is discarded.
-		_ = killGroup(pid, syscall.SIGKILL)
+		// is the expected case and is discarded. A KeepGroup process leads no
+		// group, so there is none to sweep.
+		if detached {
+			_ = killGroup(pid, syscall.SIGKILL)
+		}
 		res.Category = Timeout
 		res.Err = err
 		return res
@@ -155,6 +190,7 @@ func (osRunner) Run(spec Spec) Result {
 	if st == nil {
 		res.Category = SpawnError
 		res.Err = err
+		res.NotFound = errors.Is(err, osexec.ErrNotFound)
 		return res
 	}
 	if st.Exited() {

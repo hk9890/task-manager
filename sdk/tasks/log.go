@@ -76,6 +76,18 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
+// WithLockTimeout bounds how long each write of the store waits for its write
+// lock, which another writer holds — a pre-hook, a long write, or a publish
+// staging the central stores. When d runs out, the write returns ErrStoreBusy
+// and writes nothing. A d of zero or less waits without a limit, the default,
+// so a later WithLockTimeout(0) clears an earlier bound. It bounds the writes
+// of the Store, not the registry operations that open one.
+func WithLockTimeout(d time.Duration) Option {
+	return func(s *Store) {
+		s.lockTimeout = d
+	}
+}
+
 // withRunner sets the process seam hooks are spawned through (HOOK-SPEC). A nil
 // runner is ignored (exec.NewOS() stays).
 //

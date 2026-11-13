@@ -54,13 +54,17 @@ func originRepo(t *testing.T, packages ...string) string {
 	return dir
 }
 
-func git(t *testing.T, dir string, args ...string) {
+// git runs git in dir, fails the test on a non-zero exit, and returns the
+// trimmed output.
+func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 
 // The whole flow, in the order a user meets it: install a repository, see what

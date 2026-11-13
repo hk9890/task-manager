@@ -49,6 +49,12 @@ type FS interface {
 	// data, then fsyncs. Used for the immutable comment sidecar.
 	Append(name string, data []byte, perm os.FileMode) error
 
+	// WriteInPlace replaces the content of name, creating it if necessary, by
+	// truncating and writing the file itself: no temp file and no rename, so a
+	// lock held on the file stays held, and no fsync. It is for a lock file's
+	// informative content, which a reader may find empty or half written.
+	WriteInPlace(name string, data []byte, perm os.FileMode) error
+
 	// Rename atomically renames (moves) oldpath to newpath.
 	Rename(oldpath, newpath string) error
 
@@ -85,6 +91,12 @@ type FS interface {
 	// rather than silently providing no mutual exclusion. Production builds must
 	// target a unix OS.
 	Lock(path string) (unlock func() error, err error)
+
+	// TryLock is Lock without the wait: when another holder has the lock it
+	// returns ok false and holds nothing, so a caller that needs several locks
+	// can release what it holds instead of waiting while it holds it. The
+	// platform contract is Lock's.
+	TryLock(path string) (unlock func() error, ok bool, err error)
 
 	// Getwd returns the current working directory.
 	Getwd() (string, error)
