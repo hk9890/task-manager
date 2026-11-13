@@ -305,3 +305,77 @@ func TestPublishStatus_LastSync_WholeSecondsUTC(t *testing.T) {
 		t.Errorf("state file = %q, want last_sync in whole seconds, UTC", content)
 	}
 }
+
+// beforeTry is a Mem that runs onTry before each TryLock, so a test can change
+// the publish lock between the status call's read of the holder and its try.
+type beforeTry struct {
+	*vfs.Mem
+	onTry func()
+}
+
+func (b beforeTry) TryLock(path string) (func() error, bool, error) {
+	b.onTry()
+	return b.Mem.TryLock(path)
+}
+
+func writeHolder(t *testing.T, fs vfs.FS, pid int) {
+	t.Helper()
+	at := time.Date(2026, 11, 13, 14, 2, 0, 0, time.UTC)
+	if err := fs.WriteInPlace(filepath.Join("/home", publishLockName), publishHolder(pid, at), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A dead holder costs one try: the status empties its content, so the next
+// status takes no lock and the next refusal cannot name it.
+func TestPublishStatus_StaleHolderUnderAFreeLock_ContentEmptied(t *testing.T) {
+	fs, e, _, _ := publishFixture(t, true)
+	writeHolder(t, fs, 4711)
+
+	publishStatus(t, fs, e)
+	content, err := fs.ReadFile(filepath.Join("/home", publishLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(content) != 0 {
+		t.Errorf("lock file after the status = %q, want it emptied", content)
+	}
+}
+
+// A publish that takes the lock between the status call's read and its try
+// is named, not the dead holder the first read saw.
+func TestPublishStatus_HolderChangedBeforeTheTry_NamesTheNewHolder(t *testing.T) {
+	m, e, _, _ := publishFixture(t, true)
+	writeHolder(t, m, 4711)
+	path := filepath.Join("/home", publishLockName)
+	fs := beforeTry{Mem: m.Mem, onTry: func() {
+		if _, err := m.Lock(path); err != nil {
+			t.Fatal(err)
+		}
+		writeHolder(t, m, 9000)
+	}}
+
+	if st := publishStatus(t, fs, e); !st.Running || st.RunningPID != 9000 {
+		t.Errorf("status = %+v, want running with pid 9000", st)
+	}
+}
+
+// Another status that holds the lock while it empties a dead holder's content
+// is not a running publish.
+func TestPublishStatus_OtherStatusEmptiedTheHolder_NotRunning(t *testing.T) {
+	m, e, _, _ := publishFixture(t, true)
+	writeHolder(t, m, 4711)
+	path := filepath.Join("/home", publishLockName)
+	fs := beforeTry{Mem: m.Mem, onTry: func() {
+		if _, err := m.Lock(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.WriteInPlace(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}}
+
+	if st := publishStatus(t, fs, e); st.Running {
+		t.Errorf("status = %+v, want not running", st)
+	}
+}

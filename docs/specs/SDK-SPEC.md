@@ -429,10 +429,18 @@ successful publish records. `Remote` is origin's URL, not its push URL, where th
 differ. `Running`, `RunningPID` and
 `RunningSince` come from `.publish.lock` (below): empty content means no publish runs,
 and no lock is tried. Content is tried with the lock, without waiting, because a holder
-killed before it emptied the file leaves content under a free lock. While that try
-holds the lock, a publish that starts is refused with `ErrPublishBusy`. Only a killed
-holder leaves content behind, and the next run repairs it, so the cost is accepted. It
-runs no git, so a front end can call it as often as it redraws.
+killed before it emptied the file leaves content under a free lock. A lock the try
+takes is free, so its content is stale: the status empties it before the release, the
+one write a status makes. A lock the try finds held is read again, and empty content
+then means no publish runs, because another status held the lock to empty a dead
+holder's content. While a try holds the lock, a publish or init that starts is refused
+with `ErrPublishBusy`, and that refusal can name the dead holder. Emptying the content
+makes this happen at most once per killed holder, not once per status call, so the
+cost is accepted. Two short windows remain, and a front end reads the result as a hint,
+not a promise: a holder that has taken the lock but not yet written its content shows
+as not running, and a status that read stale content can show it as running while
+another status empties it. The status runs no git, so a front end can call it as often
+as it redraws.
 
 The record is a file of its own, not git history. A run with nothing new makes no commit,
 so the time of the last commit cannot tell a store with no changes from a sync that
@@ -489,10 +497,12 @@ it holds on the file stays held (CONFIG-SPEC §3). A refused call reads them bac
 message: `another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)`, the
 time in UTC, RFC 3339. Content it cannot read or parse — the holder has not written it
 yet, or a write was cut short — still refuses, with `another taskmgr sync is running`.
-The holder empties the file before it releases the lock, so a refusal never names a holder
-that has already ended. The content is informative only: content under a free lock — left
-by a holder killed before it emptied the file — is ignored and overwritten, because the
-lock, not the content, decides whether a publish runs.
+The holder empties the file before it releases the lock, so a refusal names a holder that
+has ended only in one case: a `PublishStatus` holds the lock for its try over the content
+a killed holder left, and empties that content before it releases it (above). The content
+is informative only: content under a free lock — left by a holder killed before it
+emptied the file — never refuses a publish on its own, and is overwritten by the next
+holder, because the lock, not the content, decides whether a publish runs.
 
 A pre-hook that runs a publish keeps it backing off: its own mutation holds a store lock
 the publish needs, so the publish retries until `hook_timeout` kills the hook or the

@@ -145,10 +145,12 @@ since: 2026-11-13T14:02:00Z
 ```
 
 A publish refused because the lock is held names them. The holder empties the file before
-it releases the lock, so a refusal never names a holder that has ended. The content is
-informative only: the lock, not the content, says whether a publish runs, so stale content
-under a free lock — a holder killed before it emptied the file — is overwritten by the next
-holder and never refuses one.
+it releases the lock. The content is informative only: the lock, not the content, says
+whether a publish runs, so stale content under a free lock — a holder killed before it
+emptied the file — never refuses a publish on its own, and is overwritten by the next
+holder. `PublishStatus` is the one other taker of the lock: over stale content it holds
+the lock for one try and empties the content. A publish that starts during that try is
+refused, and the refusal names the killed holder (SDK-SPEC §1).
 
 `.publish.state` is YAML that `InitPublish` and every successful `Publish` write (behind
 `taskmgr sync init` and `taskmgr sync`), under `.publish.lock`, and `PublishStatus` reads (SDK-SPEC §1). Each key is left

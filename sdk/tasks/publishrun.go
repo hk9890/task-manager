@@ -385,9 +385,11 @@ func publishStatusWith(fs vfs.FS, e env.Environment) (PublishState, error) {
 // and the holder its lock file names. Empty content means none runs, and no
 // lock is tried: a holder writes its content right after taking the lock and
 // empties it before the release. Content under a free lock was left by a
-// killed holder, so the lock is tried to tell the two apart. While that try
-// holds the lock, a publish that starts is refused with ErrPublishBusy, which
-// a stale file makes rare and the next run repairs.
+// killed holder, so the lock is tried to tell the two apart, and a free lock
+// is emptied before its release: the dead holder costs one try, not one per
+// call, and a later refusal never names it. A held lock is read again, because
+// the holder may have changed since the first read, or another status may have
+// emptied a dead one's content while it held the lock.
 func (p *publisher) publishRunning() (running bool, pid int, since time.Time, err error) {
 	path := p.lockPath()
 	content, err := p.fs.ReadFile(path)
@@ -402,7 +404,14 @@ func (p *publisher) publishRunning() (running bool, pid int, since time.Time, er
 		return false, 0, time.Time{}, err
 	}
 	if free {
-		return false, 0, time.Time{}, unlock()
+		cleared := p.fs.WriteInPlace(path, nil, 0o644)
+		return false, 0, time.Time{}, errors.Join(cleared, unlock())
+	}
+	if content, err = p.fs.ReadFile(path); err != nil {
+		return false, 0, time.Time{}, err
+	}
+	if len(content) == 0 {
+		return false, 0, time.Time{}, nil
 	}
 	pid, since, _ = parsePublishHolder(content)
 	return true, pid, since, nil
