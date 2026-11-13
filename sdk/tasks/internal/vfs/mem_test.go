@@ -243,8 +243,8 @@ func TestMem_LockInProcess(t *testing.T) {
 	}
 
 	unlock, err := m.Lock(path)
-	if err != nil {
-		t.Fatalf("Lock: %v", err)
+	if err != nil || unlock == nil {
+		t.Fatalf("Lock = unlock %v, err %v; want the unlock", unlock != nil, err)
 	}
 	if err := unlock(); err != nil {
 		t.Fatalf("unlock: %v", err)

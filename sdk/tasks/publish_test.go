@@ -123,6 +123,36 @@ func TestPublishGitSettings_NeutralizeTheUsersConfig(t *testing.T) {
 	}
 }
 
+// A push that needs credentials must fail at once, not wait on a terminal
+// until it times out, and the system attributes file is out of
+// core.attributesFile's reach.
+func TestPublishEnv_FixesTheIdentityAndTurnsOffPromptsAndSystemAttributes(t *testing.T) {
+	env := publishEnv("laptop")
+	for _, want := range []string{
+		"GIT_AUTHOR_NAME=taskmgr", "GIT_AUTHOR_EMAIL=laptop@taskmgr.invalid",
+		"GIT_COMMITTER_NAME=taskmgr", "GIT_COMMITTER_EMAIL=laptop@taskmgr.invalid",
+		"GIT_TERMINAL_PROMPT=0", "GIT_ATTR_NOSYSTEM=1",
+	} {
+		if !slices.Contains(env, want) {
+			t.Errorf("publishEnv %q lacks %s", env, want)
+		}
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_SSH") {
+			t.Errorf("publishEnv %q sets %s, which would replace the user's ssh setup", env, kv)
+		}
+	}
+}
+
+func TestErrLockWaitOver_NamesTheBusyLockAndTheWait(t *testing.T) {
+	if msg := errLockWaitOver("beta").Error(); !strings.Contains(msg, `waiting 2m0s for the write lock of store "beta"`) {
+		t.Errorf("busy store = %q, want the store and the wait named", msg)
+	}
+	if msg := errLockWaitOver(busyCentralRoot).Error(); !strings.Contains(msg, "waiting 2m0s for the central-root lock") {
+		t.Errorf("busy central root = %q, want the central-root lock and the wait named", msg)
+	}
+}
+
 func TestPublishUnsetEnv_DropsTheRepositoryAndTheDates(t *testing.T) {
 	for _, name := range []string{"GIT_DIR", "GIT_INDEX_FILE", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"} {
 		if !slices.Contains(publishUnsetEnv, name) {
@@ -152,13 +182,17 @@ func TestLocalRelativeRemote_ClassifiesURLs(t *testing.T) {
 	}
 }
 
-func TestGitAbsent_OnlyExitOne(t *testing.T) {
+// gitAbsent reads the answer gitWithin marked, never the exit code alone: an
+// exit 1 from commit or push is a failure.
+func TestGitAbsent_OnlyAnAnswer(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		want bool
 	}{
-		{&gitError{ExitCode: 1}, true},
-		{fmt.Errorf("wrapped: %w", &gitError{ExitCode: 1}), true},
+		{&gitError{Args: []string{"config", "--get", "x"}, ExitCode: 1, Answer: true}, true},
+		{fmt.Errorf("wrapped: %w", &gitError{ExitCode: 1, Answer: true}), true},
+		{&gitError{Args: []string{"commit", "--quiet"}, ExitCode: 1}, false},
+		{&gitError{Args: []string{"push", "--quiet"}, ExitCode: 1}, false},
 		{&gitError{ExitCode: 128, Message: "fatal: bad config"}, false},
 		{errGitMissing(errors.New("not found")), false},
 		{nil, false},

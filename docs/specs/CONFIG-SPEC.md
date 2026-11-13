@@ -126,7 +126,7 @@ move plus a registry edit (§5).
 ├── .config.lock         # advisory flock for config.yaml writes (empty; only its lock state matters)
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
-├── .publish.lock        # advisory flock that runs one publish at a time (SDK-SPEC §1); holds its last holder (below)
+├── .publish.lock        # advisory flock that runs one publish at a time (SDK-SPEC §1); holds its holder while held (below)
 └── stores/              # all central stores live here
     └── my-project/      # a central store — a complete, ordinary store
         ├── config.yaml
@@ -143,9 +143,11 @@ pid: 4711
 since: 2026-11-13T14:02:00Z
 ```
 
-A publish refused because the lock is held names them. The content is informative only:
-it stays after release, and the lock, not the content, says whether a publish runs, so
-stale content under a free lock is overwritten by the next holder and never refuses one.
+A publish refused because the lock is held names them. The holder empties the file before
+it releases the lock, so a refusal never names a holder that has ended. The content is
+informative only: the lock, not the content, says whether a publish runs, so stale content
+under a free lock — a holder killed before it emptied the file — is overwritten by the next
+holder and never refuses one.
 
 `stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory in it
 (CLI-SPEC §2.5). It is not mistaken for a store, and no store can take its name. Nothing lists `stores/`: every path into it is

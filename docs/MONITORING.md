@@ -31,6 +31,7 @@ Each row is one `slog` record (`msg` in the first column):
 | `publish_git` — a git command ended with exit `0`, or with an exit-`1` answer | debug | `cmd`, `exit`, `duration_ms` |
 | `publish_git` — any other git outcome: another exit, not started, timed out, killed | warn | `cmd`, `exit` (`-1` when git did not exit on its own), `duration_ms`, `stderr`, `error` (when git did not exit) |
 | `publish_lock_wait` — a busy store held the publish back for 5s | warn | `store`, `waited_ms` |
+| `publish_error` — a busy store held the publish back for 2 minutes, and it gave up | error | `stage=commit`, `error` (names the store, or the central-root lock) |
 | `publish` — a publish succeeded | debug | `machine`, `branch`, `committed`, `pushed`, `commit`, `retries`, `lock_wait_ms`, `duration_ms` |
 | `publish_init` — an init succeeded | debug | `machine`, `branch`, `remote`, `duration_ms` |
 | `publish_error` — a publish or init failed | error | `stage`, `error` |
@@ -123,7 +124,7 @@ is diagnosed after the fact.
 - **`publish_stage` is logged when a stage starts.** Publish stages, in order: `config`
   (machine ID, and whether `sync init` has run), `lock` (the publish lock), `check`
   (remote, branch, exclude file),
-  `commit` (store locks, add, commit), `push`. Init stages: `config`, `lock`, `init`. A
+  `commit` (store locks, add, locks released, commit), `push`. Init stages: `config`, `lock`, `init`. A
   publish with nothing to push logs no `push` stage. The last `publish_stage` of a run
   that never ends names the stage it hangs in.
 - **One `publish_git` per git command.** `cmd` is the subcommand (`add`, `diff`, `commit`,
@@ -135,7 +136,8 @@ is diagnosed after the fact.
 - **`publish_lock_wait` is logged once per publish**, when its back-off on busy store
   locks reaches 5s. `store` names the store that was busy at that try, or
   `(central root)` when the registry lock was. `retries` and `lock_wait_ms` on the
-  `publish` record carry the whole wait.
+  `publish` record carry the whole wait. A back-off that reaches 2 minutes gives up with
+  a `publish_error` at `stage=commit` whose `error` names the busy store and the wait.
 - **`publish_error` is error, except for a busy publish lock, which is info.** A timer
   that fires during a manual sync expects to be refused, and the next tick publishes.
   Count real failures with `level=ERROR`, never with `msg=publish_error` alone.
@@ -147,12 +149,18 @@ is diagnosed after the fact.
 
 - **Killed:** a run that ended has a last record of `publish`, `publish_init` or
   `publish_error`. A log with none of them is a process that was killed, by a Ctrl-C or
-  a signal, at its last `publish_stage`; the push, if one ran, was ended with it.
+  a signal, at its last `publish_stage`. On Linux the git it ran, the push included, was
+  killed with it, whatever the signal; after a signal other than Ctrl-C, git's transport
+  (an `ssh` or `git-remote-https` process) can still run until its connection gives up.
+  On macOS only a Ctrl-C at the terminal ends git
+  too; a `taskmgr` killed alone leaves a push running until git gives up on the
+  connection.
 - **Hung:** the last `publish_stage` is where it is. A `push` stage lasts at most 2
   minutes plus the seam's 2s kill grace; then the push is killed and logs
   `publish_git cmd=push exit=-1` with `error`. A hang in `commit` with
   `publish_lock_wait` names the store a long write or a slow pre-hook holds
-  ([Hook timing](#hook-timing)).
+  ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
+  `publish_error`.
 - **Failed:** the `publish_error` record names the stage; the `publish_git` warn just
   before it carries git's `stderr`.
 

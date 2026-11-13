@@ -218,8 +218,8 @@ func TestPublish_RunsGitInTheStoresWithTheFixedIdentityAndSettings(t *testing.T)
 		if c.Dir != publishStores {
 			t.Errorf("git %q ran in %q, want %s", c.Argv, c.Dir, publishStores)
 		}
-		if !slices.Equal(c.Env, publishIdentity("laptop")) {
-			t.Errorf("git %q env = %q, want the laptop identity", c.Argv, c.Env)
+		if !slices.Equal(c.Env, publishEnv("laptop")) {
+			t.Errorf("git %q env = %q, want the laptop identity, no prompt and no system attributes", c.Argv, c.Env)
 		}
 		for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_PARAMETERS", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"} {
 			if !slices.Contains(c.Unset, name) {
@@ -256,10 +256,10 @@ func TestPublish_PushesTheFullRefspec(t *testing.T) {
 	}
 }
 
-// The commit is a settled state only if no writer can run during add and
-// commit; holding a lock across the push would stall every writer on the
-// network.
-func TestPublish_LocksEveryStoreAroundTheCommitAndNotThePush(t *testing.T) {
+// The commit is a settled state only if no writer can run during the add;
+// diff --cached and commit read only the index the add wrote, so holding a
+// lock across them, or across the push, would stall every writer for nothing.
+func TestPublish_LocksEveryStoreAroundTheAddOnly(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	res, err := publishWith(fs, e, runner)
 	if err != nil {
@@ -280,11 +280,13 @@ func TestPublish_LocksEveryStoreAroundTheCommitAndNotThePush(t *testing.T) {
 	if !before("lock alpha", "lock beta") {
 		t.Errorf("locks taken out of name order: %q", log)
 	}
-	if !before("lock beta", "git add") || !before("git commit", "unlock alpha") || !before("git commit", "unlock beta") {
-		t.Errorf("add and commit are not inside both locks: %q", log)
+	if !before("lock beta", "git add") || !before("git add", "unlock alpha") || !before("git add", "unlock beta") {
+		t.Errorf("the add is not inside both locks: %q", log)
 	}
-	if !before("unlock alpha", "git push") || !before("unlock beta", "git push") {
-		t.Errorf("a lock is held across the push: %q", log)
+	for _, lock := range []string{"central", "alpha", "beta"} {
+		if !before("unlock "+lock, "git diff") {
+			t.Errorf("lock %s is held across diff --cached, commit and push: %q", lock, log)
+		}
 	}
 }
 
@@ -725,6 +727,13 @@ func TestInitPublish_EmptyRemoteIsRefused(t *testing.T) {
 	}
 }
 
+// loadPublish is a publisher with its configuration loaded, for a test that
+// replaces its back-off or takes its publish lock itself.
+func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner, opts ...Option) (*publisher, error) {
+	p := newPublisher(fs, e, runner, opts)
+	return p, p.load()
+}
+
 func TestLoadPublish_MachineIDConfiguredElseHostname(t *testing.T) {
 	fs, e, _, _ := publishFixture(t, false)
 	if p, err := loadPublish(fs, e, nil); err != nil || p.id != "laptop" {
@@ -812,5 +821,37 @@ func TestPublish_PushTimeoutEndsTheRun(t *testing.T) {
 	_, err := publishWith(fs, e, runner)
 	if err == nil || !strings.Contains(err.Error(), "push timed out after 2m0s: Connecting to example.com...") {
 		t.Errorf("hung push: %v, want 'push timed out after 2m0s' with git's stderr", err)
+	}
+}
+
+// A holder that ended leaves an empty lock file, so a refusal by a later
+// holder that has not written its own content yet never names the one that
+// is gone.
+func TestPublish_ReleaseEmptiesTheLockFile(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	if _, err := publishWith(fs, e, runner); err != nil {
+		t.Fatalf("publishWith: %v", err)
+	}
+	path := filepath.Join("/home", publishLockName)
+	if got, err := fs.ReadFile(path); err != nil || len(got) != 0 {
+		t.Errorf("lock file after the publish = %q, %v; want it empty", got, err)
+	}
+	fs.busy["publish"] = true
+	if _, err := publishWith(fs, e, runner); !errors.Is(err, ErrPublishBusy) || err.Error() != ErrPublishBusy.Error() {
+		t.Errorf("refusal after a holder ended: %v, want the bare %q", err, ErrPublishBusy)
+	}
+}
+
+// Exit 1 is an answer only from the questions gitAnswer names: a commit that
+// exits 1 failed, and the publish says so rather than reading it as "absent".
+func TestPublish_CommitExitOneIsAFailure(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"commit": exec.Deny(1, "error: unable to write new index file")}
+	res, err := publishWith(fs, e, runner)
+	if err == nil || !strings.Contains(err.Error(), "unable to write new index file") {
+		t.Errorf("commit exiting 1: %+v, %v; want git's error", res, err)
+	}
+	if got := subcommands(runner.Calls()); slices.ContainsFunc(got, func(s string) bool { return strings.HasPrefix(s, "push") }) {
+		t.Errorf("pushed after a failed commit: %q", got)
 	}
 }

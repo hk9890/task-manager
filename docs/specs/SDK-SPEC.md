@@ -372,9 +372,10 @@ Running it again with the same remote changes nothing.
      again when `HEAD` is unborn (step 3 above), `git checkout machine/<machine-id>` when
      that branch exists, and `git branch -m machine/<machine-id>` when it does not.
 2. **Exclude file.** Written when it differs (below).
-3. **Commit, under the locks.** `git add --all`. When `git diff --cached --quiet` finds
-   nothing staged, no commit is made. Otherwise one commit with the message
-   `taskmgr sync: <machine-id>`, with `--no-verify`.
+3. **Stage under the locks, then commit.** `git add --all`, under the locks (below), which
+   are released when it ends. When `git diff --cached --quiet` finds nothing staged, no
+   commit is made. Otherwise one commit with the message `taskmgr sync: <machine-id>`,
+   with `--no-verify`.
 4. **Push.** `git push --no-verify origin
    refs/heads/machine/<machine-id>:refs/heads/machine/<machine-id>` — the full ref on both
    sides, because a tag named `machine/<machine-id>` makes the short name ambiguous and git
@@ -387,16 +388,19 @@ Running it again with the same remote changes nothing.
    every run (`git ls-remote`) was rejected because it would make every no-op publish a
    network call.
 
-**What the locks cover, and why the push is outside them.** Step 3 runs under the
-central-root lock (CONFIG-SPEC §3), then the write lock of every store the registry holds,
-in store-name order, and all of them are released before step 4. The central lock comes
-first, the order every registry operation takes the two in, and the registry is read under
-it, so no store is created, moved in or renamed between that read and the commit. A commit
-is therefore a settled state: no write is half done in it, no issue sits in both partitions
-or in neither, and no comment sidecar is caught mid-append. The hold is two local git
-commands; the push, the one network call, holds none of these locks, because a lock held
-across it would stall every writer for as long as the remote takes. Reads never wait, as
-for any write (§7). Two cases are not covered:
+**What the locks cover, and why the commit and the push are outside them.** The
+`git add --all` of step 3 runs under the central-root lock (CONFIG-SPEC §3), then the
+write lock of every store the registry holds, in store-name order, and all of them are
+released when it ends. The central lock comes first, the order every registry operation
+takes the two in, and the registry is read under it, so no store is created, moved in or
+renamed between that read and the add. The index the add writes is therefore a settled
+state: no write is half done in it, no issue sits in both partitions or in neither, and no
+comment sidecar is caught mid-append. `git diff --cached` and `git commit` read that index,
+never the work tree, so they run with every lock released: a writer that runs meanwhile
+changes the work tree, not the commit, and the next publish takes its change. The hold is
+one local git command. The push, the one network call, holds none of these locks either,
+because a lock held across it would stall every writer for as long as the remote takes.
+Reads never wait, as for any write (§7). Two cases are not covered:
 
 - a registered store whose directory is gone has nothing to lock and is skipped;
 - a directory under `stores/` that the registry does not hold is not locked, and is
@@ -412,7 +416,14 @@ holds another. Waiting for a busy store while holding the central lock and the s
 before it would stall every registry change and every writer of those stores for as long
 as the busy one is held, which a pre-hook can make as long as its `hook_timeout`
 ([HOOK-SPEC](HOOK-SPEC.md) §7). The cost is that a store written to without pause can
-delay a publish; a writer never waits for a publish longer than its two git commands.
+delay a publish; a writer never waits for a publish longer than its `git add`.
+
+The back-off is bounded, like the push: when the locks are still not all held after
+2 minutes of trying, the call fails, holding none of them and having staged nothing, with
+`gave up after waiting 2m0s for the write lock of store "<name>", which another writer
+holds`, or `... for the central-root lock, which a registry change holds`. A publish runs
+unattended, so a store a hung writer holds must end the run, not keep it retrying under
+the publish lock; the next publish tries again.
 
 **One publish at a time, and a second one fails fast.** Both calls run whole, push
 included, under a third lock, `<central_root>/.publish.lock`, which no writer takes. Two
@@ -427,13 +438,15 @@ it holds on the file stays held (CONFIG-SPEC §3). A refused call reads them bac
 message: `another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)`, the
 time in UTC, RFC 3339. Content it cannot read or parse — the holder has not written it
 yet, or a write was cut short — still refuses, with `another taskmgr sync is running`.
-The content is informative only: release leaves it, and content under a free lock is
-ignored, because the lock, not the content, decides whether a publish runs.
+The holder empties the file before it releases the lock, so a refusal never names a holder
+that has already ended. The content is informative only: content under a free lock — left
+by a holder killed before it emptied the file — is ignored and overwritten, because the
+lock, not the content, decides whether a publish runs.
 
 A pre-hook that runs a publish keeps it backing off: its own mutation holds a store lock
-the publish needs, so the publish retries until `hook_timeout` kills the hook, and with
-`hook_timeout: 0`, which disables the limit, until the user interrupts it. The publish
-holds no store or central lock meanwhile, so every other writer goes on.
+the publish needs, so the publish retries until `hook_timeout` kills the hook or the
+back-off gives up after 2 minutes, whichever comes first. The publish holds no store or
+central lock meanwhile, so every other writer goes on.
 
 
 **The exclude file.** Both calls write `<central_root>/stores/.git/info/exclude` with
@@ -470,6 +483,13 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   variables above any config, so a value the user exports is replaced, not merely
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
+- runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
+  fails at once with git's message instead of waiting on a terminal nobody watches until
+  the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are deliberately not set:
+  either would replace the user's own ssh setup — the command, the key, the agent — that
+  the remote may need;
+- runs with `GIT_ATTR_NOSYSTEM=1`, so the system attributes file applies no more than the
+  global one (`core.attributesFile`, below): either could name a `filter` or an `eol`;
 - takes these settings with `-c`, which outrank the user's global and system config.
   The snapshot must be byte-identical to the engine's files, and no program of the
   user's may run while the store locks are held:
@@ -478,7 +498,7 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   |---|---|
   | `core.hooksPath=/dev/null` | `--no-verify` skips only some hooks; a `prepare-commit-msg` or `post-commit` hook from a global `core.hooksPath` would run, and could fail, in the stores' work tree |
   | `core.excludesFile=/dev/null` | a global excludes file could silently keep store files out of the mirror |
-  | `core.attributesFile=/dev/null` | a global attributes file could name a `filter` whose clean program rewrites each file as it is staged, or an `eol` that converts it |
+  | `core.attributesFile=/dev/null` | a global attributes file could name a `filter` whose clean program rewrites each file as it is staged, or an `eol` that converts it. It does not reach the system attributes file, which `GIT_ATTR_NOSYSTEM=1` (above) drops |
   | `core.autocrlf=false` | a file's line endings could be converted as it is staged |
   | `core.safecrlf=false` | the add could fail on a file whose line endings a conversion would change |
   | `core.fsmonitor=false` | a configured fsmonitor program, or the built-in daemon, would start when git reads the index |
@@ -498,8 +518,15 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   ends it together with the caller. A hook's own process group lets its timeout reach
   the hook's whole process tree. For git, the cost of that group is a push that outlives
   a Ctrl-C, runs outside the released publish lock with no time limit, and races the
-  next publish on the same branch. git's transport helpers end when git does, so
-  signalling git alone is enough.
+  next publish on the same branch. The timeout signals git alone, not git's transport
+  (ssh, `git-remote-https`): the transport ends when git's pipe to it closes or its
+  connection gives up. On Linux every git a publish runs also gets SIGKILL from the
+  kernel when the caller dies by any signal, not only the Ctrl-C its group gets — a
+  `kill` of the caller alone, the OOM killer. The kernel kills git only: a child does not
+  inherit the death signal, so the transport ends as above. A new process group for the
+  transport is rejected for the Ctrl-C cost already named. macOS has no such mechanism:
+  there, a caller killed alone leaves the push running, with no time limit, until git
+  gives up on the connection.
 
 The user's own git identity is deliberately not used. A publish commit is a snapshot, not
 an authored change — who made each change is already in the issue's `creator`, `agent`

@@ -278,6 +278,59 @@ func TestPublish_BusyCentralRootLockWaitNamesIt(t *testing.T) {
 	}
 }
 
+// A store a hung writer holds must end an unattended run, as a hung push
+// does: the publish gives up after publishLockWaitMax, holding no store lock, runs
+// no git add, and names the busy store and the wait in its error and its
+// publish_error record.
+func TestPublish_BusyStoreGivesUpAfterTheMaximumWait(t *testing.T) {
+	for _, busy := range []string{"beta", "central"} {
+		t.Run(busy, func(t *testing.T) {
+			fs, e, runner, g := publishFixture(t, true)
+			fs.busy[busy] = true
+			at := time.Date(2026, 11, 13, 14, 2, 0, 0, time.UTC)
+			buf, logOpt := debugLog()
+			p, err := loadPublish(fs, e, runner, logOpt, WithClock(func() time.Time { return at }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			waits := 0
+			p.backoff = func() {
+				waits++
+				at = at.Add(7 * time.Second)
+			}
+			_, err = p.publish()
+			want := `waiting 2m0s for the write lock of store "beta"`
+			if busy == "central" {
+				want = "waiting 2m0s for the central-root lock"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("publish with %s held for good: %v, want an error containing %q", busy, err, want)
+			}
+			if waits != 18 {
+				t.Errorf("backed off %d times, want 18 (the first 7s step past 2m)", waits)
+			}
+			if slices.Contains(*g.log, "git add") {
+				t.Errorf("staged although a lock was never taken: %q", *g.log)
+			}
+			held := map[string]bool{}
+			for _, entry := range *g.log {
+				if name, ok := strings.CutPrefix(entry, "lock "); ok {
+					held[name] = true
+				} else if name, ok := strings.CutPrefix(entry, "unlock "); ok {
+					delete(held, name)
+				}
+			}
+			if len(held) != 0 {
+				t.Errorf("still held %v after giving up: %q", held, *g.log)
+			}
+			failed := withMsg(records(t, buf), "publish_error")
+			if len(failed) != 1 || failed[0]["level"] != "ERROR" || failed[0]["stage"] != stageCommit || !strings.Contains(failed[0]["error"].(string), want) {
+				t.Errorf("publish_error records = %v, want one at error, stage %s, naming the busy lock", failed, stageCommit)
+			}
+		})
+	}
+}
+
 // Busy is what a timer expects while a manual sync runs, so it is not an
 // error an alert should count.
 func TestPublish_BusyIsLoggedAtInfo(t *testing.T) {

@@ -42,7 +42,7 @@ cmd/                        taskmgr CLI (cobra); calls Store, never the FS
   processes — hooks and git — and user environment) and the only SDK packages that call
   `os`/`syscall`. Each has a real implementation and a test double. `vfs.FS` is
   `ReadDir`, `ReadFile`, `Stat`, `WriteAtomic`, `WriteInPlace`, `Append`, `Rename`, `MkdirAll`,
-  `Remove`, `Lock`, `Watch`; `osFS` encapsulates temp+fsync+rename, flock and
+  `Remove`, `Lock`, `TryLock`, `Watch`; `osFS` encapsulates temp+fsync+rename, flock and
   the `fsnotify` watcher, `Mem` adds fault injection.
 - **`internal/storetest`** — builds a populated store from a declarative spec into
   *either* `vfs.Mem` or a real `t.TempDir()`. A normal (non-`_test.go`) package so

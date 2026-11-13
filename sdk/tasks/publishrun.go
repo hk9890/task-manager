@@ -23,11 +23,12 @@
 // push that is not a fast-forward is reported as the misconfiguration it is.
 //
 // git reads every store file and writes the work tree's .git, so it runs here,
-// in the engine, through the exec seam — never from a front end. The add and
-// the commit run under the central-root lock and the write lock of every
-// registered central store, taken without waiting: a busy one makes the
-// publish release them all and try again. The push, the one network call,
-// runs after all of them are released, and within publishPushTimeout. A
+// in the engine, through the exec seam — never from a front end. The add runs
+// under the central-root lock and the write lock of every registered central
+// store, taken without waiting: a busy one makes the publish release them all
+// and try again, for at most publishLockWaitMax. The commit reads only the
+// index the add wrote, so it runs after every one of them is released, as does
+// the push, the one network call, within publishPushTimeout. A
 // publish lock no writer takes runs one publish at a time: a second one is
 // refused with ErrPublishBusy rather than queued.
 //
@@ -57,10 +58,11 @@ const storeLockRetry = 50 * time.Millisecond
 // logs publish_lock_wait, once, naming the store.
 const publishLockWaitWarn = 5 * time.Second
 
-// busyCentralRoot is the publish_lock_wait store value when the busy lock is
-// the central root's, which registry writes hold. No store name has
-// parentheses, so it cannot name a store.
-const busyCentralRoot = "(central root)"
+// publishLockWaitMax is how long a publish waits for a busy store, or a busy
+// central root, before it gives up. A publish runs unattended, from a timer, so
+// a store a hung writer holds must end the run, as a hung push does, rather
+// than keep it retrying with the publish lock held.
+const publishLockWaitMax = 2 * time.Minute
 
 // InitPublish makes <central_root>/stores a git work tree on the branch
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
@@ -146,9 +148,10 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 }
 
 // Publish commits what changed under <central_root>/stores and pushes it to
-// machine/<machine-id> (SDK-SPEC §1). The commit is taken under the central-root
-// lock and the write lock of every registered central store, so it is a settled
-// state; the push runs with those released, and ends after publishPushTimeout.
+// machine/<machine-id> (SDK-SPEC §1). The add is taken under the central-root
+// lock and the write lock of every registered central store, so the commit is
+// of a settled state; the commit and the push run with those released, and the
+// push ends after publishPushTimeout.
 // While another publish or an init runs it refuses with ErrPublishBusy. A run
 // with nothing new commits nothing, and pushes only a commit an earlier,
 // failed push left behind. Of the options, WithLogger and WithClock apply.
@@ -288,12 +291,6 @@ func newPublisher(fs vfs.FS, e env.Environment, runner exec.Runner, opts []Optio
 	}
 }
 
-// loadPublish is a publisher with its configuration loaded.
-func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner, opts ...Option) (*publisher, error) {
-	p := newPublisher(fs, e, runner, opts)
-	return p, p.load()
-}
-
 // load reads the per-user config once for the machine ID and the central
 // root. It writes nothing, so an invalid machine ID refuses before anything is
 // created.
@@ -349,14 +346,16 @@ func (p *publisher) gitWithin(timeout time.Duration, args ...string) (string, er
 	res := p.runner.Run(exec.Spec{
 		Argv:    slices.Concat([]string{"git"}, publishGitSettings, args),
 		Dir:     p.dir,
-		Env:     publishIdentity(p.id),
+		Env:     publishEnv(p.id),
 		Unset:   publishUnsetEnv,
 		Timeout: timeout,
 		// In taskmgr's process group, so a Ctrl-C ends the push with the
 		// publish and its lock: a push left running would race the next one.
+		// On Linux the seam also kills it when taskmgr dies by any signal.
 		KeepGroup: true,
 	})
-	p.logGit(args, res)
+	answer := res.Category == exec.Completed && res.ExitCode == 1 && gitAnswer(args)
+	p.logGit(args, res, answer)
 	switch res.Category {
 	case exec.Completed:
 		if res.ExitCode == 0 {
@@ -366,7 +365,7 @@ func (p *publisher) gitWithin(timeout time.Duration, args ...string) (string, er
 		if msg == "" {
 			msg = strings.TrimSpace(string(res.Stdout))
 		}
-		return "", &gitError{Args: args, ExitCode: res.ExitCode, Message: msg}
+		return "", &gitError{Args: args, ExitCode: res.ExitCode, Message: msg, Answer: answer}
 	case exec.SpawnError:
 		if res.NotFound {
 			return "", errGitMissing(res.Err)
@@ -379,11 +378,11 @@ func (p *publisher) gitWithin(timeout time.Duration, args ...string) (string, er
 	}
 }
 
-// logGit records one git run. A success, and an exit 1 that answers a question
-// (gitAnswer), are debug; any other exit, and git that did not exit on its own
-// — not started, timed out, killed — are warn with git's stderr, and exit -1
-// for the last three.
-func (p *publisher) logGit(args []string, res exec.Result) {
+// logGit records one git run. A success, and an answer (gitAnswer), are
+// debug; any other exit, and git that did not exit on its own — not started,
+// timed out, killed — are warn with git's stderr, and exit -1 for the last
+// three.
+func (p *publisher) logGit(args []string, res exec.Result, answer bool) {
 	exit := res.ExitCode
 	if res.Category != exec.Completed {
 		exit = -1
@@ -393,7 +392,7 @@ func (p *publisher) logGit(args []string, res exec.Result) {
 		slog.Int("exit", exit),
 		slog.Int64("duration_ms", res.Duration.Milliseconds()),
 	}
-	if exit == 0 || exit == 1 && gitAnswer(args) {
+	if exit == 0 || answer {
 		p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish_git", attrs...)
 		return
 	}
@@ -465,18 +464,12 @@ func (p *publisher) writeExcludes() error {
 	return p.fs.WriteAtomic(path, want, 0o644)
 }
 
-// commit stages and commits everything under the work tree while holding the
-// central-root lock and the write lock of every registered central store, and
-// reports whether it made a commit. The locks cover two local git commands and
-// nothing else.
+// commit stages and commits everything under the work tree, and reports
+// whether it made a commit. Only the add runs under the store locks (stageAll):
+// diff --cached and commit read the index the add wrote, never the work tree,
+// so no writer waits on them.
 func (p *publisher) commit() (committed bool, err error) {
-	unlock, err := p.lockStores()
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
-
-	if _, err := p.git("add", "--all"); err != nil {
+	if err := p.stageAll(); err != nil {
 		return false, err
 	}
 	if _, err := p.git("diff", "--cached", "--quiet"); err == nil {
@@ -491,27 +484,46 @@ func (p *publisher) commit() (committed bool, err error) {
 	return true, nil
 }
 
+// stageAll runs git add --all while holding the central-root lock and the
+// write lock of every registered central store, so the index holds a settled
+// state of every store, and releases them all when the add ends.
+func (p *publisher) stageAll() error {
+	unlock, err := p.lockStores()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	_, err = p.git("add", "--all")
+	return err
+}
+
 // lockStores takes the central-root lock and the write lock of every
 // registered central store, and returns the func that releases them all. It
 // never waits while it holds one: when any is busy it releases every lock it
 // took, waits holding nothing, and tries again, so a long write to one store
 // does not stall the writers of every store locked before it. A wait that
-// reaches publishLockWaitWarn is logged once, naming the busy store.
+// reaches publishLockWaitWarn is logged once, naming the busy store; one that
+// reaches publishLockWaitMax gives up, naming it too.
 func (p *publisher) lockStores() (unlock func(), err error) {
 	start := p.now()
 	warned := false
 	for {
 		unlock, busy, err := p.tryLockStores()
+		waited := p.now().Sub(start)
 		if unlock != nil || err != nil {
-			p.lockWait = p.now().Sub(start)
+			p.lockWait = waited
 			return unlock, err
 		}
-		if waited := p.now().Sub(start); !warned && waited >= publishLockWaitWarn {
+		if !warned && waited >= publishLockWaitWarn {
 			warned = true
 			p.logger.LogAttrs(context.Background(), slog.LevelWarn, "publish_lock_wait",
 				slog.String("store", busy),
 				slog.Int64("waited_ms", waited.Milliseconds()),
 			)
+		}
+		if waited >= publishLockWaitMax {
+			p.lockWait = waited
+			return nil, errLockWaitOver(busy)
 		}
 		p.retries++
 		p.backoff()
@@ -521,7 +533,7 @@ func (p *publisher) lockStores() (unlock func(), err error) {
 // tryLockStores is one try of lockStores: the central-root lock, then the
 // registry read under it, then each store's lock in name order. The central
 // lock comes first, as in every registry operation, so no store is created,
-// moved in or renamed while the commit runs. A registered store whose
+// moved in or renamed while the add runs. A registered store whose
 // directory is gone has nothing to lock and is skipped. When a lock is busy it
 // returns no unlock and no error, holding nothing, and busy names the store,
 // or busyCentralRoot; the returned func releases every lock taken, the central
@@ -550,7 +562,7 @@ func (p *publisher) tryLockStores() (unlock func(), busy string, err error) {
 	}
 	slices.Sort(names)
 	for _, name := range names {
-		u, ok, err := tryLockStoreDir(p.fs, filepath.Join(p.dir, name))
+		u, ok, err := p.fs.TryLock(filepath.Join(p.dir, name, lockFileName))
 		if vfs.IsNotExist(err) {
 			continue
 		}
@@ -572,9 +584,10 @@ func (p *publisher) tryLockStores() (unlock func(), busy string, err error) {
 // publish.
 //
 // The holder writes its PID and start time into the lock file in place, which
-// keeps the lock it holds on the file. Release leaves the content: the lock,
-// not the content, says whether a publish runs, and the next holder
-// overwrites it.
+// keeps the lock it holds on the file, and empties the file before it releases
+// the lock, so a refusal never names a holder that has already ended. The
+// lock, not the content, says whether a publish runs: a holder killed before
+// it emptied the file leaves its content, which the next holder overwrites.
 func (p *publisher) lockPublish() (func() error, error) {
 	path := filepath.Join(p.croot, publishLockName)
 	unlock, ok, err := p.fs.TryLock(path)
@@ -589,7 +602,10 @@ func (p *publisher) lockPublish() (func() error, error) {
 		_ = unlock()
 		return nil, err
 	}
-	return unlock, nil
+	return func() error {
+		cleared := p.fs.WriteInPlace(path, nil, 0o644)
+		return errors.Join(cleared, unlock())
+	}, nil
 }
 
 // revision returns the commit ref names, or "" when there is none — an unborn

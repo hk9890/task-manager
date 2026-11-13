@@ -114,7 +114,9 @@ func (osRunner) Run(spec Spec) Result {
 	//
 	// A KeepGroup process stays in taskmgr's group even with a timeout, so a
 	// Ctrl-C ends it together with taskmgr instead of leaving it to run on
-	// unbounded; its timeout then signals it alone.
+	// unbounded; its timeout then signals it alone. runKeptInGroup also ends
+	// it when taskmgr dies by a signal the group does not get, where the
+	// platform can.
 	detached := spec.Timeout > 0 && !spec.KeepGroup
 	if spec.Timeout > 0 {
 		// On timeout, send SIGTERM to the whole group (the default would SIGKILL
@@ -131,7 +133,12 @@ func (osRunner) Run(spec Spec) Result {
 	}
 
 	start := time.Now()
-	err := cmd.Run()
+	var err error
+	if spec.KeepGroup {
+		err = runKeptInGroup(cmd)
+	} else {
+		err = cmd.Run()
+	}
 	dur := time.Since(start)
 
 	// Captured after Run: Process is set by Start and survives Wait, and the

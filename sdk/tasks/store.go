@@ -939,12 +939,6 @@ func lockStoreDir(fs vfs.FS, dir string) (func() error, error) {
 	return fs.Lock(filepath.Join(dir, lockFileName))
 }
 
-// tryLockStoreDir is lockStoreDir without the wait, for a publish, which must
-// not hold one store's lock while it waits for another's.
-func tryLockStoreDir(fs vfs.FS, dir string) (func() error, bool, error) {
-	return fs.TryLock(filepath.Join(dir, lockFileName))
-}
-
 // CreateInput describes a new issue. Zero values fall back to sensible
 // defaults (TypeTask, PriorityDefault, StatusOpen).
 type CreateInput struct {

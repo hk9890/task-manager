@@ -585,7 +585,8 @@ This section is the command surface over it.
 Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
 `git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
 `sync init` yet, another remote, a branch other than `machine/<machine-id>`, a rejected
-push, a push that timed out, another `sync` or `sync init` running — exits `1` with its
+push, a push that timed out, a store still busy after 2 minutes, another `sync` or
+`sync init` running — exits `1` with its
 message on stderr and prints nothing on stdout. A rejected push prints git's own message
 after the explanation. git runs with the user's line-ending, attributes, fsmonitor, hook
 and signing settings turned off, so the published files are the stores' own bytes; the
@@ -598,7 +599,13 @@ list is SDK-SPEC's.
   instead of queueing behind it.
 - **A push has 2 minutes.** A push not finished by then is stopped and exits `1` with
   `push timed out after 2m0s`; the commit is kept and the next `sync` pushes it. A Ctrl-C
-  during a push ends both `taskmgr` and the push (SDK-SPEC).
+  during a push ends both `taskmgr` and the push. On Linux any signal that kills
+  `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
+  pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for
+  credentials: a push that needs them fails at once with git's message.
+- **A busy store has 2 minutes.** `sync` waits for a store another `taskmgr` writes to,
+  holding no store lock, and exits `1` with `gave up after waiting 2m0s for the write lock of
+  store "<name>"…` when it is still busy then; the next `sync` tries again.
 - **Logging.** Both commands pass the CLI's logger (`TASKMGR_LOG`, §1) to the SDK.
   `TASKMGR_LOG=debug` puts each stage, each git command and the outcome on stderr; the
   records are [MONITORING.md § Publishing](../MONITORING.md#publishing)'s. At the default

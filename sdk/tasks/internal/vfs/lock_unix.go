@@ -30,7 +30,16 @@ import (
 // function releases the lock and closes the file descriptor.
 // This is the unix implementation; see lock_other.go for the fail-closed stub.
 func (osFS) Lock(path string) (func() error, error) {
-	unlock, _, err := flock(path, syscall.LOCK_EX)
+	return blocking(flock(path, syscall.LOCK_EX))
+}
+
+// blocking is flock's result for a blocking lock, which must hold the lock or
+// fail: a not-ok without an error would hand the caller no unlock and no
+// error, and it would write as if it held the lock.
+func blocking(unlock func() error, ok bool, err error) (func() error, error) {
+	if err == nil && !ok {
+		return nil, errors.New("vfs.Lock flock: a blocking lock returned without the lock")
+	}
 	return unlock, err
 }
 

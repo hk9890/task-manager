@@ -66,10 +66,10 @@ Run `taskmgr sync` whenever you want the mirror up to date. It commits what chan
 pushes it. With nothing new it prints `Nothing to publish: no change since the last sync` and does nothing, not even a network call. `--json` reports
 what it did, for a script that runs it.
 
-A sync never publishes a half-written ticket: while it commits, every write to your
-central stores waits, for as long as the local commit takes. When a write is already in
-progress, sync waits for it to finish and blocks nothing while it waits. The push to the remote does
-not hold anyone up. Only one sync runs at a time: a second one stops at once and says
+A sync never publishes a half-written ticket: while it stages the changes, every write to
+your central stores waits, for as long as the local staging takes. When a write is already
+in progress, sync waits for it to finish, for up to 2 minutes, and blocks nothing while it
+waits. The commit and the push to the remote do not hold anyone up. Only one sync runs at a time: a second one stops at once and says
 which one is running, so a scheduled sync that fires during yours simply fails that
 once. A push that has not finished after 2 minutes is stopped; the commit stays, and the
 next sync pushes it. Your tickets on this machine are never changed; sync only reads them.
@@ -101,6 +101,7 @@ repository.
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
 | another taskmgr sync is running | a sync or `sync init` is running on this machine, with the process ID and start time the message gives | wait for it and run `taskmgr sync` again; a process that is no longer there holds nothing, so the next sync runs |
 | push timed out after 2m0s | the remote did not finish receiving the push in 2 minutes: no network, or a remote that does not answer | check the connection and run `taskmgr sync` again; the commit was kept |
+| gave up after waiting 2m0s for the write lock of store | another `taskmgr` on this machine kept writing to that store, or a hook of its kept running, for 2 minutes | let it finish and run `taskmgr sync` again |
 
 `sync` never overwrites what is on the remote. When it refuses, the remote still holds
 everything it held before.

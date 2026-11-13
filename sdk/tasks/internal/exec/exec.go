@@ -65,6 +65,9 @@ type Spec struct {
 	// group, where a Ctrl-C at the terminal reaches it as it reaches the
 	// caller. The timeout then signals the process alone, not a group: it suits
 	// a process whose children end when it does, such as git and its transport.
+	// On Linux the kernel also kills a KeepGroup process, with or without a
+	// Timeout, when the caller dies by any signal (runKeptInGroup); macOS has
+	// no such mechanism.
 	KeepGroup bool
 }
 

@@ -90,7 +90,7 @@ const (
 	stageLock   = "lock"   // take the publish lock
 	stageInit   = "init"   // init only: create the repository and its remote
 	stageCheck  = "check"  // publish only: the remote, the branch, the excludes
-	stageCommit = "commit" // take the store locks, add, commit
+	stageCommit = "commit" // take the store locks, add, release them, commit
 	stagePush   = "push"   // push the branch
 )
 
@@ -139,14 +139,27 @@ func redactUserinfo(s string) string { return userinfoRe.ReplaceAllString(s, "$1
 // gitAnswer reports whether exit 1 from git args is an answer rather than a
 // failure: "no such key" from config --get, "differences" from diff --quiet,
 // "no such ref" from rev-parse --verify, and "not a symbolic ref" from
-// symbolic-ref --quiet. gitAbsent is how the caller reads one; the log
-// records one at debug, not as a failed git run.
+// symbolic-ref --quiet. It is the one place that says so: gitWithin marks
+// such an exit gitError.Answer, which gitAbsent reads, and logs it at debug,
+// not as a failed git run.
 func gitAnswer(args []string) bool {
 	if len(args) < 2 {
 		return false
 	}
-	flag, ok := map[string]string{"config": "--get", "diff": "--quiet", "rev-parse": "--verify", "symbolic-ref": "--quiet"}[args[0]]
-	return ok && slices.Contains(args[1:], flag)
+	var flag string
+	switch args[0] {
+	case "config":
+		flag = "--get"
+	case "diff":
+		flag = "--quiet"
+	case "rev-parse":
+		flag = "--verify"
+	case "symbolic-ref":
+		flag = "--quiet"
+	default:
+		return false
+	}
+	return slices.Contains(args[1:], flag)
 }
 
 // logStderrMax bounds the git stderr a publish_git record carries: enough for
@@ -286,23 +299,32 @@ var gitDateEnv = []string{"GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"}
 // publishUnsetEnv is every inherited variable git runs without.
 var publishUnsetEnv = slices.Concat(gitRepoEnv, gitDateEnv)
 
-// publishIdentity is the fixed identity of every publish commit, in the
-// variables git ranks above any config, so one the user exports is replaced.
-func publishIdentity(id string) []string {
+// publishEnv is what every publish git runs with on top of the inherited
+// environment. The identity of every publish commit is fixed, in the variables
+// git ranks above any config, so one the user exports is replaced.
+// GIT_TERMINAL_PROMPT=0 makes a push that needs credentials fail at once with
+// git's message, not wait on a terminal nobody watches until the push times
+// out. GIT_ATTR_NOSYSTEM=1 drops the system attributes file, which
+// core.attributesFile=/dev/null does not reach.
+func publishEnv(id string) []string {
 	email := id + "@taskmgr.invalid"
 	return []string{
 		"GIT_AUTHOR_NAME=taskmgr", "GIT_AUTHOR_EMAIL=" + email,
 		"GIT_COMMITTER_NAME=taskmgr", "GIT_COMMITTER_EMAIL=" + email,
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_ATTR_NOSYSTEM=1",
 	}
 }
 
 // gitError is a git command that ran and exited non-zero. Message is git's own
 // stderr — an unreachable host, a missing key, a rejected push are all its
-// message to give — or its stdout when stderr is empty.
+// message to give — or its stdout when stderr is empty. Answer is an exit 1
+// that gitAnswer reads as an answer, not a failure.
 type gitError struct {
 	Args     []string
 	ExitCode int
 	Message  string
+	Answer   bool
 }
 
 func (e *gitError) Error() string {
@@ -313,13 +335,13 @@ func (e *gitError) Error() string {
 	return redactUserinfo(head + ": " + e.Message)
 }
 
-// gitAbsent reports whether err is git exiting 1: its answer "no such key" to
-// config --get, "not a symbolic ref" to symbolic-ref --quiet, "no such ref" to
-// rev-parse --verify --quiet, and "differences" to diff --quiet. Any other
-// failure — git missing, a corrupt config, a broken repository — is a real one.
+// gitAbsent reports whether err is an exit 1 that gitAnswer reads as an
+// answer: "no such key", "not a symbolic ref", "no such ref", "differences".
+// Any other failure — an exit 1 from commit or push, git missing, a corrupt
+// config, a broken repository — is a real one.
 func gitAbsent(err error) bool {
 	var g *gitError
-	return errors.As(err, &g) && g.ExitCode == 1
+	return errors.As(err, &g) && g.Answer
 }
 
 // gitRejected reports whether err is a push the remote refused as not a
@@ -353,6 +375,21 @@ func errGitTimeout(args []string, timeout time.Duration, stderr []byte) error {
 		msg += ": " + s
 	}
 	return errors.New(redactUserinfo(msg))
+}
+
+// busyCentralRoot is the publish_lock_wait store value when the busy lock is
+// the central root's, which registry writes hold. No store name has
+// parentheses, so it cannot name a store.
+const busyCentralRoot = "(central root)"
+
+// errLockWaitOver is a publish that gave up after waiting for the lock of
+// busy, a store name or busyCentralRoot. It names the limit, not the measured
+// wait, which overshoots it by up to one back-off and try.
+func errLockWaitOver(busy string) error {
+	if busy == busyCentralRoot {
+		return fmt.Errorf("gave up after waiting %s for the central-root lock, which a registry change holds; run 'taskmgr sync' again", publishLockWaitMax)
+	}
+	return fmt.Errorf("gave up after waiting %s for the write lock of store %q, which another writer holds; run 'taskmgr sync' again", publishLockWaitMax, busy)
 }
 
 func errNotSetUp(dir string) error {
