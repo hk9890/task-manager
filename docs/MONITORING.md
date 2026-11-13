@@ -27,6 +27,7 @@ Each row is one `slog` record (`msg` in the first column):
 | `hook` — a **post**-hook that **reported a failure** | info | `event`, `hook`, `issue`, `decision=warn`, `duration_ms` |
 | `hook` — a hook that **errored** (missing / timeout / signal) | warn | `event`, `hook`, `issue`, `decision=error`, `duration_ms` |
 | `io_error` — a failed store write | error | `op`, `issue`, `error` |
+| `store_busy` — a write of a store opened `WithLockTimeout` gave up on a held write lock, and wrote nothing | warn | `store`, `waited_ms` |
 | `publish_stage` — a publish or init stage **starts** | debug | `stage` |
 | `publish_git` — a git command ended with exit `0`, or with an exit-`1` answer | debug | `cmd`, `exit`, `duration_ms` |
 | `publish_git` — any other git outcome: another exit, not started, timed out, killed | warn | `cmd`, `exit` (`-1` when git did not exit on its own), `duration_ms`, `stderr`, `error` (when git did not exit) |

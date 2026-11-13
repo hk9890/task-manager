@@ -32,6 +32,7 @@ func DerivePrefix(path string) string                            // project path
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
+func WithLockTimeout(d time.Duration) Option // bound a write's wait for the write lock (§7)
 ```
 
 Package-level constants naming the on-disk layout (TASK-STORAGE-SPEC §2), so a
@@ -157,6 +158,13 @@ const FileExt        = ".md"         // the per-issue file extension
   logger. (Store **resolution** is the one place the SDK reads the environment, and it
   does so only through the `internal/env` seam — [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §5 — so it stays
   hermetically testable.)
+  `WithLockTimeout` bounds how long each write waits for the store write lock (§7);
+  without it, or with `d <= 0`, a write waits without a limit, so a later
+  `WithLockTimeout(0)` clears an earlier bound. It bounds the writes of the returned
+  `Store`, not the registry locks that `InitCentral` and `MoveToCentral` wait for. It
+  is a store option, not a `context.Context` on each write: per-call variants would
+  double the write API, and a front end that must not hang on a save needs a bound,
+  not a cancel.
 
 ```go
 type ResolveOptions struct {
@@ -1589,8 +1597,15 @@ var (
     ErrMachineIDClash     // a failed push to a branch with a commit this work tree never made
     ErrGitMissing         // git is not on PATH
     ErrPublishBusy        // another publish or init holds the publish lock
+    ErrStoreBusy          // a write of a store opened WithLockTimeout timed out on the write lock
 )
 ```
+
+`ErrStoreBusy` is returned by every write (§4), and by `UpdateConfig` and `SetConfig`
+(§1), of a store opened `WithLockTimeout`
+when another writer held the write lock for the whole timeout. The write wrote
+nothing and ran no hook, so the caller can try it again. The message names the
+store directory and the timeout.
 
 The five publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
@@ -1717,6 +1732,15 @@ func (e *HookDeniedError) Error() string
   whether separate processes or goroutines in one process: an in-process mutex
   serializes goroutines, and an exclusive advisory `flock` on `.tasks/.lock`
   serializes processes. Reads are lock-free.
+- **Bounded wait.** A write waits for both locks without a limit, unless the store was
+  opened `WithLockTimeout(d)`. Then a goroutine waits for both, in the same order and
+  the same queue as an unbounded writer, and the write returns `ErrStoreBusy` (§6)
+  when `d` runs out first. The goroutine goes on waiting, because a `flock` wait cannot
+  be cancelled, and releases both locks as soon as it holds them; until then it keeps
+  one goroutine and one open file. Polling with a non-blocking `flock` was rejected:
+  each try reopens `.lock`, and a writer that blocks takes every hand-off before the
+  next try, so the poller loses to it. A holder is another write, its pre-hooks
+  (HOOK-SPEC §8), or a publish staging the central stores (§1).
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
   never observes a torn file — except the append-only comment sidecar (§4), which is
   grown with `O_APPEND` + `fsync` rather than rewritten.
