@@ -150,8 +150,8 @@ informative only: the lock, not the content, says whether a publish runs, so sta
 under a free lock — a holder killed before it emptied the file — is overwritten by the next
 holder and never refuses one.
 
-`.publish.state` is YAML that `taskmgr sync init` and every successful `taskmgr sync`
-write, under `.publish.lock`, and `PublishStatus` reads (SDK-SPEC §1). Each key is left
+`.publish.state` is YAML that `InitPublish` and every successful `Publish` write (behind
+`taskmgr sync init` and `taskmgr sync`), under `.publish.lock`, and `PublishStatus` reads (SDK-SPEC §1). Each key is left
 out while it has no value:
 
 ```
