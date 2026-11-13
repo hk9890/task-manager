@@ -206,7 +206,8 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	defer func() { _ = unlock() }()
 
 	p.enter(stageCheck)
-	if _, err := p.git("config", "--get", "remote."+publishRemote+".url"); err != nil {
+	remote, err := p.git("config", "--get", "remote."+publishRemote+".url")
+	if err != nil {
 		if !gitAbsent(err) {
 			return PublishResult{}, err
 		}
@@ -224,6 +225,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if out.Committed, err = p.commit(); err != nil {
 		return PublishResult{}, err
 	}
+	p.committed = out.Committed
 
 	// The remote-tracking ref is what the last successful push left. Only this
 	// machine pushes the branch, so a HEAD equal to it is already published and
@@ -232,6 +234,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if err != nil {
 		return PublishResult{}, err
 	}
+	p.head = head
 	if out.Committed {
 		out.Commit = head
 	}
@@ -244,11 +247,21 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		// The full ref on both sides: a tag of the branch's name makes the short
 		// name ambiguous, and git refuses to push it.
 		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
+			// A timeout or a kill has its own error. A push git ended with an
+			// exit status is a clash when the remote's branch holds a commit
+			// HEAD does not descend from; any other cause is git's to tell.
 			var g *gitError
-			if gitRejected(err) && errors.As(err, &g) {
-				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			if !errors.As(err, &g) {
+				return PublishResult{}, err
 			}
-			return PublishResult{}, err
+			urls := p.pushURLs(remote)
+			switch div, tip := p.remoteDivergence(remote, urls); div {
+			case foreignTip:
+				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			case rewrittenTip:
+				return PublishResult{}, errBranchRewritten(p.dir, p.id, tip, g.Message)
+			}
+			return PublishResult{}, errPushFailed(p.dir, p.ref(), urls, err)
 		}
 		out.Pushed = true
 	}
@@ -275,9 +288,11 @@ type publisher struct {
 	id    string
 
 	// Set as the run goes, for its log records.
-	stage    string        // the stage running
-	retries  int           // tries of the store locks that found one busy
-	lockWait time.Duration // how long taking the store locks took
+	stage     string        // the stage running
+	retries   int           // tries of the store locks that found one busy
+	lockWait  time.Duration // how long taking the store locks took
+	committed bool          // this run made a commit
+	head      string        // the commit a push carries; "" before it is read
 }
 
 // newPublisher reads the options into a publisher. Option configures a Store,
@@ -319,22 +334,91 @@ func (p *publisher) enter(stage string) {
 
 // logFailure records a failed publish or init with the stage it failed in. A
 // busy publish lock is info, not error: a timer that fires while a manual sync
-// runs expects it, and the next tick publishes.
+// runs expects it, and the next tick publishes. A failure after this run
+// committed, or in the push, also says whether this run committed and which
+// commit stays unpushed.
 func (p *publisher) logFailure(err error) {
 	level := slog.LevelError
 	if errors.Is(err, ErrPublishBusy) {
 		level = slog.LevelInfo
 	}
-	p.logger.LogAttrs(context.Background(), level, "publish_error",
+	attrs := []slog.Attr{
 		slog.String("stage", p.stage),
 		slog.String("error", redactUserinfo(err.Error())),
-	)
+	}
+	if p.committed || p.stage == stagePush {
+		attrs = append(attrs, slog.Bool("committed", p.committed), slog.String("head", p.head))
+	}
+	p.logger.LogAttrs(context.Background(), level, "publish_error", attrs...)
 }
 
 func (p *publisher) branch() string { return machineBranch(p.id) }
 
 // ref is the branch's full ref name.
 func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
+
+// divergence is what the remote's branch holds after a failed push.
+type divergence int
+
+const (
+	notDiverged  divergence = iota // nothing this work tree lacks, or the remote could not say
+	foreignTip                     // a commit this work tree does not have: a second writer
+	rewrittenTip                   // a commit it has, off HEAD's history: the branch was rewritten here
+)
+
+// remoteDivergence asks each URL the push went to for the branch's tip, and
+// returns the first that HEAD does not descend from, with that tip. It reads
+// ls-remote's output and exit statuses only, never git's messages, which are
+// written for people and translated. A URL it cannot ask, or with no such
+// branch, has not diverged.
+//
+// ls-remote is given origin's name where the push URL is origin's url, the
+// common case, so a token in that URL stays out of the process list.
+func (p *publisher) remoteDivergence(remote string, urls []string) (divergence, string) {
+	for _, url := range urls {
+		target := url
+		if url == remote {
+			target = publishRemote
+		}
+		out, err := p.gitWithin(publishQueryTimeout, "ls-remote", target, p.ref())
+		if err != nil {
+			continue
+		}
+		// ls-remote matches the pattern against the end of each ref name, so
+		// a deeper ref with the same ending is listed too: take the exact one.
+		var tip string
+		for line := range strings.Lines(out) {
+			if sha, ref, _ := strings.Cut(strings.TrimSpace(line), "\t"); ref == p.ref() {
+				tip = sha
+			}
+		}
+		if tip == "" {
+			continue
+		}
+		have, err := p.revision(tip + "^{commit}")
+		switch {
+		case err != nil:
+			continue
+		case have == "":
+			return foreignTip, tip
+		}
+		if _, err := p.git("merge-base", "--is-ancestor", tip, "HEAD"); gitAbsent(err) {
+			return rewrittenTip, tip
+		}
+	}
+	return notDiverged, ""
+}
+
+// pushURLs are the URLs a push of origin goes to: every pushurl, with the
+// insteadOf rewrites applied. It falls back to remote, origin's url, when git
+// cannot say.
+func (p *publisher) pushURLs(remote string) []string {
+	out, err := p.git("remote", "get-url", "--push", "--all", publishRemote)
+	if err != nil || out == "" {
+		return []string{remote}
+	}
+	return strings.Fields(out)
+}
 
 // git runs one local git command in the work tree, without a time limit, and
 // returns its stdout, trimmed.
