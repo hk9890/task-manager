@@ -21,6 +21,7 @@
 package tasks
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -39,19 +40,49 @@ const publishStores = "/home/stores"
 // fakeGit answers the git a publish runs as git would for the state it holds,
 // and logs each subcommand into the log the locks are logged into.
 type fakeGit struct {
-	m        *vfs.Mem
-	log      *[]string
-	remote   string          // the URL of origin; "" = no origin
-	head     string          // the ref HEAD points at; "" = detached
-	branches map[string]bool // full refs of branches other than HEAD's that hold a commit
-	staged   bool            // add --all finds a change
-	commits  int             // commits on HEAD's branch; 0 = unborn
-	pushed   string          // refs/remotes/origin/<branch>; "" = never pushed
-	reject   bool            // the remote refuses the push
-	fail     map[string]exec.Result
+	m         *vfs.Mem
+	log       *[]string
+	remote    string          // the URL of origin; "" = no origin
+	pushURL   string          // what remote get-url --push --all prints, one per line; "" = remote
+	asked     []string        // what each ls-remote was given to ask
+	head      string          // the ref HEAD points at; "" = detached
+	branches  map[string]bool // full refs of branches other than HEAD's that hold a commit
+	staged    bool            // add --all finds a change
+	commits   int             // commits on HEAD's branch; 0 = unborn
+	pushed    string          // refs/remotes/origin/<branch>; "" = never pushed
+	reject    bool            // the remote refuses the push: another writer pushed foreignSHA
+	remoteTip string          // a tip ls-remote reports in place of pushed, and the push fails
+	side      string          // a commit this work tree has, off HEAD's branch
+	fail      map[string]exec.Result
 }
 
 func sha(n int) string { return fmt.Sprintf("%040d", n) }
+
+// foreignSHA is a commit another machine pushed: this work tree never had it.
+var foreignSHA = strings.Repeat("f", 40)
+
+// remoteTipOrPushed is what ls-remote reports for the branch: remoteTip when
+// set, a commit another writer pushed when the remote rejects, else what this
+// work tree last pushed.
+func (g *fakeGit) remoteTipOrPushed() string {
+	switch {
+	case g.remoteTip != "":
+		return g.remoteTip
+	case g.reject:
+		return foreignSHA
+	}
+	return g.pushed
+}
+
+// onHEAD reports whether c is one of the commits on HEAD's branch.
+func (g *fakeGit) onHEAD(c string) bool {
+	for n := 1; n <= g.commits; n++ {
+		if c == sha(n) {
+			return true
+		}
+	}
+	return false
+}
 
 func (g *fakeGit) run(spec exec.Spec) exec.Result {
 	args := spec.Argv[1+len(publishGitSettings):]
@@ -78,6 +109,9 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 		}
 		return exec.Allow(g.remote + "\n")
 	case "remote":
+		if args[1] == "get-url" {
+			return exec.Allow(cmp.Or(g.pushURL, g.remote) + "\n")
+		}
 		g.remote = args[3]
 	case "diff":
 		if g.staged {
@@ -86,8 +120,25 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 	case "commit":
 		g.commits++
 		g.staged = false
+	case "ls-remote":
+		g.asked = append(g.asked, args[1])
+		// A deeper ref with the same ending, which ls-remote also lists.
+		out := foreignSHA + "\trefs/heads/archive/" + args[2] + "\n"
+		if tip := g.remoteTipOrPushed(); tip != "" {
+			out += tip + "\t" + args[2] + "\n"
+		}
+		return exec.Allow(out)
+	case "merge-base":
+		if !g.onHEAD(args[2]) {
+			return exec.Deny(1, "")
+		}
 	case "rev-parse":
 		switch ref := args[3]; {
+		case strings.HasSuffix(ref, "^{commit}"):
+			if c := strings.TrimSuffix(ref, "^{commit}"); !g.onHEAD(c) && c != g.side {
+				return exec.Deny(1, "")
+			}
+			return exec.Allow(strings.TrimSuffix(ref, "^{commit}") + "\n")
 		case ref == "HEAD" || ref == g.head:
 			if g.commits == 0 {
 				return exec.Deny(1, "")
@@ -106,6 +157,9 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 	case "push":
 		if g.reject {
 			return exec.Deny(1, " ! [rejected]        machine/laptop -> machine/laptop (fetch first)\nerror: failed to push some refs")
+		}
+		if g.remoteTip != "" {
+			return exec.Deny(1, "error: failed to push some refs")
 		}
 		g.pushed = sha(g.commits)
 	}
@@ -410,25 +464,89 @@ func TestPublish_PushesWhatAnEarlierRunLeftUnpushed(t *testing.T) {
 	}
 }
 
-// The explanation is the engine's; which refs were refused is git's to say.
-func TestPublish_RejectedPushIsTheMachineIDClashWithGitsMessage(t *testing.T) {
-	fs, e, runner, g := publishFixture(t, true)
-	g.reject = true
-	_, err := publishWith(fs, e, runner)
-	if !errors.Is(err, ErrMachineIDClash) {
-		t.Fatalf("rejected push: %v, want ErrMachineIDClash", err)
-	}
-	if !strings.Contains(err.Error(), "[rejected]        machine/laptop -> machine/laptop (fetch first)") {
-		t.Errorf("rejected push: %v, want git's own message kept", err)
+// The remote's branch decides a clash, not git's message: a commit there
+// that this work tree never had, or one off HEAD's history, has a second
+// writer. git's message is passed on, unread.
+func TestPublish_PushToADivergedBranchIsTheMachineIDClash(t *testing.T) {
+	for _, tc := range []struct {
+		name, tip, side, gitMsg string
+	}{
+		{"unknown commit", foreignSHA, "", " ! [rejected]        machine/laptop -> machine/laptop (fetch first)"},
+		{"translated message", foreignSHA, "", " ! [abgewiesen]       machine/laptop -> machine/laptop (zuerst holen)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, e, runner, g := publishFixture(t, true)
+			g.remoteTip, g.side = tc.tip, tc.side
+			g.fail = map[string]exec.Result{"push": exec.Deny(1, tc.gitMsg)}
+			_, err := publishWith(fs, e, runner)
+			if !errors.Is(err, ErrMachineIDClash) {
+				t.Fatalf("push to a diverged branch: %v, want ErrMachineIDClash", err)
+			}
+			if !strings.Contains(err.Error(), tc.gitMsg) {
+				t.Errorf("push to a diverged branch: %v, want git's own message kept", err)
+			}
+		})
 	}
 }
 
-func TestPublish_OtherPushFailureCarriesGitsMessage(t *testing.T) {
+// A remote tip this work tree has, off HEAD's history, is this machine's own
+// commit: the branch was amended or reset after it was published. That is no
+// second writer, and the fix keeps the store files.
+func TestPublish_PushAfterARewriteNamesTheSoftReset(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
-	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read from remote repository")}
+	g.remoteTip, g.side = sha(99), sha(99)
+	g.fail = map[string]exec.Result{"push": exec.Deny(1, " ! [rejected]        machine/laptop -> machine/laptop (non-fast-forward)")}
 	_, err := publishWith(fs, e, runner)
-	if err == nil || !strings.Contains(err.Error(), "could not read from remote repository") || errors.Is(err, ErrMachineIDClash) {
-		t.Errorf("unreachable remote: %v, want git's own message", err)
+	if err == nil || errors.Is(err, ErrMachineIDClash) {
+		t.Fatalf("push after a rewrite: %v, want an error that is not the clash", err)
+	}
+	for _, want := range []string{"machine/laptop was rewritten", "reset --soft " + sha(99), "non-fast-forward"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("push after a rewrite: %v, want it to contain %q", err, want)
+		}
+	}
+}
+
+// Any other failed push is one error, whatever git said: where it went, the
+// push to run by hand, and git's message passed on. Even a message that reads
+// like a clash is not one while the remote holds only this machine's commits.
+// ls-remote asks the URLs the push went to: origin by name where that is its
+// url, so a token stays out of the process list.
+func TestPublish_OtherPushFailureNamesThePushAndCarriesGitsMessage(t *testing.T) {
+	for _, tc := range []struct {
+		name, remote, pushURL, tip, gitMsg, wantURLs string
+		wantAsked                                    []string
+	}{
+		{"unreachable", "/remote.git", "", "", "fatal: could not read from remote repository", "/remote.git", []string{"origin"}},
+		{"no login, token in URL", "https://hans:s3cret@github.com/hk9890/stores.git", "", "", "fatal: Authentication failed for 'https://github.com/hk9890/stores.git/'", "https://github.com/hk9890/stores.git", []string{"origin"}},
+		{"pushurl", "https://github.com/hk9890/stores.git", "git@github.com:hk9890/stores.git", "", "git@github.com: Permission denied (publickey).", "git@github.com:hk9890/stores.git", []string{"git@github.com:hk9890/stores.git"}},
+		{"two pushurls", "/remote.git", "/a.git\n/b.git", "", "fatal: could not read from remote repository", "/a.git, /b.git", []string{"/a.git", "/b.git"}},
+		{"rejected, remote behind", "/remote.git", "", sha(1), " ! [rejected]        machine/laptop -> machine/laptop (fetch first)", "/remote.git", []string{"origin"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, e, runner, g := publishFixture(t, true)
+			g.remote, g.pushURL, g.pushed, g.commits = tc.remote, tc.pushURL, tc.tip, 1
+			g.fail = map[string]exec.Result{"push": exec.Deny(128, tc.gitMsg)}
+			_, err := publishWith(fs, e, runner)
+			if err == nil || errors.Is(err, ErrMachineIDClash) {
+				t.Fatalf("failed push: %v, want a push failure, not a clash", err)
+			}
+			for _, want := range []string{
+				"push of machine/laptop to " + tc.wantURLs + " failed",
+				"push --no-verify origin refs/heads/machine/laptop:refs/heads/machine/laptop",
+				tc.gitMsg,
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("failed push: %v, want it to contain %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("failed push: %v, carries the token", err)
+			}
+			if !slices.Equal(g.asked, tc.wantAsked) {
+				t.Errorf("ls-remote asked %q, want %q", g.asked, tc.wantAsked)
+			}
+		})
 	}
 }
 

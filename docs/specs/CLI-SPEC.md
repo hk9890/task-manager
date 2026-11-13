@@ -584,10 +584,11 @@ This section is the command surface over it.
 
 Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
 `git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
-`sync init` yet, another remote, a branch other than `machine/<machine-id>`, a rejected
-push, a push that timed out, a store still busy after 2 minutes, another `sync` or
-`sync init` running — exits `1` with its
-message on stderr and prints nothing on stdout. A rejected push prints git's own message
+`sync init` yet, another remote, a branch other than `machine/<machine-id>`, a push to a
+branch another machine wrote, a push of a branch rewritten here after it was published,
+any other failed push, a push that timed out, a store
+still busy after 2 minutes, another `sync` or `sync init` running — exits `1` with its
+message on stderr and prints nothing on stdout. A failed push prints git's own message
 after the explanation. git runs with the user's line-ending, attributes, fsmonitor, hook
 and signing settings turned off, so the published files are the stores' own bytes; the
 list is SDK-SPEC's.
@@ -596,16 +597,22 @@ list is SDK-SPEC's.
   wait: it exits `1` with `another taskmgr sync is running (pid <pid>, since <time>)`,
   the time in UTC, RFC 3339, or without the parenthesis when the running one has not
   recorded itself yet. A timer that fires during a manual sync therefore fails one tick
-  instead of queueing behind it.
+  instead of queueing behind it. A front end reading the sync status holds the same lock
+  for a moment when a killed sync left its process ID behind. A sync that starts in that
+  moment exits `1` the same way and names the killed one, once (SDK-SPEC §1).
 - **A push has 10 minutes.** A push not finished by then is stopped and exits `1` with
   `push timed out after 10m0s`; the commit is kept and the next `sync` pushes it. git
   cannot resume a push, so the limit leaves a slow link room: about 75 MB at 1 Mbit/s. An
   HTTPS push that moves under 1000 bytes/s for 60 seconds ends sooner, with git's own
-  message; an ssh push has only the 10 minutes (SDK-SPEC). A Ctrl-C
+  message; an ssh push has only the 10 minutes (SDK-SPEC). After a push that fails with
+  an exit status, `sync` asks each push URL for the branch's tip, for at most a minute
+  each (SDK-SPEC). A Ctrl-C
   during a push ends both `taskmgr` and the push. On Linux any signal that kills
   `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
   pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for
-  credentials: a push that needs them fails at once with git's message.
+  credentials: a push that has none, or whose credentials the remote refuses, ends at
+  once, and `sync` exits `1` with `push of machine/<machine-id> to <push URLs> failed`,
+  the push to run by hand to see what git needs, and git's message (SDK-SPEC).
 - **A busy store has 2 minutes.** `sync` waits for a store another `taskmgr` writes to,
   holding no store lock, and exits `1` with `gave up after waiting 2m0s for the write lock of
   store "<name>"…` when it is still busy then; the next `sync` tries again.

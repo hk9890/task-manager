@@ -68,8 +68,8 @@ const publishLockWaitMax = 2 * time.Minute
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
 // relative local path is resolved against the working directory. The returned
 // PublishInfo.Remote is the URL without its user and password. Running it
-// again with the same remote changes nothing; a different one is refused.
-// While a publish or another init runs it refuses with ErrPublishBusy. Of the
+// again with the same remote changes nothing; a different one is refused. It
+// records the remote for PublishStatus. While a publish or another init runs it refuses with ErrPublishBusy. Of the
 // options, WithLogger and WithClock apply.
 func InitPublish(remote string, opts ...Option) (PublishInfo, error) {
 	return initPublishWith(remote, vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
@@ -117,10 +117,12 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	defer func() { _ = unlock() }()
 
 	p.enter(stageInit)
+	created := false
 	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		if _, err := p.git("init", "--quiet"); err != nil {
 			return PublishInfo{}, err
 		}
+		created = true
 	} else if err != nil {
 		return PublishInfo{}, err
 	}
@@ -145,6 +147,9 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	if err := p.writeExcludes(); err != nil {
 		return PublishInfo{}, err
 	}
+	if err := p.recordInit(redactUserinfo(url), created); err != nil {
+		return PublishInfo{}, err
+	}
 	// Remote is for display, and nothing reads the credentials back from it.
 	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: redactUserinfo(url), RemoteName: publishRemote}, nil
 }
@@ -156,7 +161,9 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 // push ends after publishPushTimeout.
 // While another publish or an init runs it refuses with ErrPublishBusy. A run
 // with nothing new commits nothing, and pushes only a commit an earlier,
-// failed push left behind. Of the options, WithLogger and WithClock apply.
+// failed push left behind. Each successful run, that one included, records its
+// time and HEAD for PublishStatus. Of the options, WithLogger and WithClock
+// apply.
 func Publish(opts ...Option) (PublishResult, error) {
 	return publishWith(vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
 }
@@ -206,7 +213,8 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	defer func() { _ = unlock() }()
 
 	p.enter(stageCheck)
-	if _, err := p.git("config", "--get", "remote."+publishRemote+".url"); err != nil {
+	remote, err := p.git("config", "--get", "remote."+publishRemote+".url")
+	if err != nil {
 		if !gitAbsent(err) {
 			return PublishResult{}, err
 		}
@@ -224,6 +232,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if out.Committed, err = p.commit(); err != nil {
 		return PublishResult{}, err
 	}
+	p.committed = out.Committed
 
 	// The remote-tracking ref is what the last successful push left. Only this
 	// machine pushes the branch, so a HEAD equal to it is already published and
@@ -232,6 +241,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if err != nil {
 		return PublishResult{}, err
 	}
+	p.head = head
 	if out.Committed {
 		out.Commit = head
 	}
@@ -244,15 +254,167 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		// The full ref on both sides: a tag of the branch's name makes the short
 		// name ambiguous, and git refuses to push it.
 		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
+			// A timeout or a kill has its own error. A push git ended with an
+			// exit status is a clash when the remote's branch holds a commit
+			// HEAD does not descend from; any other cause is git's to tell.
 			var g *gitError
-			if gitRejected(err) && errors.As(err, &g) {
-				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			if !errors.As(err, &g) {
+				return PublishResult{}, err
 			}
-			return PublishResult{}, err
+			urls := p.pushURLs(remote)
+			switch div, tip := p.remoteDivergence(remote, urls); div {
+			case foreignTip:
+				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			case rewrittenTip:
+				return PublishResult{}, errBranchRewritten(p.dir, p.id, tip, g.Message)
+			}
+			return PublishResult{}, errPushFailed(p.dir, p.ref(), urls, err)
 		}
 		out.Pushed = true
 	}
+	p.record(publishRecord{Remote: redactUserinfo(remote), Branch: p.branch(), LastSync: p.now(), Commit: head})
 	return out, nil
+}
+
+// record writes what a successful publish did, under the publish lock, so a
+// status never reads a file a publish and an init write at once. The publish
+// has already done its job, so a failed write fails nothing: it is logged, and
+// the status shows the run before until the next one records.
+func (p *publisher) record(rec publishRecord) {
+	p.enter(stageRecord)
+	if err := p.writeRecord(rec); err != nil {
+		p.logger.LogAttrs(context.Background(), slog.LevelWarn, "publish_record_error",
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+// lockPath is the publish lock (CONFIG-SPEC §3).
+func (p *publisher) lockPath() string { return filepath.Join(p.croot, publishLockName) }
+
+// statePath is the publish state file (CONFIG-SPEC §3).
+func (p *publisher) statePath() string { return filepath.Join(p.croot, publishStateName) }
+
+// readRecord reads the publish state file; a missing one is the zero record.
+func (p *publisher) readRecord() (publishRecord, error) {
+	content, err := p.fs.ReadFile(p.statePath())
+	if vfs.IsNotExist(err) {
+		return publishRecord{}, nil
+	}
+	if err != nil {
+		return publishRecord{}, err
+	}
+	return decodePublishRecord(p.statePath(), content)
+}
+
+// writeRecord replaces the publish state file. The caller holds the publish
+// lock.
+func (p *publisher) writeRecord(r publishRecord) error {
+	content, err := encodePublishRecord(r)
+	if err != nil {
+		return err
+	}
+	return p.fs.WriteAtomic(p.statePath(), content, 0o644)
+}
+
+// recordInit records the remote an init set up. It keeps what the last publish
+// recorded only for the same remote, branch and repository: a sync recorded
+// for another remote, another machine ID, or a repository the init has just
+// created says nothing about this one. A file that is not a record is
+// replaced rather than refusing the init that repairs it; a file that cannot
+// be read refuses, so a passing read error does not erase the record. A record
+// that would not change is not written, so an init run again changes nothing.
+func (p *publisher) recordInit(remote string, created bool) error {
+	content, err := p.fs.ReadFile(p.statePath())
+	if err != nil && !vfs.IsNotExist(err) {
+		return err
+	}
+	rec, decodeErr := decodePublishRecord(p.statePath(), content)
+	if decodeErr != nil || created || rec.Remote != remote || rec.Branch != p.branch() {
+		rec = publishRecord{Remote: remote, Branch: p.branch()}
+	}
+	want, err := encodePublishRecord(rec)
+	if err != nil {
+		return err
+	}
+	if bytes.Equal(content, want) {
+		return nil
+	}
+	return p.fs.WriteAtomic(p.statePath(), want, 0o644)
+}
+
+// PublishStatus reports this machine's sync state without running a sync
+// (SDK-SPEC §1): whether sync init has run, the machine and its branch, what
+// the last successful publish recorded, and whether a publish runs now. It
+// runs no git and takes no lock while the publish lock file is empty, which it
+// is whenever no publish runs.
+func PublishStatus() (PublishState, error) {
+	return publishStatusWith(vfs.NewOS(), env.NewOS())
+}
+
+// publishStatusWith has no process runner: a status that ran git would panic
+// in its L2 test, which is how that test proves it runs none.
+func publishStatusWith(fs vfs.FS, e env.Environment) (PublishState, error) {
+	p := newPublisher(fs, e, nil, nil)
+	if err := p.load(); err != nil {
+		return PublishState{}, err
+	}
+	st := PublishState{Machine: p.id, Branch: p.branch()}
+	repo := true
+	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
+		repo = false
+	} else if err != nil {
+		return PublishState{}, err
+	}
+	rec, err := p.readRecord()
+	if err != nil {
+		return PublishState{}, err
+	}
+	st.Remote = rec.Remote
+	st.SetUp = repo && rec.Remote != ""
+	if rec.Branch == st.Branch {
+		st.LastSync, st.Commit = rec.LastSync, rec.Commit
+	}
+	if st.Running, st.RunningPID, st.RunningSince, err = p.publishRunning(); err != nil {
+		return PublishState{}, err
+	}
+	return st, nil
+}
+
+// publishRunning reports whether a publish or an init holds the publish lock,
+// and the holder its lock file names. Empty content means none runs, and no
+// lock is tried: a holder writes its content right after taking the lock and
+// empties it before the release. Content under a free lock was left by a
+// killed holder, so the lock is tried to tell the two apart, and a free lock
+// is emptied before its release: the dead holder costs one try, not one per
+// call, and a later refusal never names it. A held lock is read again, because
+// the holder may have changed since the first read, or another status may have
+// emptied a dead one's content while it held the lock.
+func (p *publisher) publishRunning() (running bool, pid int, since time.Time, err error) {
+	path := p.lockPath()
+	content, err := p.fs.ReadFile(path)
+	if vfs.IsNotExist(err) || (err == nil && len(content) == 0) {
+		return false, 0, time.Time{}, nil
+	}
+	if err != nil {
+		return false, 0, time.Time{}, err
+	}
+	unlock, free, err := p.fs.TryLock(path)
+	if err != nil {
+		return false, 0, time.Time{}, err
+	}
+	if free {
+		cleared := p.fs.WriteInPlace(path, nil, 0o644)
+		return false, 0, time.Time{}, errors.Join(cleared, unlock())
+	}
+	if content, err = p.fs.ReadFile(path); err != nil {
+		return false, 0, time.Time{}, err
+	}
+	if len(content) == 0 {
+		return false, 0, time.Time{}, nil
+	}
+	pid, since, _ = parsePublishHolder(content)
+	return true, pid, since, nil
 }
 
 // publisher is one publish's inputs and what it has done so far: the seams,
@@ -275,9 +437,11 @@ type publisher struct {
 	id    string
 
 	// Set as the run goes, for its log records.
-	stage    string        // the stage running
-	retries  int           // tries of the store locks that found one busy
-	lockWait time.Duration // how long taking the store locks took
+	stage     string        // the stage running
+	retries   int           // tries of the store locks that found one busy
+	lockWait  time.Duration // how long taking the store locks took
+	committed bool          // this run made a commit
+	head      string        // the commit a push carries; "" before it is read
 }
 
 // newPublisher reads the options into a publisher. Option configures a Store,
@@ -319,22 +483,91 @@ func (p *publisher) enter(stage string) {
 
 // logFailure records a failed publish or init with the stage it failed in. A
 // busy publish lock is info, not error: a timer that fires while a manual sync
-// runs expects it, and the next tick publishes.
+// runs expects it, and the next tick publishes. A failure after this run
+// committed, or in the push, also says whether this run committed and which
+// commit stays unpushed.
 func (p *publisher) logFailure(err error) {
 	level := slog.LevelError
 	if errors.Is(err, ErrPublishBusy) {
 		level = slog.LevelInfo
 	}
-	p.logger.LogAttrs(context.Background(), level, "publish_error",
+	attrs := []slog.Attr{
 		slog.String("stage", p.stage),
 		slog.String("error", redactUserinfo(err.Error())),
-	)
+	}
+	if p.committed || p.stage == stagePush {
+		attrs = append(attrs, slog.Bool("committed", p.committed), slog.String("head", p.head))
+	}
+	p.logger.LogAttrs(context.Background(), level, "publish_error", attrs...)
 }
 
 func (p *publisher) branch() string { return machineBranch(p.id) }
 
 // ref is the branch's full ref name.
 func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
+
+// divergence is what the remote's branch holds after a failed push.
+type divergence int
+
+const (
+	notDiverged  divergence = iota // nothing this work tree lacks, or the remote could not say
+	foreignTip                     // a commit this work tree does not have: a second writer
+	rewrittenTip                   // a commit it has, off HEAD's history: the branch was rewritten here
+)
+
+// remoteDivergence asks each URL the push went to for the branch's tip, and
+// returns the first that HEAD does not descend from, with that tip. It reads
+// ls-remote's output and exit statuses only, never git's messages, which are
+// written for people and translated. A URL it cannot ask, or with no such
+// branch, has not diverged.
+//
+// ls-remote is given origin's name where the push URL is origin's url, the
+// common case, so a token in that URL stays out of the process list.
+func (p *publisher) remoteDivergence(remote string, urls []string) (divergence, string) {
+	for _, url := range urls {
+		target := url
+		if url == remote {
+			target = publishRemote
+		}
+		out, err := p.gitWithin(publishQueryTimeout, "ls-remote", target, p.ref())
+		if err != nil {
+			continue
+		}
+		// ls-remote matches the pattern against the end of each ref name, so
+		// a deeper ref with the same ending is listed too: take the exact one.
+		var tip string
+		for line := range strings.Lines(out) {
+			if sha, ref, _ := strings.Cut(strings.TrimSpace(line), "\t"); ref == p.ref() {
+				tip = sha
+			}
+		}
+		if tip == "" {
+			continue
+		}
+		have, err := p.revision(tip + "^{commit}")
+		switch {
+		case err != nil:
+			continue
+		case have == "":
+			return foreignTip, tip
+		}
+		if _, err := p.git("merge-base", "--is-ancestor", tip, "HEAD"); gitAbsent(err) {
+			return rewrittenTip, tip
+		}
+	}
+	return notDiverged, ""
+}
+
+// pushURLs are the URLs a push of origin goes to: every pushurl, with the
+// insteadOf rewrites applied. It falls back to remote, origin's url, when git
+// cannot say.
+func (p *publisher) pushURLs(remote string) []string {
+	out, err := p.git("remote", "get-url", "--push", "--all", publishRemote)
+	if err != nil || out == "" {
+		return []string{remote}
+	}
+	return strings.Fields(out)
+}
 
 // git runs one local git command in the work tree, without a time limit, and
 // returns its stdout, trimmed.
@@ -591,7 +824,7 @@ func (p *publisher) tryLockStores() (unlock func(), busy string, err error) {
 // lock, not the content, says whether a publish runs: a holder killed before
 // it emptied the file leaves its content, which the next holder overwrites.
 func (p *publisher) lockPublish() (func() error, error) {
-	path := filepath.Join(p.croot, publishLockName)
+	path := p.lockPath()
 	unlock, ok, err := p.fs.TryLock(path)
 	if err != nil {
 		return nil, err

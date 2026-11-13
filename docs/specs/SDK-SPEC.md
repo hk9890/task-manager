@@ -27,10 +27,12 @@ func RelinkCentral(name, projectPath string) (string, error)     // re-point an 
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
 func InitPublish(remote string, opts ...Option) (PublishInfo, error) // make <central_root>/stores a work tree publishing to remote
 func Publish(opts ...Option) (PublishResult, error)               // commit the central stores and push machine/<id>
+func PublishStatus() (PublishState, error)                        // read the sync state; runs no sync and no git
 func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
 func WithLogger(l *slog.Logger) Option   // structured observability sink (MONITORING.md)
+func WithLockTimeout(d time.Duration) Option // bound a write's wait for the write lock (§7)
 ```
 
 Package-level constants naming the on-disk layout (TASK-STORAGE-SPEC §2), so a
@@ -93,7 +95,8 @@ const FileExt        = ".md"         // the per-issue file extension
   test resolution applies, so enumerating the registry costs one `stat` per entry
   and never reports a dangling or broken entry as usable.
 - **`InitPublish`** and **`Publish`** publish the central stores to a git remote, the
-  operation behind `taskmgr sync init` and `taskmgr sync`
+  operation behind `taskmgr sync init` and `taskmgr sync`, and **`PublishStatus`** reads
+  what they left
   ([Publishing the central stores](#publishing-the-central-stores) below).
 
   ```go
@@ -112,6 +115,18 @@ const FileExt        = ".md"         // the per-issue file extension
       Committed  bool   // this run made a commit
       Commit     string // its full SHA; "" when Committed is false
       Pushed     bool   // this run pushed
+  }
+
+  type PublishState struct {
+      SetUp        bool      // stores/ holds a .git and an init or a publish recorded its remote
+      Machine      string    // the machine ID
+      Branch       string    // machine/<Machine>
+      Remote       string    // origin's URL as the last init or successful publish read it, without its user and password
+      LastSync     time.Time // when the last successful publish of Branch ended, whole seconds; zero when none is recorded
+      Commit       string    // HEAD after that publish; "" when the branch had no commit
+      Running      bool      // a publish or an init holds the publish lock now
+      RunningPID   int       // its process ID; 0 when the lock file does not name one
+      RunningSince time.Time // when it took the lock; zero when the lock file does not name it
   }
   ```
 
@@ -143,6 +158,13 @@ const FileExt        = ".md"         // the per-issue file extension
   logger. (Store **resolution** is the one place the SDK reads the environment, and it
   does so only through the `internal/env` seam — [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §5 — so it stays
   hermetically testable.)
+  `WithLockTimeout` bounds how long each write waits for the store write lock (§7);
+  without it, or with `d <= 0`, a write waits without a limit, so a later
+  `WithLockTimeout(0)` clears an earlier bound. It bounds the writes of the returned
+  `Store`, not the registry locks that `InitCentral` and `MoveToCentral` wait for. It
+  is a store option, not a `context.Context` on each write: per-call variants would
+  double the write API, and a front end that must not hang on a save needs a bound,
+  not a cancel.
 
 ```go
 type ResolveOptions struct {
@@ -328,8 +350,8 @@ started for another reason — a work tree it cannot enter, a platform with no p
 runner — is reported as `could not run git: <cause>`, because telling the user to install
 a git that is installed sends them the wrong way. git's own stderr is carried into any
 other failure. Where git's exit status is read as an answer, only exit `1` means
-"absent" — no such key, not a symbolic ref, no such ref, staged differences; any other
-status is a failure.
+"absent" — no such key, not a symbolic ref, no such ref, staged differences, not an
+ancestor; any other status is a failure.
 
 **`InitPublish(remote)`:**
 
@@ -351,6 +373,13 @@ status is a failure.
    either credential, so it says that they differ and names
    `git remote set-url origin <url>`, which keeps that ref.
 5. Write the exclude file (below).
+6. Record the remote, without its user and password, and the branch in the publish
+   state file (CONFIG-SPEC §3). The last sync recorded there is kept only for the same
+   remote and branch in a repository this init did not create: a sync of another remote,
+   another machine ID or a deleted repository says nothing about this one. A file that
+   is not a record is replaced, because the init is the repair; a file that cannot be
+   read refuses the init, so a passing read error erases nothing. A record that would
+   not change is not written.
 
 Running it again with the same remote changes nothing.
 
@@ -387,6 +416,44 @@ Running it again with the same remote changes nothing.
    push is not seen, and is published again at the next change. Checking the remote on
    every run (`git ls-remote`) was rejected because it would make every no-op publish a
    network call.
+5. **Record.** Replace the publish state file (CONFIG-SPEC §3) with origin's URL, the
+   branch, the time the run ended and `HEAD`, still under the publish lock. A run with
+   nothing new records too: it is a successful sync, and its only write. A failed run
+   records nothing, so the file keeps the last success. A failed write of the file fails
+   nothing, because the publish has already done its job: it is logged as
+   `publish_record_error` ([MONITORING.md](../MONITORING.md)), and the status shows the
+   run before until the next run records.
+
+**`PublishStatus()`** reads the sync state without running a sync. It reads the
+per-user config for the machine ID, so an invalid one is refused as in the two other
+calls. `Remote`, `LastSync` and `Commit` come from the publish state file: a missing
+one is the zero value of each, with no error, and a damaged one is an error naming the
+file. `LastSync` and `Commit` are shown only when the record is of this machine's
+branch, so a `machine_id` changed since the last sync shows no sync. `SetUp` is a
+`.git` in `stores/` and a recorded remote: an init that stopped before its remote, or
+a `stores/` under git before any init, makes every publish fail and is not set up. A
+machine set up before the record existed shows `SetUp == false` until its next
+successful publish records. `Remote` is origin's URL, not its push URL, where the two
+differ. `Running`, `RunningPID` and
+`RunningSince` come from `.publish.lock` (below): empty content means no publish runs,
+and no lock is tried. Content is tried with the lock, without waiting, because a holder
+killed before it emptied the file leaves content under a free lock. A lock the try
+takes is free, so its content is stale: the status empties it before the release, the
+one write a status makes. A lock the try finds held is read again, and empty content
+then means no publish runs, because another status held the lock to empty a dead
+holder's content. While a try holds the lock, a publish or init that starts is refused
+with `ErrPublishBusy`, and that refusal can name the dead holder. Emptying the content
+makes this happen at most once per killed holder, not once per status call, so the
+cost is accepted. Two short windows remain, and a front end reads the result as a hint,
+not a promise: a holder that has taken the lock but not yet written its content shows
+as not running, and a status that read stale content can show it as running while
+another status empties it. The status runs no git, so a front end can call it as often
+as it redraws.
+
+The record is a file of its own, not git history. A run with nothing new makes no commit,
+so the time of the last commit cannot tell a store with no changes from a sync that
+stopped running. Reading the remote from git (`git config --get`) was rejected so that a
+status starts no process.
 
 **What the locks cover, and why the commit and the push are outside them.** The
 `git add --all` of step 3 runs under the central-root lock (CONFIG-SPEC §3), then the
@@ -438,10 +505,12 @@ it holds on the file stays held (CONFIG-SPEC §3). A refused call reads them bac
 message: `another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)`, the
 time in UTC, RFC 3339. Content it cannot read or parse — the holder has not written it
 yet, or a write was cut short — still refuses, with `another taskmgr sync is running`.
-The holder empties the file before it releases the lock, so a refusal never names a holder
-that has already ended. The content is informative only: content under a free lock — left
-by a holder killed before it emptied the file — is ignored and overwritten, because the
-lock, not the content, decides whether a publish runs.
+The holder empties the file before it releases the lock, so a refusal names a holder that
+has ended only in one case: a `PublishStatus` holds the lock for its try over the content
+a killed holder left, and empties that content before it releases it (above). The content
+is informative only: content under a free lock — left by a holder killed before it
+emptied the file — never refuses a publish on its own, and is overwritten by the next
+holder, because the lock, not the content, decides whether a publish runs.
 
 A pre-hook that runs a publish keeps it backing off: its own mutation holds a store lock
 the publish needs, so the publish retries until `hook_timeout` kills the hook or the
@@ -484,8 +553,9 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
 - runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
-  fails at once with git's message instead of waiting on a terminal nobody watches until
-  the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are deliberately not set:
+  ends at once, with git's message, instead of waiting on a terminal nobody watches
+  until the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are
+  deliberately not set:
   either would replace the user's own ssh setup — the command, the key, the agent — that
   the remote may need;
 - runs with `GIT_ATTR_NOSYSTEM=1`, so the system attributes file applies no more than the
@@ -508,7 +578,9 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
 
   A `.gitattributes` inside `stores/` is the user's, like a `.gitignore` there, and
   applies;
-- has no timeout, except the push. Every other command is local. The push is ended after
+- has no timeout, except the two commands that reach the remote: the push, and the
+  `ls-remote` after a failed push (below), which lists refs and moves no objects, so it
+  is ended after 1 minute. Every other command is local. The push is ended after
   10 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
   the seam's grace (HOOK-SPEC §7) — and the call fails with
   `push timed out after 10m0s`, followed by what git wrote to stderr before then. A publish
@@ -541,16 +613,37 @@ needs no git setup on the machine and no signing key, which is what lets it run 
 timer or a service. The e-mail names the machine, so `git log` across branches still says
 where each snapshot came from.
 
-**A rejected push is a clash, not a race.** When the remote refuses the push because its
-`machine/<machine-id>` holds commits this work tree lacks (git reports it `[rejected]`), a
-second writer exists: another machine publishes under this ID, or this machine was set up
-again from scratch. `Publish` returns `ErrMachineIDClash` with a message saying exactly
-that, telling the user to pick another `machine_id`
-(`taskmgr config set machine_id <id> --global`), move the work tree to it with
-`git branch -m machine/<id>`, and publish again, followed by git's own message, which names
-the refs the remote refused. It never forces:
-overwriting the branch would delete the other writer's snapshots. A clash is found only
-by a publish that pushes, so a machine with nothing new reports it at its next change.
+**A publish decides on git's exit statuses and plumbing output, never on git's
+messages.** A message is written for a person: git translates it, and a new git release
+may reword it. So git's message is passed on to the caller, and never read.
+
+**A push to a diverged branch is a clash, not a race.** When a push ends with an exit
+status, the publish asks each URL the push went to (`git remote get-url --push --all
+origin`, so every `pushurl` and `pushInsteadOf` rewrite counts) for the branch's tip with
+`git ls-remote <url> refs/heads/machine/<machine-id>`; where the push URL is origin's
+`url`, it passes the name `origin`, so a token in the URL stays out of the process list.
+It reads only the line whose ref is exactly the branch: `ls-remote` matches the end of a
+ref name. Then:
+
+| The remote's tip | Error |
+|---|---|
+| this work tree does not have it (`git rev-parse --verify --quiet <tip>^{commit}` exits `1`) | `ErrMachineIDClash`: a second writer exists, another machine under this ID, or this machine set up again from scratch. The message says to pick another `machine_id` (`taskmgr config set machine_id <id> --global`), move the work tree to it with `git branch -m machine/<id>`, and publish again |
+| this work tree has it off HEAD's history (`git merge-base --is-ancestor <tip> HEAD` exits `1`) | no sentinel: the branch was amended or reset here after it was published. The message names `git -C <stores> reset --soft <tip>`, which makes the branch descend from the tip again and keeps every store file, so the next publish commits the difference |
+| anything else, or no answer | the failed push below |
+
+Both messages end with git's own. A publish never forces: overwriting the branch would
+delete the other writer's snapshots. A clash is found only by a publish that pushes, so
+a machine with nothing new reports it at its next change. The check costs one more call
+to each push URL, only after a failed push, and at most a minute each (above).
+
+**Any other failed push is one error.** Its cause — no network, a login git cannot make
+without a prompt, a remote that refuses the push — is git's to tell. The error names the
+branch and every URL the push went to, so a `pushurl` or an `insteadOf` rewrite is named
+as git used it. It names
+`git -C <stores> push --no-verify origin refs/heads/machine/<machine-id>:refs/heads/machine/<machine-id>`
+to run by hand, the publish's own push, where git can ask what a sync never lets it
+ask, and ends with git's own message. A push that timed out or was killed keeps its own
+error (above).
 
 **A remote's credentials stay out of errors and logs.** A remote URL may carry them
 (`https://user:token@host/…`). Every error both calls return, and every record they log,
@@ -1501,11 +1594,18 @@ var (
     ErrPackageAmbiguous   // a name: entry that two installed repositories provide
     ErrNotPublishing      // stores/ has no .git, or no remote origin: run sync init
     ErrPublishBranch      // stores/ is detached, or on a branch other than machine/<machine-id>
-    ErrMachineIDClash     // the remote rejected the push: another writer of the branch
+    ErrMachineIDClash     // a failed push to a branch with a commit this work tree never made
     ErrGitMissing         // git is not on PATH
     ErrPublishBusy        // another publish or init holds the publish lock
+    ErrStoreBusy          // a write of a store opened WithLockTimeout timed out on the write lock
 )
 ```
+
+`ErrStoreBusy` is returned by every write (§4), and by `UpdateConfig` and `SetConfig`
+(§1), of a store opened `WithLockTimeout`
+when another writer held the write lock for the whole timeout. The write wrote
+nothing and ran no hook, so the caller can try it again. The message names the
+store directory and the timeout.
 
 The five publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
@@ -1632,6 +1732,15 @@ func (e *HookDeniedError) Error() string
   whether separate processes or goroutines in one process: an in-process mutex
   serializes goroutines, and an exclusive advisory `flock` on `.tasks/.lock`
   serializes processes. Reads are lock-free.
+- **Bounded wait.** A write waits for both locks without a limit, unless the store was
+  opened `WithLockTimeout(d)`. Then a goroutine waits for both, in the same order and
+  the same queue as an unbounded writer, and the write returns `ErrStoreBusy` (§6)
+  when `d` runs out first. The goroutine goes on waiting, because a `flock` wait cannot
+  be cancelled, and releases both locks as soon as it holds them; until then it keeps
+  one goroutine and one open file. Polling with a non-blocking `flock` was rejected:
+  each try reopens `.lock`, and a writer that blocks takes every hand-off before the
+  next try, so the poller loses to it. A holder is another write, its pre-hooks
+  (HOOK-SPEC §8), or a publish staging the central stores (§1).
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
   never observes a torn file — except the append-only comment sidecar (§4), which is
   grown with `O_APPEND` + `fsync` rather than rewritten.

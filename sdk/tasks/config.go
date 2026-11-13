@@ -47,6 +47,9 @@ const (
 	// other. No writer takes it, so holding it across the network stalls nothing
 	// but another publish (SDK-SPEC §1).
 	publishLockName = ".publish.lock"
+	// publishStateName records what the last successful publish did, for
+	// PublishStatus (SDK-SPEC §1). Only a holder of publishLockName writes it.
+	publishStateName = ".publish.state"
 	// globalConfigLockName is the advisory lock for per-user config writes. It is
 	// a second lock file rather than centralLockName because the two guard
 	// different files: the home and the central root are the same directory only

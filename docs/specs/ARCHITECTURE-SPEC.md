@@ -158,7 +158,7 @@ already on both.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
-| `publishrun.go` | `InitPublish`, `Publish` (SDK-SPEC §1): runs git in the central stores' work tree via the `internal/exec` seam, writes its exclude file, and holds the central-root lock and every central store's around the `git add` only — tried without waiting, all released before it retries, given up after 2 minutes — and the publish lock around the whole run, tried once: a held one is `ErrPublishBusy`. Logs each stage, git command and outcome (MONITORING.md). Declares no `*Store` method: it locks a store by its directory, as a move does. |
+| `publishrun.go` | `InitPublish`, `Publish` (SDK-SPEC §1): runs git in the central stores' work tree via the `internal/exec` seam, writes its exclude file, and holds the central-root lock and every central store's around the `git add` only — tried without waiting, all released before it retries, given up after 2 minutes — and the publish lock around the whole run, tried once: a held one is `ErrPublishBusy`. Writes the publish state file under the publish lock at the end of a successful run, and `PublishStatus` reads it, runs no git, and tries the publish lock only when its holder file has content. Logs each stage, git command and outcome (MONITORING.md). Declares no `*Store` method: it locks a store by its directory, as a move does. |
 | `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)
@@ -187,7 +187,7 @@ call.
 | `hooks.go` | Hook types (`Hook`) and their compilation into the runnable chain (HOOK-SPEC §3). Pure: it takes a resolved chain and returns a validated one. |
 | `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
-| `publish.go` | The pure half of publishing: the machine-ID grammar and hostname derivation (CONFIG-SPEC §2), the exclude patterns built from the engine's own file names, the fixed git settings and identity, and how a git exit reads. |
+| `publish.go` | The pure half of publishing: the machine-ID grammar and hostname derivation (CONFIG-SPEC §2), the exclude patterns built from the engine's own file names, the fixed git settings and identity, how a git exit reads, the publish lock holder's content, and the publish state record. |
 | `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
 | `watch.go` | `mergeChanges`: merges the changed paths of a watch into the change signals of `Watch` (SDK-SPEC §4) — the quiet period, the one-signal channel, the lock-file filter. A function over a channel of paths; the method that feeds it from the vfs seam is in `store.go`. |
 | `doc.go` | Package documentation. |
@@ -237,7 +237,8 @@ enforced:
 
 1. **Acquire the store lock** — an in-process mutex, then an exclusive `flock` on
    `.tasks/.lock`; concurrent writers serialize here, whether goroutines in one
-   process or separate processes.
+   process or separate processes. A store opened `WithLockTimeout` leaves here with
+   `ErrStoreBusy` and writes nothing when the wait runs out ([SDK-SPEC](SDK-SPEC.md) §7).
 2. **Apply** the change to an in-memory `Issue`.
 3. **Validate** field invariants and referential integrity (referenced IDs exist;
    no cycles).

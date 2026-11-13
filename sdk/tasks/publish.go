@@ -30,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // PublishInfo is what InitPublish set up (SDK-SPEC §1).
@@ -39,6 +41,20 @@ type PublishInfo struct {
 	Path       string // <central_root>/stores, the git work tree
 	Remote     string // the URL the remote RemoteName publishes to, without its user and password
 	RemoteName string // the git remote's name, "origin"
+}
+
+// PublishState is this machine's sync state, as PublishStatus reads it without
+// running a sync (SDK-SPEC §1).
+type PublishState struct {
+	SetUp        bool      // stores/ holds a .git and an init or a publish recorded its remote
+	Machine      string    // the machine ID
+	Branch       string    // machine/<Machine>, the branch published to
+	Remote       string    // origin's URL as the last init or successful publish read it, without its user and password; "" before either
+	LastSync     time.Time // when the last successful publish of Branch ended, whole seconds; zero when none is recorded
+	Commit       string    // HEAD after that publish; "" when the branch had no commit
+	Running      bool      // a publish or an init holds the publish lock now
+	RunningPID   int       // its process ID; 0 when the lock file does not name one
+	RunningSince time.Time // when it took the lock; zero when the lock file does not name it
 }
 
 // PublishResult is what one Publish did (SDK-SPEC §1).
@@ -61,8 +77,8 @@ var (
 	// ErrPublishBranch is a work tree whose HEAD is not on this machine's
 	// branch machine/<machine-id>: detached, or on another branch.
 	ErrPublishBranch = errors.New("not on this machine's branch")
-	// ErrMachineIDClash is a push the remote rejected as not a fast-forward:
-	// the branch has a second writer.
+	// ErrMachineIDClash is a failed push to a branch that holds a commit this
+	// work tree never made: the branch has a second writer.
 	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
 	// ErrGitMissing is git not found on PATH.
 	ErrGitMissing = errors.New("git is not on PATH")
@@ -77,12 +93,17 @@ const publishRemote = "origin"
 
 // publishPushTimeout ends a push that has not finished. A publish runs
 // unattended, from a timer, so a dead connection must end the run rather than
-// hold the publish lock until someone notices; every other git command is
-// local and runs without a limit. git cannot resume a push, so the limit is
-// generous: 10 minutes carries about 75 MB at 1 Mbit/s. A stalled HTTPS
-// transfer ends sooner, through the low-speed abort in publishGitSettings;
-// ssh has only this limit.
+// hold the publish lock until someone notices; every other git command but
+// the ls-remote (publishQueryTimeout) is local and runs without a limit. git
+// cannot resume a push, so the limit is generous: 10 minutes carries about
+// 75 MB at 1 Mbit/s. A stalled HTTPS transfer ends sooner, through the
+// low-speed abort in publishGitSettings; ssh has only this limit.
 const publishPushTimeout = 10 * time.Minute
+
+// publishQueryTimeout ends an ls-remote after a failed push, which carries
+// one line per ref, not a transfer: a remote that does not answer it within a
+// minute is not asked again, and the push failure is reported as git gave it.
+const publishQueryTimeout = time.Minute
 
 // The stages of a publish and an init, in the order they start. Each is
 // logged when it starts, so the last publish_stage record of a hung run names
@@ -95,6 +116,7 @@ const (
 	stageCheck  = "check"  // publish only: the remote, the branch, the excludes
 	stageCommit = "commit" // take the store locks, add, release them, commit
 	stagePush   = "push"   // push the branch
+	stageRecord = "record" // publish only: record the run for PublishStatus
 )
 
 // publishHolder is what the publish lock file holds while a publish runs: the
@@ -108,25 +130,62 @@ func publishHolder(pid int, since time.Time) []byte {
 // file's, describes. Content that does not name one — empty, half written,
 // unreadable — still refuses, with the bare message.
 func errPublishBusy(content []byte) error {
-	var pid, since string
+	pid, since, ok := parsePublishHolder(content)
+	if !ok {
+		return ErrPublishBusy
+	}
+	return fmt.Errorf("%w (pid %d, since %s)", ErrPublishBusy, pid, since.Format(time.RFC3339))
+}
+
+// parsePublishHolder reads the holder publishHolder wrote. Content that does
+// not name one — empty, half written, unreadable — is not ok.
+func parsePublishHolder(content []byte) (pid int, since time.Time, ok bool) {
+	var rawPID, rawSince string
 	for line := range strings.SplitSeq(string(content), "\n") {
 		key, value, _ := strings.Cut(line, ": ")
 		switch key {
 		case "pid":
-			pid = value
+			rawPID = value
 		case "since":
-			since = value
+			rawSince = value
 		}
 	}
-	n, err := strconv.Atoi(pid)
-	if err != nil || n <= 0 {
-		return ErrPublishBusy
+	pid, err := strconv.Atoi(rawPID)
+	if err != nil || pid <= 0 {
+		return 0, time.Time{}, false
 	}
-	at, err := time.Parse(time.RFC3339, since)
+	since, err = time.Parse(time.RFC3339, rawSince)
 	if err != nil {
-		return ErrPublishBusy
+		return 0, time.Time{}, false
 	}
-	return fmt.Errorf("%w (pid %d, since %s)", ErrPublishBusy, n, at.UTC().Format(time.RFC3339))
+	return pid, since.UTC(), true
+}
+
+// publishRecord is the content of the publish state file (CONFIG-SPEC §3):
+// what the last init or successful publish did.
+type publishRecord struct {
+	Remote   string    `yaml:"remote,omitempty"`
+	Branch   string    `yaml:"branch,omitempty"`
+	LastSync time.Time `yaml:"last_sync,omitempty"`
+	Commit   string    `yaml:"commit,omitempty"`
+}
+
+// encodePublishRecord writes LastSync in UTC and whole seconds, as the publish
+// lock holder writes its start time.
+func encodePublishRecord(r publishRecord) ([]byte, error) {
+	r.LastSync = r.LastSync.UTC().Truncate(time.Second)
+	return yaml.Marshal(r)
+}
+
+// decodePublishRecord reads a publish state file. Content that is not a record
+// is an error naming the file, never a zero record: a front end that shows
+// "never synced" for a damaged file hides the damage.
+func decodePublishRecord(path string, content []byte) (publishRecord, error) {
+	var r publishRecord
+	if err := yaml.Unmarshal(content, &r); err != nil {
+		return publishRecord{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return r, nil
 }
 
 // userinfoRe matches the user and password of a URL with a scheme, as in
@@ -141,8 +200,9 @@ func redactUserinfo(s string) string { return userinfoRe.ReplaceAllString(s, "$1
 
 // gitAnswer reports whether exit 1 from git args is an answer rather than a
 // failure: "no such key" from config --get, "differences" from diff --quiet,
-// "no such ref" from rev-parse --verify, and "not a symbolic ref" from
-// symbolic-ref --quiet. It is the one place that says so: gitWithin marks
+// "no such ref" from rev-parse --verify, "not a symbolic ref" from
+// symbolic-ref --quiet, and "not an ancestor" from merge-base --is-ancestor.
+// It is the one place that says so: gitWithin marks
 // such an exit gitError.Answer, which gitAbsent reads, and logs it at debug,
 // not as a failed git run.
 func gitAnswer(args []string) bool {
@@ -159,6 +219,8 @@ func gitAnswer(args []string) bool {
 		flag = "--verify"
 	case "symbolic-ref":
 		flag = "--quiet"
+	case "merge-base":
+		flag = "--is-ancestor"
 	default:
 		return false
 	}
@@ -343,19 +405,13 @@ func (e *gitError) Error() string {
 }
 
 // gitAbsent reports whether err is an exit 1 that gitAnswer reads as an
-// answer: "no such key", "not a symbolic ref", "no such ref", "differences".
+// answer: "no such key", "not a symbolic ref", "no such ref", "differences",
+// "not an ancestor".
 // Any other failure — an exit 1 from commit or push, git missing, a corrupt
 // config, a broken repository — is a real one.
 func gitAbsent(err error) bool {
 	var g *gitError
 	return errors.As(err, &g) && g.Answer
-}
-
-// gitRejected reports whether err is a push the remote refused as not a
-// fast-forward.
-func gitRejected(err error) bool {
-	var g *gitError
-	return errors.As(err, &g) && strings.Contains(g.Message, "[rejected]")
 }
 
 // errGitMissing is git that could not be started because it is not on PATH.
@@ -457,11 +513,42 @@ func errWrongBranch(dir, ref, id string, unborn, branchExists bool) error {
 		dir, ErrPublishBranch, branch, machineBranch(id), machineBranch(id), fix)
 }
 
-// errNotFastForward explains a rejected push and keeps git's own message,
-// which names the refs. The branch has one writer by design, so a remote that
-// holds commits this clone lacks has a second one.
+// errNotFastForward explains a push the remote's branch refused because it
+// holds a commit this work tree never made (remoteDiverged), and adds git's
+// own message, which names the refs. The branch has one writer by design, so
+// such a commit has a second one.
 func errNotFastForward(dir, id, gitMsg string) error {
-	return fmt.Errorf("%w %q: the remote rejected the push of %s because it holds commits this machine never made, so another machine uses this ID, or this machine was set up again. "+
+	return fmt.Errorf("%w %q: the remote's %s holds a commit this machine never made, so another machine uses this ID, or this machine was set up again. "+
 		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again. git said: %s",
 		ErrMachineIDClash, id, machineBranch(id), dir, redactUserinfo(gitMsg))
+}
+
+// errPushFailed explains a push that git ended with an exit status and that
+// is not a clash. Its cause — no network, a login git cannot make without a
+// prompt, a remote that refuses — is in git's message, which this passes on
+// and never reads. A sync runs without a terminal, so the hint is the push to
+// run by hand, where git can ask.
+//
+// ref is the branch's full ref: the printed push names it on both sides, as
+// the publish does, because a tag of the branch's name makes the short name
+// ambiguous. --no-verify keeps the user's pre-push hook out of it, as well.
+func errPushFailed(dir, ref string, urls []string, err error) error {
+	redacted := make([]string, len(urls))
+	for i, url := range urls {
+		redacted[i] = redactUserinfo(url)
+	}
+	return fmt.Errorf("push of %s to %s failed. A sync never lets git prompt, so git must reach the remote and log in on its own; "+
+		"run 'git -C %s push --no-verify %s %s:%s' to see what git needs. The commit is kept, and the next sync pushes it: %w",
+		strings.TrimPrefix(ref, "refs/heads/"), strings.Join(redacted, ", "), dir, publishRemote, ref, ref, err)
+}
+
+// errBranchRewritten explains a push the remote's branch refused because its
+// tip is a commit this work tree has but HEAD does not descend from: the
+// branch was amended or reset here after it was published. A publish never
+// forces. A soft reset to the tip makes the branch descend from it again and
+// keeps every store file as it is, so the next sync commits the difference.
+func errBranchRewritten(dir, id, tip, gitMsg string) error {
+	return fmt.Errorf("%s was rewritten in %s after it was published: the remote's tip %s is not in its history, and a sync never forces. "+
+		"Run 'git -C %s reset --soft %s', which keeps the store files, then 'taskmgr sync'. git said: %s",
+		machineBranch(id), dir, tip, dir, tip, redactUserinfo(gitMsg))
 }

@@ -69,7 +69,7 @@ func TestPublish_LogsEachStageEachGitRunAndASummary(t *testing.T) {
 			}
 		}
 	}
-	if want := []string{"config", "lock", "check", "commit", "push"}; !slices.Equal(stages, want) {
+	if want := []string{"config", "lock", "check", "commit", "push", "record"}; !slices.Equal(stages, want) {
 		t.Errorf("stages = %q, want %q", stages, want)
 	}
 	var ran []string
@@ -157,9 +157,69 @@ func TestPublish_FailedPushLogsGitsStderrAndTheStage(t *testing.T) {
 	}
 }
 
-// Exit 1 from config --get, diff --quiet, rev-parse --verify and symbolic-ref
-// --quiet answers a question; a warn for each would bury the real failures.
-// A rejected push also exits 1, and is one.
+// The commit a failed push leaves behind is local only; the record says
+// whether this run made it, and which commit it is, so the next run's push is
+// not a surprise. The fake's commit clears the staged change, so the second
+// run has nothing new to commit.
+func TestPublish_FailedPushLogsWhetherThisRunCommitted(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read from remote repository")}
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish with a failing push succeeded")
+	}
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("second publish with a failing push succeeded")
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 2 {
+		t.Fatalf("publish_error records = %v, want two", failed)
+	}
+	if failed[0]["committed"] != true || failed[0]["head"] != sha(1) {
+		t.Errorf("first failure = %v, want committed=true and head the new commit", failed[0])
+	}
+	if failed[1]["committed"] != false || failed[1]["head"] != sha(1) {
+		t.Errorf("second failure = %v, want committed=false and head the commit still unpushed", failed[1])
+	}
+}
+
+// A failure after this run committed, before the push, still leaves that
+// commit local, and says so.
+func TestPublish_FailureAfterTheCommitLogsIt(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"rev-parse": exec.Deny(128, "fatal: bad object HEAD")}
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish with a failing rev-parse succeeded")
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 1 || failed[0]["stage"] != "commit" || failed[0]["committed"] != true || failed[0]["head"] != "" {
+		t.Errorf("publish_error records = %v, want one at stage commit, committed=true, head unknown", failed)
+	}
+}
+
+// Before anything is committed or pushed, the fields would only mislead.
+func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.head = ""
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); !errors.Is(err, ErrPublishBranch) {
+		t.Fatalf("detached publish: %v", err)
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 1 || failed[0]["stage"] != "check" {
+		t.Fatalf("publish_error records = %v, want one at stage check", failed)
+	}
+	for _, key := range []string{"committed", "head"} {
+		if _, ok := failed[0][key]; ok {
+			t.Errorf("a failure before the push carries %s: %v", key, failed[0])
+		}
+	}
+}
+
+// Exit 1 from config --get, diff --quiet, rev-parse --verify, symbolic-ref
+// --quiet and merge-base --is-ancestor answers a question; a warn for each
+// would bury the real failures. A rejected push also exits 1, and is one.
 func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 	buf, logOpt := debugLog()
 
@@ -179,6 +239,10 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 	if _, err := publishWith(fs, e, runner, logOpt); !errors.Is(err, ErrMachineIDClash) {
 		t.Fatalf("rejected publish: %v", err)
 	}
+	g.staged, g.reject, g.remoteTip, g.side = true, false, sha(99), sha(99)
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish after a rewrite succeeded")
+	}
 
 	answered := map[string]bool{}
 	for _, r := range withMsg(records(t, buf), "publish_git") {
@@ -187,7 +251,7 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 		}
 		cmd := r["cmd"].(string)
 		if cmd == "push" {
-			if r["level"] != "WARN" || !strings.Contains(r["stderr"].(string), "[rejected]") {
+			if r["level"] != "WARN" || r["stderr"] == "" {
 				t.Errorf("rejected push record = %v, want warn with git's stderr", r)
 			}
 			continue
@@ -200,7 +264,7 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 			t.Errorf("an answer carries stderr: %v", r)
 		}
 	}
-	for _, cmd := range []string{"config", "diff", "rev-parse", "symbolic-ref"} {
+	for _, cmd := range []string{"config", "diff", "rev-parse", "symbolic-ref", "merge-base"} {
 		if !answered[cmd] {
 			t.Errorf("no exit-1 answer from %s was logged", cmd)
 		}
