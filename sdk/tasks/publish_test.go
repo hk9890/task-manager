@@ -217,17 +217,16 @@ func TestGitAbsent_OnlyAnAnswer(t *testing.T) {
 	}
 }
 
-func TestGitRejected_ReadsGitsMessage(t *testing.T) {
-	rejected := &gitError{Args: []string{"push"}, ExitCode: 1, Message: " ! [rejected]        machine/laptop -> machine/laptop (fetch first)"}
-	if !gitRejected(rejected) {
+func TestPushRejected_ReadsGitsMessage(t *testing.T) {
+	if !pushRejected(" ! [rejected]        machine/laptop -> machine/laptop (fetch first)") {
 		t.Error("a [rejected] push is not reported as rejected")
 	}
-	if gitRejected(&gitError{Args: []string{"push"}, ExitCode: 128, Message: "fatal: could not read from remote repository"}) {
+	if pushRejected("fatal: could not read from remote repository") {
 		t.Error("an unreachable remote is reported as a rejected push")
 	}
 }
 
-func TestGitAuthFailed_ReadsGitsMessage(t *testing.T) {
+func TestPushAuthFailed_ReadsGitsMessage(t *testing.T) {
 	for _, tc := range []struct {
 		msg  string
 		want bool
@@ -236,15 +235,13 @@ func TestGitAuthFailed_ReadsGitsMessage(t *testing.T) {
 		{"fatal: could not read Password for 'https://hans@github.com': terminal prompts disabled", true},
 		{"remote: Invalid username or token.\nfatal: Authentication failed for 'https://github.com/hk9890/stores.git/'", true},
 		{"git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.", true},
+		{"git@git.example.org: Permission denied (keyboard-interactive,publickey).", true},
 		{"fatal: could not read from remote repository", false},
 		{" ! [rejected]        machine/laptop -> machine/laptop (fetch first)", false},
 	} {
-		if got := gitAuthFailed(&gitError{Args: []string{"push"}, ExitCode: 128, Message: tc.msg}); got != tc.want {
-			t.Errorf("gitAuthFailed(%q) = %v, want %v", tc.msg, got, tc.want)
+		if got := pushAuthFailed(tc.msg); got != tc.want {
+			t.Errorf("pushAuthFailed(%q) = %v, want %v", tc.msg, got, tc.want)
 		}
-	}
-	if gitAuthFailed(errors.New("could not read Username")) {
-		t.Error("an error that is not git's is read as an auth failure")
 	}
 }
 

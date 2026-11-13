@@ -484,12 +484,9 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
 - runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
-  fails at once instead of waiting on a terminal nobody watches until the push times out.
-  `Publish` returns that failure as `ErrPublishAuth`, with the remote, the fix (for
-  GitHub over HTTPS `gh auth setup-git`, else a credential helper or an ssh key in
-  ssh-agent) and git's own message. It is recognised by git's message: "could not read
-  Username" or "could not read Password" (no credentials), "Authentication failed"
-  (HTTPS credentials refused), "Permission denied (publickey" (ssh key refused). `GIT_SSH_COMMAND` and ssh's `BatchMode` are deliberately not set:
+  fails at once, as `ErrPublishAuth` (below), instead of waiting on a terminal nobody
+  watches until the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are
+  deliberately not set:
   either would replace the user's own ssh setup — the command, the key, the agent — that
   the remote may need;
 - runs with `GIT_ATTR_NOSYSTEM=1`, so the system attributes file applies no more than the
@@ -555,6 +552,22 @@ that, telling the user to pick another `machine_id`
 the refs the remote refused. It never forces:
 overwriting the branch would delete the other writer's snapshots. A clash is found only
 by a publish that pushes, so a machine with nothing new reports it at its next change.
+
+**A push that cannot log in is `ErrPublishAuth`.** git's message is the only signal: git
+exits `128` for every fatal push error. The messages matched are "could not read
+Username" and "could not read Password" (git found no HTTPS credentials without a
+prompt), "Authentication failed" (the remote refused them) and "Permission denied ("
+(ssh logged in with none of its methods). The message names the URL the push went to,
+from `git remote get-url --push origin`, so a `pushurl` or an `insteadOf` rewrite is
+named as git used it, and the fix that URL needs:
+
+| The push URL | The fix the message names |
+|---|---|
+| has a password in it (`https://user:token@…`) | `git remote set-url origin` with a valid token, or none: git tries only the URL's password and asks no credential helper |
+| scp form or `ssh://` | a key ssh can use with no passphrase prompt and without ssh-agent, which a timer may not reach; or an HTTPS remote |
+| any other | `gh auth setup-git` for GitHub, else a git credential helper |
+
+git's own message follows the fix.
 
 **A remote's credentials stay out of errors and logs.** A remote URL may carry them
 (`https://user:token@host/…`). Every error both calls return, and every record they log,
@@ -1506,7 +1519,7 @@ var (
     ErrNotPublishing      // stores/ has no .git, or no remote origin: run sync init
     ErrPublishBranch      // stores/ is detached, or on a branch other than machine/<machine-id>
     ErrMachineIDClash     // the remote rejected the push: another writer of the branch
-    ErrPublishAuth        // git could not authenticate the push to the remote
+    ErrPublishAuth        // the push could not log in to the remote
     ErrGitMissing         // git is not on PATH
     ErrPublishBusy        // another publish or init holds the publish lock
 )
@@ -1515,8 +1528,8 @@ var (
 The six publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
 command that fixes it, except `ErrPublishBusy`, which names the running publish's
-process ID and start time instead, and `ErrPublishAuth`, which names the remote and how
-to give git credentials.
+process ID and start time instead, and `ErrPublishAuth`, which names the push URL and how
+to give git or ssh credentials.
 
 `ErrNotFound` is returned by every method that takes the ID of the issue to act on —
 `Get`, `Detail`, `Details`, `Comments`, `Update`, `Close`, `Reopen`, the three comment

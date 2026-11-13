@@ -225,6 +225,7 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if out.Committed, err = p.commit(); err != nil {
 		return PublishResult{}, err
 	}
+	p.committed = out.Committed
 
 	// The remote-tracking ref is what the last successful push left. Only this
 	// machine pushes the branch, so a HEAD equal to it is already published and
@@ -233,10 +234,10 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 	if err != nil {
 		return PublishResult{}, err
 	}
+	p.head = head
 	if out.Committed {
 		out.Commit = head
 	}
-	p.committed, p.newCommit = out.Committed, out.Commit
 	published, err := p.revision("refs/remotes/" + publishRemote + "/" + p.branch())
 	if err != nil {
 		return PublishResult{}, err
@@ -247,11 +248,13 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		// name ambiguous, and git refuses to push it.
 		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
 			var g *gitError
-			if gitRejected(err) && errors.As(err, &g) {
-				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
-			}
-			if gitAuthFailed(err) && errors.As(err, &g) {
-				return PublishResult{}, errPushAuth(remote, g.Message)
+			if errors.As(err, &g) {
+				switch {
+				case pushRejected(g.Message):
+					return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+				case pushAuthFailed(g.Message):
+					return PublishResult{}, errPushAuth(p.dir, p.pushURL(remote), g.Message)
+				}
 			}
 			return PublishResult{}, err
 		}
@@ -284,7 +287,7 @@ type publisher struct {
 	retries   int           // tries of the store locks that found one busy
 	lockWait  time.Duration // how long taking the store locks took
 	committed bool          // this run made a commit
-	newCommit string        // its full SHA; "" when committed is false
+	head      string        // the commit a push carries; "" before it is read
 }
 
 // newPublisher reads the options into a publisher. Option configures a Store,
@@ -326,8 +329,9 @@ func (p *publisher) enter(stage string) {
 
 // logFailure records a failed publish or init with the stage it failed in. A
 // busy publish lock is info, not error: a timer that fires while a manual sync
-// runs expects it, and the next tick publishes. A failed push also says
-// whether this run committed: that commit stays local until a push succeeds.
+// runs expects it, and the next tick publishes. A failure after this run
+// committed, or in the push, also says whether this run committed and which
+// commit stays unpushed.
 func (p *publisher) logFailure(err error) {
 	level := slog.LevelError
 	if errors.Is(err, ErrPublishBusy) {
@@ -337,8 +341,8 @@ func (p *publisher) logFailure(err error) {
 		slog.String("stage", p.stage),
 		slog.String("error", redactUserinfo(err.Error())),
 	}
-	if p.stage == stagePush {
-		attrs = append(attrs, slog.Bool("committed", p.committed), slog.String("commit", p.newCommit))
+	if p.committed || p.stage == stagePush {
+		attrs = append(attrs, slog.Bool("committed", p.committed), slog.String("head", p.head))
 	}
 	p.logger.LogAttrs(context.Background(), level, "publish_error", attrs...)
 }
@@ -347,6 +351,16 @@ func (p *publisher) branch() string { return machineBranch(p.id) }
 
 // ref is the branch's full ref name.
 func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
+
+// pushURL is the URL a push of origin goes to: pushurl and the insteadOf
+// rewrites applied. It falls back to remote, origin's url, when git cannot
+// say.
+func (p *publisher) pushURL(remote string) string {
+	if url, err := p.git("remote", "get-url", "--push", publishRemote); err == nil {
+		return url
+	}
+	return remote
+}
 
 // git runs one local git command in the work tree, without a time limit, and
 // returns its stdout, trimmed.

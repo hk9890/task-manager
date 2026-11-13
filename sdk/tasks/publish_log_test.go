@@ -158,7 +158,9 @@ func TestPublish_FailedPushLogsGitsStderrAndTheStage(t *testing.T) {
 }
 
 // The commit a failed push leaves behind is local only; the record says
-// whether this run made it, so the next run's push is not a surprise.
+// whether this run made it, and which commit it is, so the next run's push is
+// not a surprise. The fake's commit clears the staged change, so the second
+// run has nothing new to commit.
 func TestPublish_FailedPushLogsWhetherThisRunCommitted(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read from remote repository")}
@@ -166,7 +168,6 @@ func TestPublish_FailedPushLogsWhetherThisRunCommitted(t *testing.T) {
 	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
 		t.Fatal("publish with a failing push succeeded")
 	}
-	g.staged = false
 	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
 		t.Fatal("second publish with a failing push succeeded")
 	}
@@ -174,16 +175,30 @@ func TestPublish_FailedPushLogsWhetherThisRunCommitted(t *testing.T) {
 	if len(failed) != 2 {
 		t.Fatalf("publish_error records = %v, want two", failed)
 	}
-	if failed[0]["committed"] != true || failed[0]["commit"] != sha(1) {
-		t.Errorf("first failure = %v, want committed=true and the commit", failed[0])
+	if failed[0]["committed"] != true || failed[0]["head"] != sha(1) {
+		t.Errorf("first failure = %v, want committed=true and head the new commit", failed[0])
 	}
-	if failed[1]["committed"] != false || failed[1]["commit"] != "" {
-		t.Errorf("second failure = %v, want committed=false and no commit", failed[1])
+	if failed[1]["committed"] != false || failed[1]["head"] != sha(1) {
+		t.Errorf("second failure = %v, want committed=false and head the commit still unpushed", failed[1])
 	}
 }
 
-// Before the push stage nothing is committed yet, so the fields would only
-// mislead.
+// A failure after this run committed, before the push, still leaves that
+// commit local, and says so.
+func TestPublish_FailureAfterTheCommitLogsIt(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"rev-parse": exec.Deny(128, "fatal: bad object HEAD")}
+	buf, logOpt := debugLog()
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish with a failing rev-parse succeeded")
+	}
+	failed := withMsg(records(t, buf), "publish_error")
+	if len(failed) != 1 || failed[0]["stage"] != "commit" || failed[0]["committed"] != true || failed[0]["head"] != "" {
+		t.Errorf("publish_error records = %v, want one at stage commit, committed=true, head unknown", failed)
+	}
+}
+
+// Before anything is committed or pushed, the fields would only mislead.
 func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	g.head = ""
@@ -195,8 +210,10 @@ func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
 	if len(failed) != 1 || failed[0]["stage"] != "check" {
 		t.Fatalf("publish_error records = %v, want one at stage check", failed)
 	}
-	if _, ok := failed[0]["committed"]; ok {
-		t.Errorf("a failure before the push carries committed: %v", failed[0])
+	for _, key := range []string{"committed", "head"} {
+		if _, ok := failed[0][key]; ok {
+			t.Errorf("a failure before the push carries %s: %v", key, failed[0])
+		}
 	}
 }
 

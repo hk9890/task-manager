@@ -34,7 +34,7 @@ Each row is one `slog` record (`msg` in the first column):
 | `publish_error` — a busy store held the publish back for 2 minutes, and it gave up | error | `stage=commit`, `error` (names the store, or the central-root lock) |
 | `publish` — a publish succeeded | debug | `machine`, `branch`, `committed`, `pushed`, `commit`, `retries`, `lock_wait_ms`, `duration_ms` |
 | `publish_init` — an init succeeded | debug | `machine`, `branch`, `remote`, `duration_ms` |
-| `publish_error` — a publish or init failed | error | `stage`, `error`; at `stage=push` also `committed` and `commit`, as on `publish` |
+| `publish_error` — a publish or init failed | error | `stage`, `error`; once this run committed, or at `stage=push`, also `committed` and `head` (the commit not yet pushed) |
 | `publish_error` — refused because another publish runs | info | `stage=lock`, `error` |
 
 Every hook invocation emits one `hook` record regardless of outcome — only the
@@ -167,9 +167,10 @@ is diagnosed after the fact.
   ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
   `publish_error`.
 - **Failed:** the `publish_error` record names the stage; the `publish_git` warn just
-  before it carries git's `stderr`. A failed push keeps its commit local. `committed=true`
-  says this run made it; `committed=false` says the commit came from an earlier run whose
-  push did not finish. Either way, the next sync pushes it.
+  before it carries git's `stderr`. A failure after the commit, or in the push, keeps
+  the commit local: `head` names the commit that is not on the remote yet (empty when
+  the failure came before it was read), and `committed` says whether this run made it.
+  The next sync tries the push again, and succeeds once what the error names is fixed.
 
 ```bash
 TASKMGR_LOG=debug taskmgr sync 2> sync.log

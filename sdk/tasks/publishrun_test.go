@@ -21,6 +21,7 @@
 package tasks
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -42,6 +43,7 @@ type fakeGit struct {
 	m        *vfs.Mem
 	log      *[]string
 	remote   string          // the URL of origin; "" = no origin
+	pushURL  string          // what remote get-url --push prints; "" = remote
 	head     string          // the ref HEAD points at; "" = detached
 	branches map[string]bool // full refs of branches other than HEAD's that hold a commit
 	staged   bool            // add --all finds a change
@@ -78,6 +80,9 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 		}
 		return exec.Allow(g.remote + "\n")
 	case "remote":
+		if args[1] == "get-url" {
+			return exec.Allow(cmp.Or(g.pushURL, g.remote) + "\n")
+		}
 		g.remote = args[3]
 	case "diff":
 		if g.staged {
@@ -434,21 +439,38 @@ func TestPublish_OtherPushFailureCarriesGitsMessage(t *testing.T) {
 
 // git's message names only the host; the engine names the remote, the fix,
 // and never the token in the URL.
+// The fix follows the URL the push went to: a token in it, a credential
+// helper for HTTPS, a key for ssh, which a pushurl or insteadOf can choose
+// over origin's url.
 func TestPublish_UnauthenticatedPushIsErrPublishAuthWithTheFix(t *testing.T) {
-	fs, e, runner, g := publishFixture(t, true)
-	g.remote = "https://hans:s3cret@github.com/hk9890/stores.git"
-	g.fail = map[string]exec.Result{"push": exec.Deny(128, "fatal: could not read Username for 'https://github.com': terminal prompts disabled")}
-	_, err := publishWith(fs, e, runner)
-	if !errors.Is(err, ErrPublishAuth) {
-		t.Fatalf("unauthenticated push: %v, want ErrPublishAuth", err)
-	}
-	for _, want := range []string{"https://github.com/hk9890/stores.git", "gh auth setup-git", "could not read Username"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("unauthenticated push: %v, want it to contain %q", err, want)
-		}
-	}
-	if strings.Contains(err.Error(), "s3cret") {
-		t.Errorf("unauthenticated push: %v, carries the token", err)
+	for _, tc := range []struct {
+		name, remote, pushURL, gitMsg string
+		want                          []string
+	}{
+		{"https", "https://github.com/hk9890/stores.git", "", "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+			[]string{"https://github.com/hk9890/stores.git", "gh auth setup-git", "could not read Username"}},
+		{"token in the URL", "https://hans:s3cret@github.com/hk9890/stores.git", "", "fatal: Authentication failed for 'https://github.com/hk9890/stores.git/'",
+			[]string{"https://github.com/hk9890/stores.git", "remote set-url origin", "Authentication failed"}},
+		{"ssh pushurl", "https://github.com/hk9890/stores.git", "git@github.com:hk9890/stores.git", "git@github.com: Permission denied (publickey).",
+			[]string{"git@github.com:hk9890/stores.git", "ssh found no key", "Permission denied (publickey)"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs, e, runner, g := publishFixture(t, true)
+			g.remote, g.pushURL = tc.remote, tc.pushURL
+			g.fail = map[string]exec.Result{"push": exec.Deny(128, tc.gitMsg)}
+			_, err := publishWith(fs, e, runner)
+			if !errors.Is(err, ErrPublishAuth) {
+				t.Fatalf("unauthenticated push: %v, want ErrPublishAuth", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("unauthenticated push: %v, want it to contain %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("unauthenticated push: %v, carries the token", err)
+			}
+		})
 	}
 }
 

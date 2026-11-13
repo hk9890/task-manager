@@ -64,9 +64,10 @@ var (
 	// ErrMachineIDClash is a push the remote rejected as not a fast-forward:
 	// the branch has a second writer.
 	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
-	// ErrPublishAuth is a push git could not authenticate: it has no
-	// credentials for the remote that it can read without a prompt.
-	ErrPublishAuth = errors.New("git has no credentials for the remote")
+	// ErrPublishAuth is a push that could not authenticate: git or ssh found
+	// no credentials they can read without a prompt, or the remote refused
+	// the ones they had.
+	ErrPublishAuth = errors.New("git could not log in to the remote")
 	// ErrGitMissing is git not found on PATH.
 	ErrGitMissing = errors.New("git is not on PATH")
 	// ErrPublishBusy is another publish or init holding the publish lock. The
@@ -354,28 +355,21 @@ func gitAbsent(err error) bool {
 	return errors.As(err, &g) && g.Answer
 }
 
-// gitRejected reports whether err is a push the remote refused as not a
-// fast-forward.
-func gitRejected(err error) bool {
-	var g *gitError
-	return errors.As(err, &g) && strings.Contains(g.Message, "[rejected]")
-}
+// pushRejected reports whether msg, git's message from a failed push, is the
+// remote refusing it as not a fast-forward.
+func pushRejected(msg string) bool { return strings.Contains(msg, "[rejected]") }
 
-// gitAuthFailed reports whether err is a push git could not authenticate.
-// Prompts are off (publishEnv), so missing credentials end the push with
-// "could not read Username"; refused ones end it with "Authentication failed"
-// over HTTPS and "Permission denied (publickey" over ssh.
-func gitAuthFailed(err error) bool {
-	var g *gitError
-	if !errors.As(err, &g) {
-		return false
-	}
-	for _, sign := range []string{"could not read Username", "could not read Password", "Authentication failed", "Permission denied (publickey"} {
-		if strings.Contains(g.Message, sign) {
-			return true
-		}
-	}
-	return false
+// pushAuthSigns are the messages of a push that could not authenticate. git
+// prompts are off (publishEnv), so missing HTTPS credentials end the push with
+// "could not read Username" or, for a URL that names only the user, "could not
+// read Password"; refused ones with "Authentication failed". ssh lists the
+// methods it tried after "Permission denied (", in the server's order.
+var pushAuthSigns = []string{"could not read Username", "could not read Password", "Authentication failed", "Permission denied ("}
+
+// pushAuthFailed reports whether msg, git's message from a failed push, is
+// one that could not authenticate.
+func pushAuthFailed(msg string) bool {
+	return slices.ContainsFunc(pushAuthSigns, func(sign string) bool { return strings.Contains(msg, sign) })
 }
 
 // errGitMissing is git that could not be started because it is not on PATH.
@@ -486,11 +480,27 @@ func errNotFastForward(dir, id, gitMsg string) error {
 		ErrMachineIDClash, id, machineBranch(id), dir, redactUserinfo(gitMsg))
 }
 
-// errPushAuth explains a push git could not authenticate. A publish runs
-// unattended, from a timer, so the fix is credentials git reads without
-// asking.
-func errPushAuth(remote, gitMsg string) error {
-	return fmt.Errorf("%w %s: a sync never lets git prompt, so git needs credentials it can read on its own. "+
-		"For a GitHub HTTPS remote, run 'gh auth setup-git'; otherwise set up a git credential helper, or use an ssh remote with a key in ssh-agent. git said: %s",
-		ErrPublishAuth, redactUserinfo(remote), redactUserinfo(gitMsg))
+// passwordInURLRe matches a URL with a scheme that carries a password, as in
+// https://user:token@host/path.
+var passwordInURLRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://[^/@\s:]*:[^/@\s]*@`)
+
+// errPushAuth explains a push to url, the URL the push went to, that could
+// not authenticate. A publish runs unattended, from a timer, so each fix gives
+// git or ssh credentials they read without asking. The fix depends on the
+// URL: a password in it is all git tries, so no credential helper can replace
+// it; an scp-form or ssh:// URL is ssh's to log in to.
+func errPushAuth(dir, url, gitMsg string) error {
+	var fix string
+	switch {
+	case passwordInURLRe.MatchString(url):
+		fix = fmt.Sprintf("the URL carries a user and password, and git tries only those, so a credential helper cannot help. "+
+			"Put a valid token in the URL, or remove it, with 'git -C %s remote set-url origin <url>'", dir)
+	case strings.HasPrefix(url, "ssh://") || !strings.Contains(url, "://"):
+		fix = "ssh found no key the remote accepts. A sync from a timer has no terminal for a passphrase and may not reach ssh-agent, " +
+			"so give this user a key ssh can use without either, or publish to an HTTPS remote"
+	default:
+		fix = "a sync never lets git prompt, so git needs credentials it can read on its own. " +
+			"For GitHub, run 'gh auth setup-git'; for another host, set up a git credential helper"
+	}
+	return fmt.Errorf("%w %s: %s. git said: %s", ErrPublishAuth, redactUserinfo(url), fix, redactUserinfo(gitMsg))
 }
