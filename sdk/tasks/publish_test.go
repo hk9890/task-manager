@@ -217,16 +217,6 @@ func TestGitAbsent_OnlyAnAnswer(t *testing.T) {
 	}
 }
 
-func TestGitRejected_ReadsGitsMessage(t *testing.T) {
-	rejected := &gitError{Args: []string{"push"}, ExitCode: 1, Message: " ! [rejected]        machine/laptop -> machine/laptop (fetch first)"}
-	if !gitRejected(rejected) {
-		t.Error("a [rejected] push is not reported as rejected")
-	}
-	if gitRejected(&gitError{Args: []string{"push"}, ExitCode: 128, Message: "fatal: could not read from remote repository"}) {
-		t.Error("an unreachable remote is reported as a rejected push")
-	}
-}
-
 // Each pattern is built from the engine's own name for the file, so the list
 // follows a rename; tempPrefix is taken as given, not copied from the vfs seam.
 func TestPublishExcludes_BuiltFromTheEngineNames(t *testing.T) {
@@ -311,7 +301,9 @@ func TestGitAnswer_OnlyTheQuestionsThatExitOne(t *testing.T) {
 		{[]string{"diff", "--cached", "--quiet"}, true},
 		{[]string{"rev-parse", "--verify", "--quiet", "HEAD"}, true},
 		{[]string{"symbolic-ref", "--quiet", "HEAD"}, true},
+		{[]string{"merge-base", "--is-ancestor", "abc", "HEAD"}, true},
 		{[]string{"symbolic-ref", "HEAD", "refs/heads/machine/laptop"}, false},
+		{[]string{"ls-remote", "origin", "refs/heads/machine/laptop"}, false},
 		{[]string{"push", "--quiet", "--no-verify", "origin", "x:x"}, false},
 		{[]string{"commit", "--quiet", "--no-verify", "-m", ""}, false},
 		{[]string{"add", "--all"}, false},

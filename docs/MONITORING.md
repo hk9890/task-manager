@@ -34,7 +34,7 @@ Each row is one `slog` record (`msg` in the first column):
 | `publish_error` — a busy store held the publish back for 2 minutes, and it gave up | error | `stage=commit`, `error` (names the store, or the central-root lock) |
 | `publish` — a publish succeeded | debug | `machine`, `branch`, `committed`, `pushed`, `commit`, `retries`, `lock_wait_ms`, `duration_ms` |
 | `publish_init` — an init succeeded | debug | `machine`, `branch`, `remote`, `duration_ms` |
-| `publish_error` — a publish or init failed | error | `stage`, `error` |
+| `publish_error` — a publish or init failed | error | `stage`, `error`; once this run committed, or at `stage=push`, also `committed` and `head` (the commit not yet pushed) |
 | `publish_error` — refused because another publish runs | info | `stage=lock`, `error` |
 
 Every hook invocation emits one `hook` record regardless of outcome — only the
@@ -128,11 +128,12 @@ is diagnosed after the fact.
   publish with nothing to push logs no `push` stage. The last `publish_stage` of a run
   that never ends names the stage it hangs in.
 - **One `publish_git` per git command.** `cmd` is the subcommand (`add`, `diff`, `commit`,
-  `push`, `rev-parse`, `config`, `symbolic-ref`, `init`, `remote`); `duration_ms` is the
-  process's own wall-clock time. Exit `1` from `config --get`, `diff --quiet`,
-  `rev-parse --verify` and `symbolic-ref --quiet` is an answer — no such key, something
-  staged, no such ref, detached — and logs at debug. A push the remote rejects also
-  exits `1`, and is a failure. `stderr` is trimmed and cut at 1024 bytes.
+  `push`, `rev-parse`, `config`, `symbolic-ref`, `init`, `remote`, and after a failed push
+  `ls-remote` and `merge-base`); `duration_ms` is the process's own wall-clock time.
+  Exit `1` from `config --get`, `diff --quiet`, `rev-parse --verify`,
+  `symbolic-ref --quiet` and `merge-base --is-ancestor` is an answer — no such key,
+  something staged, no such ref, detached, not an ancestor — and logs at debug. A push the
+  remote rejects also exits `1`, and is a failure. `stderr` is trimmed and cut at 1024 bytes.
 - **`publish_lock_wait` is logged once per publish**, when its back-off on busy store
   locks reaches 5s. `store` names the store that was busy at that try, or
   `(central root)` when the registry lock was. `retries` and `lock_wait_ms` on the
@@ -166,8 +167,13 @@ is diagnosed after the fact.
   `publish_lock_wait` names the store a long write or a slow pre-hook holds
   ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
   `publish_error`.
-- **Failed:** the `publish_error` record names the stage; the `publish_git` warn just
-  before it carries git's `stderr`.
+- **Failed:** the `publish_error` record names the stage; the last `publish_git` warn of
+  the failed command carries git's `stderr`. After a failed push, read the one with
+  `cmd=push`: the `ls-remote` that asks the remote for its tip comes after it and can
+  fail too, with the same cause. A failure after the commit, or in the push, keeps
+  the commit local: `head` names the commit that is not on the remote yet (empty when
+  the failure came before it was read), and `committed` says whether this run made it.
+  The next sync tries the push again, and succeeds once what the error names is fixed.
 
 ```bash
 TASKMGR_LOG=debug taskmgr sync 2> sync.log

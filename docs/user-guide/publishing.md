@@ -100,6 +100,7 @@ repository.
 | no machine ID can be derived from the hostname | this machine's hostname gives no usable name | set one with `taskmgr config set machine_id <id> --global` |
 | is not on a branch | the stores' git work tree was checked out on a single commit by hand | check out `machine/<machine-id>` again with the `git checkout` the message prints |
 | another machine publishes under this machine ID | two machines use one name, or this machine was set up again from scratch | pick a new name with `taskmgr config set machine_id <id> --global`, run the `git branch -m` the message prints, then `taskmgr sync`. git's own message follows, naming what the remote refused |
+| was rewritten in ... after it was published | the stores' branch was amended or reset by hand after a sync, so the remote holds a commit the branch no longer has | run the `git reset --soft` the message prints, which keeps every store file, then `taskmgr sync` |
 | machine_id changed since 'taskmgr sync init' | you renamed the machine after setting it up | set the old name back, or run the `git branch -m` the message prints |
 | sync publishes only from machine/... | the stores were already a git repository on another branch, such as `main`, or a `sync init` stopped part-way | run what the message prints: `sync init` again, or a `git checkout` or `git branch -m` |
 | git is not on PATH | git is not installed, or not on this shell's `PATH` | install git |
@@ -108,6 +109,7 @@ repository.
 | already publishes to ... with other credentials | `sync init` was given the same URL with a new user or token in it | run the `git remote set-url origin` the message prints, with the new URL |
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
 | another taskmgr sync is running | a sync or `sync init` is running on this machine, with the process ID and start time the message gives | wait for it and run `taskmgr sync` again; a process that is no longer there holds nothing, so the next sync runs |
+| push of machine/... failed | the push did not reach the remote, or could not log in, or the remote refused it; git's own message at the end says which. A sync never lets git ask for a password | run the `git push` the message prints, to see what git asks. For a login: for GitHub over HTTPS, run `gh auth setup-git`; for a token in the URL, set a new one with `git remote set-url origin`; for ssh, give this user a key ssh can use with no passphrase prompt. Then run `taskmgr sync` again; the commit was kept |
 | push timed out after 10m0s | the remote did not finish receiving the push in 10 minutes: no network, a remote that does not answer, or a push too large for the connection | check the connection and run `taskmgr sync` again; the commit was kept |
 | gave up after waiting 2m0s for the write lock of store | another `taskmgr` on this machine kept writing to that store, or a hook of its kept running, for 2 minutes | let it finish and run `taskmgr sync` again |
 
