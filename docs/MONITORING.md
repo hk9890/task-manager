@@ -37,6 +37,7 @@ Each row is one `slog` record (`msg` in the first column):
 | `publish_init` — an init succeeded | debug | `machine`, `branch`, `remote`, `duration_ms` |
 | `publish_error` — a publish or init failed | error | `stage`, `error`; once this run committed, or at `stage=push`, also `committed` and `head` (the commit not yet pushed) |
 | `publish_error` — refused because another publish runs | info | `stage=lock`, `error` |
+| `publish_record_error` — a publish succeeded but could not record itself for `PublishStatus` | warn | `error` |
 
 Every hook invocation emits one `hook` record regardless of outcome — only the
 level and `decision` differ — so allow/deny/warn/error are one query away from
@@ -125,7 +126,8 @@ is diagnosed after the fact.
 - **`publish_stage` is logged when a stage starts.** Publish stages, in order: `config`
   (machine ID, and whether `sync init` has run), `lock` (the publish lock), `check`
   (remote, branch, exclude file),
-  `commit` (store locks, add, locks released, commit), `push`. Init stages: `config`, `lock`, `init`. A
+  `commit` (store locks, add, locks released, commit), `push`, `record` (the state file
+  `PublishStatus` reads). Init stages: `config`, `lock`, `init`. A
   publish with nothing to push logs no `push` stage. The last `publish_stage` of a run
   that never ends names the stage it hangs in.
 - **One `publish_git` per git command.** `cmd` is the subcommand (`add`, `diff`, `commit`,

@@ -597,7 +597,9 @@ list is SDK-SPEC's.
   wait: it exits `1` with `another taskmgr sync is running (pid <pid>, since <time>)`,
   the time in UTC, RFC 3339, or without the parenthesis when the running one has not
   recorded itself yet. A timer that fires during a manual sync therefore fails one tick
-  instead of queueing behind it.
+  instead of queueing behind it. A front end reading the sync status holds the same lock
+  for a moment when a killed sync left its process ID behind. A sync that starts in that
+  moment exits `1` the same way and names the killed one, once (SDK-SPEC §1).
 - **A push has 10 minutes.** A push not finished by then is stopped and exits `1` with
   `push timed out after 10m0s`; the commit is kept and the next `sync` pushes it. git
   cannot resume a push, so the limit leaves a slow link room: about 75 MB at 1 Mbit/s. An

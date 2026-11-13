@@ -63,7 +63,8 @@ or clone it: `git clone --branch machine/laptop <url>`.
 ## Everyday use
 
 Run `taskmgr sync` whenever you want the mirror up to date. It commits what changed and
-pushes it. With nothing new it prints `Nothing to publish: no change since the last sync` and does nothing, not even a network call. `--json` reports
+pushes it. With nothing new it prints `Nothing to publish: no change since the last sync`, commits
+and pushes nothing, and makes no network call; it only records when it ran. `--json` reports
 what it did, for a script that runs it.
 
 A sync never publishes a half-written ticket: while it stages the changes, every write to

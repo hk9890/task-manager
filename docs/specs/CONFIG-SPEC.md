@@ -116,8 +116,8 @@ holds the registry, its advisory locks (below), and a `stores/` directory with o
 subfolder per central store; each subfolder is a complete, ordinary store per
 TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`, `closed/`). The
 dedicated `stores/` directory keeps store names in their own namespace, so a store can
-never collide with the central root's own files (`config.yaml`, `mapping.yaml`, and the
-three lock files). Because a central store is an ordinary store, relocating one is a plain folder
+never collide with the central root's own files (`config.yaml`, `mapping.yaml`,
+`.publish.state`, and the three lock files). Because a central store is an ordinary store, relocating one is a plain folder
 move plus a registry edit (§5).
 
 ```
@@ -127,6 +127,7 @@ move plus a registry edit (§5).
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
 ├── .publish.lock        # advisory flock that runs one publish at a time (SDK-SPEC §1); holds its holder while held (below)
+├── .publish.state       # what the last init or successful publish recorded (below)
 └── stores/              # all central stores live here
     └── my-project/      # a central store — a complete, ordinary store
         ├── config.yaml
@@ -144,10 +145,26 @@ since: 2026-11-13T14:02:00Z
 ```
 
 A publish refused because the lock is held names them. The holder empties the file before
-it releases the lock, so a refusal never names a holder that has ended. The content is
-informative only: the lock, not the content, says whether a publish runs, so stale content
-under a free lock — a holder killed before it emptied the file — is overwritten by the next
-holder and never refuses one.
+it releases the lock. The content is informative only: the lock, not the content, says
+whether a publish runs, so stale content under a free lock — a holder killed before it
+emptied the file — never refuses a publish on its own, and is overwritten by the next
+holder. `PublishStatus` is the one other taker of the lock: over stale content it holds
+the lock for one try and empties the content. A publish that starts during that try is
+refused, and the refusal names the killed holder (SDK-SPEC §1).
+
+`.publish.state` is YAML that `InitPublish` and every successful `Publish` write (behind
+`taskmgr sync init` and `taskmgr sync`), under `.publish.lock`, and `PublishStatus` reads (SDK-SPEC §1). Each key is left
+out while it has no value:
+
+```
+remote: https://github.com/me/tasks-mirror.git   # origin's URL, without its user and password
+branch: machine/laptop                           # the branch the record is of
+last_sync: 2026-11-13T14:02:07Z                  # UTC, whole seconds, when the last successful publish ended
+commit: 4f0c3b9e8d…                              # HEAD after it
+```
+
+It sits outside `stores/`, so it is never published, and it is machine-local like the
+registry. Deleting it loses only the status until the next sync.
 
 `stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory in it
 (CLI-SPEC §2.5). It is not mistaken for a store, and no store can take its name. Nothing lists `stores/`: every path into it is

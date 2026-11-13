@@ -69,7 +69,7 @@ func TestPublish_LogsEachStageEachGitRunAndASummary(t *testing.T) {
 			}
 		}
 	}
-	if want := []string{"config", "lock", "check", "commit", "push"}; !slices.Equal(stages, want) {
+	if want := []string{"config", "lock", "check", "commit", "push", "record"}; !slices.Equal(stages, want) {
 		t.Errorf("stages = %q, want %q", stages, want)
 	}
 	var ran []string
