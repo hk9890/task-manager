@@ -342,6 +342,17 @@ func TestParse_QuotedString_EscapeDoubleQuote(t *testing.T) {
 	}
 }
 
+func TestParse_QuotedString_TrailingBackslash_ParseError(t *testing.T) {
+	expr := `assignee == "a\`
+	pe := mustFail(t, expr)
+	if pe.Pos != len(expr) {
+		t.Errorf("Pos=%d want %d", pe.Pos, len(expr))
+	}
+	if pe.Message != "unexpected end of string after backslash" {
+		t.Errorf("Message=%q", pe.Message)
+	}
+}
+
 // ---- §4 error classes -------------------------------------------------------
 
 func TestParse_Error_UnknownField(t *testing.T) {
