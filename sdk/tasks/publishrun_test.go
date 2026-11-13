@@ -120,9 +120,12 @@ func (g *fakeGit) run(spec exec.Spec) exec.Result {
 		g.commits++
 		g.staged = false
 	case "ls-remote":
+		// A deeper ref with the same ending, which ls-remote also lists.
+		out := foreignSHA + "\trefs/heads/archive/" + args[2] + "\n"
 		if tip := g.remoteTipOrPushed(); tip != "" {
-			return exec.Allow(tip + "\t" + args[2] + "\n")
+			out += tip + "\t" + args[2] + "\n"
 		}
+		return exec.Allow(out)
 	case "merge-base":
 		if !g.onHEAD(args[2]) {
 			return exec.Deny(1, "")

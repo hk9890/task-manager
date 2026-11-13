@@ -279,8 +279,8 @@ func TestPublish_L3_RejectedPushNamesTheMachineIDClash(t *testing.T) {
 
 	p.create("a change")
 	_, err := p.publish()
-	if !errors.Is(err, ErrMachineIDClash) || !strings.Contains(err.Error(), "[rejected]") {
-		t.Fatalf("publish after another push: %v, want the clash with git's message", err)
+	if !errors.Is(err, ErrMachineIDClash) || !strings.Contains(err.Error(), "machine/laptop") {
+		t.Fatalf("publish after another push: %v, want the clash naming machine/laptop", err)
 	}
 	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != pushed {
 		t.Errorf("remote branch moved to %s; a rejected push must leave it at %s", got, pushed)

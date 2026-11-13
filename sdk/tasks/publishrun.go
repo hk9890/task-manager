@@ -361,8 +361,18 @@ func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
 // with no such branch, has not diverged.
 func (p *publisher) remoteDiverged() bool {
 	out, err := p.gitWithin(publishPushTimeout, "ls-remote", publishRemote, p.ref())
-	tip, _, _ := strings.Cut(out, "\t")
-	if err != nil || tip == "" {
+	if err != nil {
+		return false
+	}
+	// ls-remote matches the pattern against the end of each ref name, so a
+	// deeper ref with the same ending is listed too: take the exact one.
+	var tip string
+	for line := range strings.Lines(out) {
+		if sha, ref, _ := strings.Cut(strings.TrimSpace(line), "\t"); ref == p.ref() {
+			tip = sha
+		}
+	}
+	if tip == "" {
 		return false
 	}
 	if _, err := p.git("rev-parse", "--verify", "--quiet", tip+"^{commit}"); err != nil {

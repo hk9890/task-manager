@@ -601,7 +601,9 @@ list is SDK-SPEC's.
   `push timed out after 10m0s`; the commit is kept and the next `sync` pushes it. git
   cannot resume a push, so the limit leaves a slow link room: about 75 MB at 1 Mbit/s. An
   HTTPS push that moves under 1000 bytes/s for 60 seconds ends sooner, with git's own
-  message; an ssh push has only the 10 minutes (SDK-SPEC). A Ctrl-C
+  message; an ssh push has only the 10 minutes (SDK-SPEC). After a push that fails with
+  an exit status, `sync` asks the remote for the branch's tip under the same limit, so a
+  failed `sync` can take up to 20 minutes. A Ctrl-C
   during a push ends both `taskmgr` and the push. On Linux any signal that kills
   `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
   pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for

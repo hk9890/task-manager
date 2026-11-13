@@ -217,8 +217,8 @@ func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
 	}
 }
 
-// Exit 1 from config --get, diff --quiet, rev-parse --verify and symbolic-ref
-// --quiet answers a question; a warn for each would bury the real failures.
+// Exit 1 from config --get, diff --quiet, rev-parse --verify, symbolic-ref
+// --quiet and merge-base --is-ancestor answers a question; a warn for each would bury the real failures.
 // A rejected push also exits 1, and is one.
 func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 	buf, logOpt := debugLog()

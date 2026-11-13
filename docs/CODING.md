@@ -39,7 +39,8 @@ Code that runs git decides only on its exit status and on plumbing output (`rev-
 porcelain message: git translates them, and a new release may reword them. git's message
 goes into an error or a log record as text to pass on, never as a value to compare.
 Where only a message would tell a case apart, ask git a plumbing question instead, as
-`remoteDiverged` does in `sdk/tasks/publishrun.go`.
+`remoteDiverged` does in `sdk/tasks/publishrun.go`. A test against real git holds to the
+same rule: it asserts the sentinel and the refs git leaves behind, never git's text.
 
 ## Where changes go
 
