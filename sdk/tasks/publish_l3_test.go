@@ -129,7 +129,7 @@ func TestInitPublish_L3_CreatesTheRepositoryAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initPublish: %v", err)
 	}
-	want := PublishInfo{Machine: "laptop", Branch: "machine/laptop", Path: p.stores, Remote: p.remote}
+	want := PublishInfo{Machine: "laptop", Branch: "machine/laptop", Path: p.stores, Remote: p.remote, RemoteName: "origin"}
 	if info != want {
 		t.Errorf("info = %+v, want %+v", info, want)
 	}
@@ -205,7 +205,7 @@ func TestPublish_L3_CommitsPushesAndSkipsWhatIsPublished(t *testing.T) {
 		t.Errorf("published a lock file:\n%s", got)
 	}
 
-	if again := p.mustPublish(); again != (PublishResult{Machine: "laptop", Branch: "machine/laptop"}) {
+	if again := p.mustPublish(); again != (PublishResult{Machine: "laptop", Branch: "machine/laptop", RemoteName: "origin"}) {
 		t.Errorf("publish with nothing new = %+v, want no commit and no push", again)
 	}
 
@@ -227,27 +227,37 @@ func TestPublish_L3_CommitsPushesAndSkipsWhatIsPublished(t *testing.T) {
 
 // Two publishes on one machine — a timer and a manual run — must not push the
 // branch at once: the remote would refuse one ref update with a raw git error.
-func TestPublish_L3_ConcurrentPublishesBothSucceed(t *testing.T) {
+// The second refuses while the first holds the publish lock. The test holds
+// that lock itself, through a real flock, so the two certainly overlap.
+func TestPublish_L3_ConcurrentPublishRefusesWhileOneRuns(t *testing.T) {
 	p := newPublishL3(t)
 	p.mustInit()
-	for i := range 10 {
-		p.create(fmt.Sprintf("change %d", i))
-		errs := make(chan error, 2)
-		for range 2 {
-			go func() {
-				_, err := p.publish()
-				errs <- err
-			}()
-		}
-		for range 2 {
-			if err := <-errs; err != nil {
-				t.Fatalf("round %d: concurrent publish: %v", i, err)
-			}
-		}
+	p.create("a change")
+
+	e := p.e
+	e.Pid = os.Getpid()
+	running, err := loadPublish(p.fs, e, exec.NewOS())
+	if err != nil {
+		t.Fatal(err)
 	}
-	head := realGit(t, p.stores, "rev-parse", "HEAD")
-	if got := realGit(t, p.remote, "rev-parse", "machine/laptop"); got != head {
-		t.Errorf("remote branch at %s, want HEAD %s", got, head)
+	unlock, err := running.lockPublish()
+	if err != nil {
+		t.Fatalf("lockPublish: %v", err)
+	}
+	holder := fmt.Sprintf("(pid %d, since ", os.Getpid())
+	if _, err := p.publish(); !errors.Is(err, ErrPublishBusy) || !strings.Contains(err.Error(), holder) {
+		t.Errorf("publish while another runs: %v, want ErrPublishBusy naming %s…)", err, holder)
+	}
+	if _, err := p.init(); !errors.Is(err, ErrPublishBusy) {
+		t.Errorf("init while a publish runs: %v, want ErrPublishBusy", err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The holder's content stays in the file; the free lock lets the next run.
+	if res := p.mustPublish(); !res.Committed || !res.Pushed {
+		t.Errorf("publish after the first ended = %+v, want a commit, pushed", res)
 	}
 }
 

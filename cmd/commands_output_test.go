@@ -22,6 +22,8 @@
 //     and create.
 //   - Every command is run against a store, and each prints the type that
 //     jsonOutputs declares for it, under each flag that changes the shape.
+//     The commands that push with git are run by the same check behind the
+//     integration tag (catalogRunsElsewhere).
 //   - The reflected shape of every declared type equals what encoding/json
 //     prints for it: field for field, in print order, with `optional` on
 //     exactly the fields the encoder omits.
@@ -158,10 +160,18 @@ func assertPrintsDeclaredType(t *testing.T, args []string, stdout []byte) {
 	}
 }
 
+// catalogRunsElsewhere is every command TestCommands_Output_EveryCommandPrintsItsDeclaredType
+// does not run, because it spawns git against a remote, which the default
+// suite does not. TestCommands_Output_SyncPrintsItsDeclaredType in
+// sync_cli_test.go, behind the integration tag, runs each of them and fails
+// when one is not run.
+var catalogRunsElsewhere = []string{"sync", "sync init"}
+
 // Every command of the catalog is run here under --json, and run compares what
 // each printed with jsonOutputs. A command added without an invocation below
 // fails, as does a declaration no invocation exercised, so the table cannot
-// name a type the command does not print.
+// name a type the command does not print. Only the commands named in
+// catalogRunsElsewhere are left out, and each of those must exist.
 func TestCommands_Output_EveryCommandPrintsItsDeclaredType(t *testing.T) {
 	isolatedHome(t)
 	root, _ := treeStore(t)
@@ -260,25 +270,29 @@ func TestCommands_Output_EveryCommandPrintsItsDeclaredType(t *testing.T) {
 	inStore("package", "rm", "task-writing")
 	invoke("package", "repo", "rm", filepath.Base(origin))
 
-	invoke("config", "set", "machine_id", "catalog", "--global")
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	git(t, "", "init", "--quiet", "--bare", remote)
-	invoke("sync", "init", "--remote", remote)
-	invoke("sync")
-
+	catalogued := map[string]bool{}
 	for _, entry := range buildCatalog(rootCmd).Commands {
+		catalogued[entry.Name] = true
 		c, _, err := rootCmd.Find(strings.Fields(entry.Name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if c.HasAvailableSubCommands() || entry.Name == "commands" {
+		if c.HasAvailableSubCommands() || entry.Name == "commands" || slices.Contains(catalogRunsElsewhere, entry.Name) {
 			continue
 		}
 		if !ran[entry.Name] {
 			t.Errorf("%q is not run here, so nothing compares what it prints with jsonOutputs", entry.Name)
 		}
 	}
+	for _, name := range catalogRunsElsewhere {
+		if !catalogued[name] {
+			t.Errorf("catalogRunsElsewhere names %q, which is no command of the catalog", name)
+		}
+	}
 	for name, decl := range jsonOutputs {
+		if slices.Contains(catalogRunsElsewhere, name) {
+			continue
+		}
 		if !printed[name] {
 			t.Errorf("jsonOutputs declares %q, and no invocation printed JSON for it", name)
 		}

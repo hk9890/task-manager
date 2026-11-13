@@ -25,8 +25,8 @@ func MoveToCentral(projectPath, name string, opts ...Option) (*Store, error) // 
 func RenameCentral(oldName, newName string) (string, error)      // rename folder + entry
 func RelinkCentral(name, projectPath string) (string, error)     // re-point an entry at a moved project
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
-func InitPublish(remote string) (PublishInfo, error)             // make <central_root>/stores a work tree publishing to remote
-func Publish() (PublishResult, error)                            // commit the central stores and push machine/<id>
+func InitPublish(remote string, opts ...Option) (PublishInfo, error) // make <central_root>/stores a work tree publishing to remote
+func Publish(opts ...Option) (PublishResult, error)               // commit the central stores and push machine/<id>
 func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
@@ -98,20 +98,31 @@ const FileExt        = ".md"         // the per-issue file extension
 
   ```go
   type PublishInfo struct {
-      Machine string // the machine ID
-      Branch  string // machine/<Machine>
-      Path    string // <central_root>/stores, the git work tree
-      Remote  string // the URL of the remote "origin"
+      Machine    string // the machine ID
+      Branch     string // machine/<Machine>
+      Path       string // <central_root>/stores, the git work tree
+      Remote     string // the URL of the remote RemoteName
+      RemoteName string // the git remote's name, "origin"
   }
 
   type PublishResult struct {
-      Machine   string
-      Branch    string
-      Committed bool   // this run made a commit
-      Commit    string // its full SHA; "" when Committed is false
-      Pushed    bool   // this run pushed
+      Machine    string
+      Branch     string
+      RemoteName string // the git remote's name, "origin"
+      Committed  bool   // this run made a commit
+      Commit     string // its full SHA; "" when Committed is false
+      Pushed     bool   // this run pushed
   }
   ```
+
+  `RemoteName` is in both so a front end that names the remote prints the engine's
+  value rather than a copy of it.
+
+  Both take the store's `Option` values and apply two of them: `WithLogger`, for the
+  records each run writes ([MONITORING.md](../MONITORING.md)), and `WithClock`, which
+  stamps the publish lock and times the run. The others configure a store, and neither
+  call opens one. Without `WithClock` the clock is the wall clock at full resolution,
+  not the store's whole-second one, because it measures durations.
 
   `InitPublish` resolves a relative local `remote` against the working directory, as
   `ResolveOptions.WorkDir` is resolved: git runs in the stores directory and would resolve
@@ -335,7 +346,10 @@ status is a failure.
    machine publishes is the user's call. The message names `git remote remove origin`
    followed by `init` again, not `git remote set-url`: removing the remote also removes its
    remote-tracking ref, which `Publish` reads as what was last published (step 4 below),
-   so the next publish pushes the whole branch to the new remote.
+   so the next publish pushes the whole branch to the new remote. Two URLs that differ
+   only in their credentials (a rotated token) name one remote. The message cannot show
+   either credential, so it says that they differ and names
+   `git remote set-url origin <url>`, which keeps that ref.
 5. Write the exclude file (below).
 
 Running it again with the same remote changes nothing.
@@ -400,11 +414,21 @@ as the busy one is held, which a pre-hook can make as long as its `hook_timeout`
 ([HOOK-SPEC](HOOK-SPEC.md) §7). The cost is that a store written to without pause can
 delay a publish; a writer never waits for a publish longer than its two git commands.
 
-**One publish at a time.** Both calls run whole, push included, under a third lock,
-`<central_root>/.publish.lock`, which no writer takes. Two publishes on one machine — a
-timer and a manual run — would otherwise push the same branch at once, and the remote
-refuses one of the two ref updates. Holding it across the network stalls nothing but the
-second publish, which then finds the branch already pushed or pushes a fast-forward.
+**One publish at a time, and a second one fails fast.** Both calls run whole, push
+included, under a third lock, `<central_root>/.publish.lock`, which no writer takes. Two
+publishes on one machine — a timer and a manual run — would otherwise push the same
+branch at once, and the remote refuses one of the two ref updates. The lock is tried
+without waiting: while one call holds it, another returns `ErrPublishBusy` at once, and
+runs no git. Waiting was rejected: a timer firing behind a hung run would stack one
+blocked process per tick, and the next tick publishes anyway.
+
+The holder writes its process ID and start time into the lock file, in place, so the lock
+it holds on the file stays held (CONFIG-SPEC §3). A refused call reads them back for its
+message: `another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)`, the
+time in UTC, RFC 3339. Content it cannot read or parse — the holder has not written it
+yet, or a write was cut short — still refuses, with `another taskmgr sync is running`.
+The content is informative only: release leaves it, and content under a free lock is
+ignored, because the lock, not the content, decides whether a publish runs.
 
 A pre-hook that runs a publish keeps it backing off: its own mutation holds a store lock
 the publish needs, so the publish retries until `hook_timeout` kills the hook, and with
@@ -459,12 +483,23 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   | `core.safecrlf=false` | the add could fail on a file whose line endings a conversion would change |
   | `core.fsmonitor=false` | a configured fsmonitor program, or the built-in daemon, would start when git reads the index |
   | `commit.gpgSign=false`, `push.gpgSign=false` | signing needs a key or a prompt |
+  | `advice.pushUpdateRejected=false` | git's hint on a rejected push is to pull, and a publish never pulls (the refusal names the remedy) |
 
   A `.gitattributes` inside `stores/` is the user's, like a `.gitignore` there, and
   applies;
-- has no timeout, unlike a hook. Every command but the push is local, and a push that
-  hangs on the network is the caller's to interrupt: the process stays in the caller's
-  process group, so a Ctrl-C reaches it.
+- has no timeout, except the push. Every other command is local. The push is ended after
+  2 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
+  the seam's grace (HOOK-SPEC §7) — and the call fails with
+  `push timed out after 2m0s`, followed by what git wrote to stderr before then. A publish
+  runs unattended, from a timer or a service, so a dead connection must end the run
+  rather than hold the publish lock, and refuse every later publish, until someone
+  notices. The commit is kept, and the next publish pushes it (step 4 above). Unlike a
+  hook with a time limit, the push stays in the caller's process group, so a Ctrl-C
+  ends it together with the caller. A hook's own process group lets its timeout reach
+  the hook's whole process tree. For git, the cost of that group is a push that outlives
+  a Ctrl-C, runs outside the released publish lock with no time limit, and races the
+  next publish on the same branch. git's transport helpers end when git does, so
+  signalling git alone is enough.
 
 The user's own git identity is deliberately not used. A publish commit is a snapshot, not
 an authored change — who made each change is already in the issue's `creator`, `agent`
@@ -483,6 +518,17 @@ that, telling the user to pick another `machine_id`
 the refs the remote refused. It never forces:
 overwriting the branch would delete the other writer's snapshots. A clash is found only
 by a publish that pushes, so a machine with nothing new reports it at its next change.
+
+**A remote's credentials stay out of errors and logs.** A remote URL may carry them
+(`https://user:token@host/…`). Every error both calls return, and every record they log,
+has the user and password removed from each URL with a scheme in it, git's own stderr
+included. An scp-form address (`git@host:path`) names a user and no secret, and is kept.
+`PublishInfo.Remote` is the URL as configured, credentials included: it is the caller's
+own value.
+
+**What a run logs.** Each stage as it starts, each git command with its exit status and
+duration, the wait on a busy store, and the outcome — the records and their levels are
+[MONITORING.md § Publishing](../MONITORING.md#publishing)'s.
 
 ---
 
@@ -1423,12 +1469,14 @@ var (
     ErrPublishBranch      // stores/ is detached, or on a branch other than machine/<machine-id>
     ErrMachineIDClash     // the remote rejected the push: another writer of the branch
     ErrGitMissing         // git is not on PATH
+    ErrPublishBusy        // another publish or init holds the publish lock
 )
 ```
 
-The four publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
+The five publishing sentinels are returned by `InitPublish` and `Publish` (§1, Publishing
 the central stores). Each is wrapped in a message that names the directory and the
-command that fixes it.
+command that fixes it, except `ErrPublishBusy`, which names the running publish's
+process ID and start time instead.
 
 `ErrNotFound` is returned by every method that takes the ID of the issue to act on —
 `Get`, `Detail`, `Details`, `Comments`, `Update`, `Close`, `Reopen`, the three comment

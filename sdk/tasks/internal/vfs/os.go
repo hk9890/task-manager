@@ -80,6 +80,14 @@ func (osFS) Stat(name string) (os.FileInfo, error) {
 	return os.Stat(name)
 }
 
+// WriteInPlace truncates name and writes data into the same file.
+func (osFS) WriteInPlace(name string, data []byte, perm os.FileMode) error {
+	if err := os.WriteFile(name, data, perm); err != nil {
+		return fmt.Errorf("vfs.WriteInPlace: %w", err)
+	}
+	return nil
+}
+
 // WriteAtomic writes data atomically using the temp-fsync-rename pattern.
 // It creates a temp file in the same directory as name (so the rename is
 // guaranteed to be on the same filesystem), syncs, and renames over name.

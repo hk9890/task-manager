@@ -191,6 +191,30 @@ func TestOsFS_TryLock_BusyIsNotOKAndDoesNotWait(t *testing.T) {
 	}
 }
 
+// A rename over a held lock file would leave the lock on an unlinked inode, and
+// the next opener of the path would get it: WriteInPlace keeps the file.
+func TestOsFS_WriteInPlace_KeepsTheLockHeld(t *testing.T) {
+	fs := vfs.NewOS()
+	path := filepath.Join(t.TempDir(), ".lock")
+	unlock, err := fs.Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unlock() }()
+	if err := fs.WriteInPlace(path, []byte("a longer first content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.WriteInPlace(path, []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fs.ReadFile(path); err != nil || string(got) != "second\n" {
+		t.Errorf("content = %q, %v; want only the last write", got, err)
+	}
+	if _, ok, err := fs.TryLock(path); ok || err != nil {
+		t.Errorf("TryLock after WriteInPlace = ok %v, err %v; want the lock still held", ok, err)
+	}
+}
+
 func TestOsFS_ReadDir(t *testing.T) {
 	dir := t.TempDir()
 	fs := vfs.NewOS()

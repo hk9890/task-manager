@@ -290,6 +290,28 @@ func TestMem_TryLock_BusyIsNotOK(t *testing.T) {
 	}
 }
 
+func TestMem_WriteInPlace_ReplacesTheContent(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.WriteInPlace("/missing/.lock", []byte("x"), 0o644); !vfs.IsNotExist(err) {
+		t.Errorf("WriteInPlace under a missing directory: %v, want not-exist", err)
+	}
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{"first, longer\n", "second\n"} {
+		if err := m.WriteInPlace("/tasks/.lock", []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := m.ReadFile("/tasks/.lock"); err != nil || string(got) != "second\n" {
+		t.Errorf("content = %q, %v; want only the last write", got, err)
+	}
+	m.FailOn("WriteInPlace", "/tasks/.lock", errors.New("injected"))
+	if err := m.WriteInPlace("/tasks/.lock", []byte("x"), 0o644); err == nil {
+		t.Error("FailOn(WriteInPlace) did not fail the write")
+	}
+}
+
 func TestMem_TryLock_FaultAndMissingParent(t *testing.T) {
 	m := vfs.NewMem()
 	if _, _, err := m.TryLock("/nonexistent/.lock"); !vfs.IsNotExist(err) {

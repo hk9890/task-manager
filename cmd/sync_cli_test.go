@@ -55,6 +55,63 @@ func syncJSON(t *testing.T) syncDTO {
 	return got
 }
 
+// The catalog's own check, for the commands its untagged test leaves out
+// because they spawn git: run holds what each prints under --json to
+// jsonOutputs, and this fails when a command of catalogRunsElsewhere did not
+// run or printed no JSON.
+func TestCommands_Output_SyncPrintsItsDeclaredType(t *testing.T) {
+	_, _, remote := syncFixture(t)
+	ran := map[string]bool{}
+	for _, args := range [][]string{{"--json", "sync", "init", "--remote", remote}, {"--json", "sync"}} {
+		if _, errOut, code := run(t, args...); code != 0 {
+			t.Fatalf("%v: exit %d, stderr %q", args, code, errOut)
+		}
+		c, _, err := rootCmd.Find(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if declaration, want := declaredOutput(c); want == nil || printedType != want {
+			t.Errorf("%q printed %v, jsonOutputs declares %v", declaration, printedType, want)
+		}
+		ran[displayName(c)] = true
+	}
+	for _, name := range catalogRunsElsewhere {
+		if !ran[name] {
+			t.Errorf("%q is left out of the catalog test and not run here", name)
+		}
+		// Only the base shape runs here; a --flag shape would go unchecked.
+		if flags := jsonOutputs[name].withFlag; len(flags) != 0 {
+			t.Errorf("%q declares %d --flag shapes, which neither test runs; run them here", name, len(flags))
+		}
+	}
+}
+
+// TASKMGR_LOG=debug puts a sync's records on stderr; stdout stays the JSON
+// alone.
+func TestSync_DebugLogGoesToStderrAndLeavesTheJSONClean(t *testing.T) {
+	_, _, remote := syncFixture(t)
+	t.Setenv("TASKMGR_LOG", "debug")
+	out, errOut, code := run(t, "--json", "sync", "init", "--remote", remote)
+	if code != 0 || !json.Valid([]byte(out)) || !strings.Contains(errOut, "msg=publish_init") {
+		t.Fatalf("sync init: exit %d, stdout %q, stderr %q; want JSON on stdout and publish_init on stderr", code, out, errOut)
+	}
+	out, errOut, code = run(t, "--json", "sync")
+	var got syncDTO
+	if code != 0 || json.Unmarshal([]byte(out), &got) != nil || !got.Pushed {
+		t.Fatalf("sync: exit %d, stdout %q; want the JSON of a push alone", code, out)
+	}
+	for _, want := range []string{"msg=publish_stage stage=push", "msg=publish_git cmd=push exit=0", "msg=publish machine=laptop"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut)
+		}
+	}
+
+	t.Setenv("TASKMGR_LOG", "")
+	if _, errOut, _ := run(t, "sync"); errOut != "" {
+		t.Errorf("sync at the default level wrote %q to stderr, want nothing", errOut)
+	}
+}
+
 func TestSyncInit_PrintsWhereAndWhatItPublishes(t *testing.T) {
 	_, stores, remote := syncFixture(t)
 

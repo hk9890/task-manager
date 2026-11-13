@@ -184,9 +184,9 @@ func TestOSRunner_ProcessGroupOnlyWhenBounded(t *testing.T) {
 	r := NewOS()
 	own := syscall.Getpgrp()
 
-	pgidOf := func(t *testing.T, timeout time.Duration) int {
+	pgidOf := func(t *testing.T, timeout time.Duration, keepGroup bool) int {
 		t.Helper()
-		res := r.Run(Spec{Argv: []string{"sh", "-c", "ps -o pgid= -p $$"}, Timeout: timeout})
+		res := r.Run(Spec{Argv: []string{"sh", "-c", "ps -o pgid= -p $$"}, Timeout: timeout, KeepGroup: keepGroup})
 		if res.Category != Completed || res.ExitCode != 0 {
 			t.Fatalf("probe failed: category=%v exit=%d stderr=%q", res.Category, res.ExitCode, res.Stderr)
 		}
@@ -197,11 +197,28 @@ func TestOSRunner_ProcessGroupOnlyWhenBounded(t *testing.T) {
 		return pgid
 	}
 
-	if got := pgidOf(t, 0); got != own {
+	if got := pgidOf(t, 0, false); got != own {
 		t.Errorf("unbounded hook pgid = %d, want the caller's group %d — Ctrl-C cannot reach it and no timeout will either", got, own)
 	}
-	if got := pgidOf(t, 10*time.Second); got == own {
+	if got := pgidOf(t, 10*time.Second, false); got == own {
 		t.Errorf("bounded hook pgid = %d: it must be detached so the timeout can signal its whole tree", got)
+	}
+	if got := pgidOf(t, 10*time.Second, true); got != own {
+		t.Errorf("bounded KeepGroup pgid = %d, want the caller's group %d — a Ctrl-C would leave it running", got, own)
+	}
+}
+
+// A KeepGroup process stays in the caller's group and is still bounded: the
+// timeout signals the process itself.
+func TestOSRunner_KeepGroupTimeout(t *testing.T) {
+	start := time.Now()
+	res := NewOS().Run(Spec{Argv: []string{"sleep", "30"}, Timeout: 100 * time.Millisecond, KeepGroup: true})
+	elapsed := time.Since(start)
+	if res.Category != Timeout {
+		t.Fatalf("got category=%v, want Timeout", res.Category)
+	}
+	if elapsed > KillGrace+5*time.Second {
+		t.Fatalf("timeout took %v, expected prompt kill", elapsed)
 	}
 }
 

@@ -25,18 +25,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hk9890/task-manager/sdk/tasks"
 )
 
 func TestSyncSummary_OneLinePerOutcome(t *testing.T) {
 	for _, tc := range []struct {
-		in   syncDTO
+		in   tasks.PublishResult
 		want string
 	}{
-		{syncDTO{Branch: "machine/laptop", Committed: true, Commit: "3f9c2a1e4b7d8c6a5f0e1d2c3b4a59687f6e5d4c", Pushed: true},
+		{tasks.PublishResult{Branch: "machine/laptop", RemoteName: "origin", Committed: true, Commit: "3f9c2a1e4b7d8c6a5f0e1d2c3b4a59687f6e5d4c", Pushed: true},
 			"Committed 3f9c2a1e4b7d and pushed machine/laptop to origin"},
-		{syncDTO{Branch: "machine/laptop", Pushed: true},
-			"Nothing new to commit; pushed machine/laptop to origin"},
-		{syncDTO{Branch: "machine/laptop"},
+		{tasks.PublishResult{Branch: "machine/laptop", RemoteName: "upstream", Pushed: true},
+			"Nothing new to commit; pushed machine/laptop to upstream"},
+		{tasks.PublishResult{Branch: "machine/laptop", RemoteName: "origin"},
 			"Nothing to publish: no change since the last sync"},
 	} {
 		if got := syncSummary(tc.in); got != tc.want {

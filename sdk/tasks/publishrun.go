@@ -27,13 +27,18 @@
 // the commit run under the central-root lock and the write lock of every
 // registered central store, taken without waiting: a busy one makes the
 // publish release them all and try again. The push, the one network call,
-// runs after all of them are released. A publish lock no writer takes runs one
-// publish at a time.
+// runs after all of them are released, and within publishPushTimeout. A
+// publish lock no writer takes runs one publish at a time: a second one is
+// refused with ErrPublishBusy rather than queued.
+//
+// Every stage, every git run and the outcome are logged (MONITORING.md).
 package tasks
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -48,17 +53,44 @@ import (
 // the store locks again after finding one busy.
 const storeLockRetry = 50 * time.Millisecond
 
+// publishLockWaitWarn is how long a publish waits for a busy store before it
+// logs publish_lock_wait, once, naming the store.
+const publishLockWaitWarn = 5 * time.Second
+
+// busyCentralRoot is the publish_lock_wait store value when the busy lock is
+// the central root's, which registry writes hold. No store name has
+// parentheses, so it cannot name a store.
+const busyCentralRoot = "(central root)"
+
 // InitPublish makes <central_root>/stores a git work tree on the branch
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
 // relative local path is resolved against the working directory. Running it
 // again with the same remote changes nothing; a different one is refused.
-func InitPublish(remote string) (PublishInfo, error) {
-	return initPublishWith(remote, vfs.NewOS(), env.NewOS(), exec.NewOS())
+// While a publish or another init runs it refuses with ErrPublishBusy. Of the
+// options, WithLogger and WithClock apply.
+func InitPublish(remote string, opts ...Option) (PublishInfo, error) {
+	return initPublishWith(remote, vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
 }
 
-func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Runner) (PublishInfo, error) {
-	p, err := loadPublish(fs, e, runner)
+func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Runner, opts ...Option) (PublishInfo, error) {
+	p := newPublisher(fs, e, runner, opts)
+	start := p.now()
+	info, err := p.initPublish(remote)
 	if err != nil {
+		p.logFailure(err)
+		return PublishInfo{}, err
+	}
+	p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish_init",
+		slog.String("machine", info.Machine),
+		slog.String("branch", info.Branch),
+		slog.String("remote", redactUserinfo(info.Remote)),
+		slog.Int64("duration_ms", p.now().Sub(start).Milliseconds()),
+	)
+	return info, nil
+}
+
+func (p *publisher) initPublish(remote string) (PublishInfo, error) {
+	if err := p.load(); err != nil {
 		return PublishInfo{}, err
 	}
 	if strings.TrimSpace(remote) == "" {
@@ -66,20 +98,23 @@ func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Ru
 	}
 	url := remote
 	if localRelativeRemote(remote) {
-		if url, err = absViaSeam(remote, fs); err != nil {
+		var err error
+		if url, err = absViaSeam(remote, p.fs); err != nil {
 			return PublishInfo{}, err
 		}
 	}
-	if err := fs.MkdirAll(p.dir, 0o755); err != nil {
+	if err := p.fs.MkdirAll(p.dir, 0o755); err != nil {
 		return PublishInfo{}, err
 	}
+	p.enter(stageLock)
 	unlock, err := p.lockPublish()
 	if err != nil {
 		return PublishInfo{}, err
 	}
 	defer func() { _ = unlock() }()
 
-	if _, err := fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
+	p.enter(stageInit)
+	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		if _, err := p.git("init", "--quiet"); err != nil {
 			return PublishInfo{}, err
 		}
@@ -107,38 +142,65 @@ func initPublishWith(remote string, fs vfs.FS, e env.Environment, runner exec.Ru
 	if err := p.writeExcludes(); err != nil {
 		return PublishInfo{}, err
 	}
-	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: url}, nil
+	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: url, RemoteName: publishRemote}, nil
 }
 
 // Publish commits what changed under <central_root>/stores and pushes it to
 // machine/<machine-id> (SDK-SPEC §1). The commit is taken under the central-root
 // lock and the write lock of every registered central store, so it is a settled
-// state; the push runs with those released. A second publish waits for the
-// first to finish. A run with nothing new commits nothing, and pushes
-// only a commit an earlier, failed push left behind.
-func Publish() (PublishResult, error) {
-	return publishWith(vfs.NewOS(), env.NewOS(), exec.NewOS())
+// state; the push runs with those released, and ends after publishPushTimeout.
+// While another publish or an init runs it refuses with ErrPublishBusy. A run
+// with nothing new commits nothing, and pushes only a commit an earlier,
+// failed push left behind. Of the options, WithLogger and WithClock apply.
+func Publish(opts ...Option) (PublishResult, error) {
+	return publishWith(vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
 }
 
-func publishWith(fs vfs.FS, e env.Environment, runner exec.Runner) (PublishResult, error) {
-	p, err := loadPublish(fs, e, runner)
-	if err != nil {
+func publishWith(fs vfs.FS, e env.Environment, runner exec.Runner, opts ...Option) (PublishResult, error) {
+	p := newPublisher(fs, e, runner, opts)
+	if err := p.load(); err != nil {
+		p.logFailure(err)
 		return PublishResult{}, err
 	}
 	return p.publish()
 }
 
-func (p publisher) publish() (PublishResult, error) {
+// publish runs one loaded publish and logs its outcome: the summary record on
+// success, publish_error on a failure.
+func (p *publisher) publish() (PublishResult, error) {
+	start := p.now()
+	res, err := p.commitAndPush()
+	if err != nil {
+		p.logFailure(err)
+		return PublishResult{}, err
+	}
+	p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish",
+		slog.String("machine", res.Machine),
+		slog.String("branch", res.Branch),
+		slog.Bool("committed", res.Committed),
+		slog.Bool("pushed", res.Pushed),
+		slog.String("commit", res.Commit),
+		slog.Int("retries", p.retries),
+		slog.Int64("lock_wait_ms", p.lockWait.Milliseconds()),
+		slog.Int64("duration_ms", p.now().Sub(start).Milliseconds()),
+	)
+	return res, nil
+}
+
+func (p *publisher) commitAndPush() (PublishResult, error) {
 	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); vfs.IsNotExist(err) {
 		return PublishResult{}, errNotSetUp(p.dir)
 	} else if err != nil {
 		return PublishResult{}, err
 	}
+	p.enter(stageLock)
 	unlock, err := p.lockPublish()
 	if err != nil {
 		return PublishResult{}, err
 	}
 	defer func() { _ = unlock() }()
+
+	p.enter(stageCheck)
 	if _, err := p.git("config", "--get", "remote."+publishRemote+".url"); err != nil {
 		if !gitAbsent(err) {
 			return PublishResult{}, err
@@ -152,7 +214,8 @@ func (p publisher) publish() (PublishResult, error) {
 		return PublishResult{}, err
 	}
 
-	out := PublishResult{Machine: p.id, Branch: p.branch()}
+	p.enter(stageCommit)
+	out := PublishResult{Machine: p.id, Branch: p.branch(), RemoteName: publishRemote}
 	if out.Committed, err = p.commit(); err != nil {
 		return PublishResult{}, err
 	}
@@ -172,9 +235,10 @@ func (p publisher) publish() (PublishResult, error) {
 		return PublishResult{}, err
 	}
 	if head != "" && head != published {
+		p.enter(stagePush)
 		// The full ref on both sides: a tag of the branch's name makes the short
 		// name ambiguous, and git refuses to push it.
-		if _, err := p.git("push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
+		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
 			var g *gitError
 			if gitRejected(err) && errors.As(err, &g) {
 				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
@@ -186,55 +250,113 @@ func (p publisher) publish() (PublishResult, error) {
 	return out, nil
 }
 
-// publisher is one publish's resolved inputs: the seams, the machine ID, the
-// central root the stores directory is under, and the wait between two tries
-// of the store locks, which an L2 test replaces so that it does not sleep.
+// publisher is one publish's inputs and what it has done so far: the seams,
+// the machine ID, the central root the stores directory is under, the logger
+// and clock of the options, and the wait between two tries of the store locks,
+// which an L2 test replaces so that it does not sleep.
 type publisher struct {
 	fs      vfs.FS
+	env     env.Environment
 	runner  exec.Runner
-	home    string
-	croot   string
-	dir     string // <croot>/stores, the git work tree
-	id      string
+	logger  *slog.Logger
+	now     func() time.Time
 	backoff func()
+	pid     int
+
+	// Set by load.
+	home  string
+	croot string
+	dir   string // <croot>/stores, the git work tree
+	id    string
+
+	// Set as the run goes, for its log records.
+	stage    string        // the stage running
+	retries  int           // tries of the store locks that found one busy
+	lockWait time.Duration // how long taking the store locks took
 }
 
-// loadPublish reads the per-user config once for the machine ID and the
-// central root. It writes nothing, so an invalid machine ID refuses before
-// anything is created.
-func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner) (publisher, error) {
-	home, cfg, croot, err := centralConfig(fs, e)
-	if err != nil {
-		return publisher{}, err
-	}
-	id, err := machineIDOf(cfg.MachineID, e.Hostname)
-	if err != nil {
-		return publisher{}, err
-	}
-	return publisher{
-		fs: fs, runner: runner, home: home, croot: croot,
-		dir: filepath.Join(croot, storesSubdir), id: id,
+// newPublisher reads the options into a publisher. Option configures a Store,
+// so they are applied to one that is never opened; only its logger and clock
+// are read back. The clock defaults to the wall clock, not to the store's
+// whole-second one, because it times the run as well as stamping the lock.
+func newPublisher(fs vfs.FS, e env.Environment, runner exec.Runner, opts []Option) *publisher {
+	o := Store{logger: discardLogger, now: time.Now}
+	o.applyOptions(opts)
+	return &publisher{
+		fs: fs, env: e, runner: runner, logger: o.logger, now: o.now, pid: e.Getpid(),
 		backoff: func() { time.Sleep(storeLockRetry) },
-	}, nil
+	}
 }
 
-func (p publisher) branch() string { return machineBranch(p.id) }
+// loadPublish is a publisher with its configuration loaded.
+func loadPublish(fs vfs.FS, e env.Environment, runner exec.Runner, opts ...Option) (*publisher, error) {
+	p := newPublisher(fs, e, runner, opts)
+	return p, p.load()
+}
+
+// load reads the per-user config once for the machine ID and the central
+// root. It writes nothing, so an invalid machine ID refuses before anything is
+// created.
+func (p *publisher) load() error {
+	p.enter(stageConfig)
+	home, cfg, croot, err := centralConfig(p.fs, p.env)
+	if err != nil {
+		return err
+	}
+	id, err := machineIDOf(cfg.MachineID, p.env.Hostname)
+	if err != nil {
+		return err
+	}
+	p.home, p.croot, p.dir, p.id = home, croot, filepath.Join(croot, storesSubdir), id
+	return nil
+}
+
+// enter starts a stage, and logs that it has: the last publish_stage record
+// of a run that hangs names where it hangs.
+func (p *publisher) enter(stage string) {
+	p.stage = stage
+	p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish_stage", slog.String("stage", stage))
+}
+
+// logFailure records a failed publish or init with the stage it failed in. A
+// busy publish lock is info, not error: a timer that fires while a manual sync
+// runs expects it, and the next tick publishes.
+func (p *publisher) logFailure(err error) {
+	level := slog.LevelError
+	if errors.Is(err, ErrPublishBusy) {
+		level = slog.LevelInfo
+	}
+	p.logger.LogAttrs(context.Background(), level, "publish_error",
+		slog.String("stage", p.stage),
+		slog.String("error", redactUserinfo(err.Error())),
+	)
+}
+
+func (p *publisher) branch() string { return machineBranch(p.id) }
 
 // ref is the branch's full ref name.
-func (p publisher) ref() string { return "refs/heads/" + p.branch() }
+func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
 
-// git runs one git command in the work tree and returns its stdout, trimmed.
-// stderr goes only into the error, so a warning git prints never becomes a
-// value the caller compares. No timeout: every command but the push is local,
-// and a push that hangs on the network is the user's to interrupt, which a
-// process left in the caller's process group allows.
-func (p publisher) git(args ...string) (string, error) {
+// git runs one local git command in the work tree, without a time limit, and
+// returns its stdout, trimmed.
+func (p *publisher) git(args ...string) (string, error) { return p.gitWithin(0, args...) }
+
+// gitWithin runs one git command in the work tree, killed after timeout when
+// it is not zero, and returns its stdout, trimmed. stderr goes only into the
+// error and the log, so a warning git prints never becomes a value the caller
+// compares.
+func (p *publisher) gitWithin(timeout time.Duration, args ...string) (string, error) {
 	res := p.runner.Run(exec.Spec{
-		Argv:  slices.Concat([]string{"git"}, publishGitSettings, args),
-		Dir:   p.dir,
-		Env:   publishIdentity(p.id),
-		Unset: publishUnsetEnv,
+		Argv:    slices.Concat([]string{"git"}, publishGitSettings, args),
+		Dir:     p.dir,
+		Env:     publishIdentity(p.id),
+		Unset:   publishUnsetEnv,
+		Timeout: timeout,
+		// In taskmgr's process group, so a Ctrl-C ends the push with the
+		// publish and its lock: a push left running would race the next one.
+		KeepGroup: true,
 	})
+	p.logGit(args, res)
 	switch res.Category {
 	case exec.Completed:
 		if res.ExitCode == 0 {
@@ -250,9 +372,36 @@ func (p publisher) git(args ...string) (string, error) {
 			return "", errGitMissing(res.Err)
 		}
 		return "", errGitSpawn(res.Err)
+	case exec.Timeout:
+		return "", errGitTimeout(args, timeout, res.Stderr)
 	default:
 		return "", errGitKilled(args, res.Err)
 	}
+}
+
+// logGit records one git run. A success, and an exit 1 that answers a question
+// (gitAnswer), are debug; any other exit, and git that did not exit on its own
+// — not started, timed out, killed — are warn with git's stderr, and exit -1
+// for the last three.
+func (p *publisher) logGit(args []string, res exec.Result) {
+	exit := res.ExitCode
+	if res.Category != exec.Completed {
+		exit = -1
+	}
+	attrs := []slog.Attr{
+		slog.String("cmd", args[0]),
+		slog.Int("exit", exit),
+		slog.Int64("duration_ms", res.Duration.Milliseconds()),
+	}
+	if exit == 0 || exit == 1 && gitAnswer(args) {
+		p.logger.LogAttrs(context.Background(), slog.LevelDebug, "publish_git", attrs...)
+		return
+	}
+	attrs = append(attrs, slog.String("stderr", logStderr(res.Stderr)))
+	if res.Err != nil {
+		attrs = append(attrs, slog.String("error", redactUserinfo(res.Err.Error())))
+	}
+	p.logger.LogAttrs(context.Background(), slog.LevelWarn, "publish_git", attrs...)
 }
 
 // pointUnbornHead points a HEAD with no commit yet at this machine's branch,
@@ -261,7 +410,7 @@ func (p publisher) git(args ...string) (string, error) {
 // `git init`, which left HEAD at git's default branch. An unborn HEAD has no
 // commit to lose, so re-pointing it is safe; a HEAD with commits is left to
 // checkBranch.
-func (p publisher) pointUnbornHead() error {
+func (p *publisher) pointUnbornHead() error {
 	head, err := p.revision("HEAD")
 	if err != nil || head != "" {
 		return err
@@ -271,7 +420,7 @@ func (p publisher) pointUnbornHead() error {
 }
 
 // checkBranch refuses a work tree whose branch is not this machine's.
-func (p publisher) checkBranch() error {
+func (p *publisher) checkBranch() error {
 	// The full ref, not --short: a tag of the same name makes --short print
 	// heads/machine/<id>.
 	ref, err := p.git("symbolic-ref", "--quiet", "HEAD")
@@ -300,7 +449,7 @@ func (p publisher) checkBranch() error {
 // and writes nothing when the file already holds them. It is the repository's
 // own file, never committed, so the patterns cannot be edited away in a commit
 // or travel to a reader of the mirror.
-func (p publisher) writeExcludes() error {
+func (p *publisher) writeExcludes() error {
 	path := filepath.Join(p.dir, ".git", "info", "exclude")
 	want := publishExcludes(vfs.TempPrefix)
 	cur, err := p.fs.ReadFile(path)
@@ -320,7 +469,7 @@ func (p publisher) writeExcludes() error {
 // central-root lock and the write lock of every registered central store, and
 // reports whether it made a commit. The locks cover two local git commands and
 // nothing else.
-func (p publisher) commit() (committed bool, err error) {
+func (p *publisher) commit() (committed bool, err error) {
 	unlock, err := p.lockStores()
 	if err != nil {
 		return false, err
@@ -346,13 +495,25 @@ func (p publisher) commit() (committed bool, err error) {
 // registered central store, and returns the func that releases them all. It
 // never waits while it holds one: when any is busy it releases every lock it
 // took, waits holding nothing, and tries again, so a long write to one store
-// does not stall the writers of every store locked before it.
-func (p publisher) lockStores() (unlock func(), err error) {
+// does not stall the writers of every store locked before it. A wait that
+// reaches publishLockWaitWarn is logged once, naming the busy store.
+func (p *publisher) lockStores() (unlock func(), err error) {
+	start := p.now()
+	warned := false
 	for {
-		unlock, err := p.tryLockStores()
+		unlock, busy, err := p.tryLockStores()
 		if unlock != nil || err != nil {
+			p.lockWait = p.now().Sub(start)
 			return unlock, err
 		}
+		if waited := p.now().Sub(start); !warned && waited >= publishLockWaitWarn {
+			warned = true
+			p.logger.LogAttrs(context.Background(), slog.LevelWarn, "publish_lock_wait",
+				slog.String("store", busy),
+				slog.Int64("waited_ms", waited.Milliseconds()),
+			)
+		}
+		p.retries++
 		p.backoff()
 	}
 }
@@ -361,10 +522,11 @@ func (p publisher) lockStores() (unlock func(), err error) {
 // registry read under it, then each store's lock in name order. The central
 // lock comes first, as in every registry operation, so no store is created,
 // moved in or renamed while the commit runs. A registered store whose
-// directory is gone has nothing to lock and is skipped. It returns nil and no
-// error, holding nothing, when a lock is busy; the returned func releases every
-// lock taken, the central one last.
-func (p publisher) tryLockStores() (unlock func(), err error) {
+// directory is gone has nothing to lock and is skipped. When a lock is busy it
+// returns no unlock and no error, holding nothing, and busy names the store,
+// or busyCentralRoot; the returned func releases every lock taken, the central
+// one last.
+func (p *publisher) tryLockStores() (unlock func(), busy string, err error) {
 	var held []func() error
 	release := func() {
 		for i := len(held) - 1; i >= 0; i-- {
@@ -373,14 +535,14 @@ func (p publisher) tryLockStores() (unlock func(), err error) {
 	}
 	central, ok, err := p.fs.TryLock(filepath.Join(p.croot, centralLockName))
 	if err != nil || !ok {
-		return nil, err
+		return nil, busyCentralRoot, err
 	}
 	held = append(held, central)
 
 	entries, err := loadRegistry(p.fs, p.croot, p.home)
 	if err != nil {
 		release()
-		return nil, err
+		return nil, "", err
 	}
 	names := make([]string, 0, len(entries))
 	for _, en := range entries {
@@ -394,23 +556,45 @@ func (p publisher) tryLockStores() (unlock func(), err error) {
 		}
 		if err != nil || !ok {
 			release()
-			return nil, err
+			return nil, name, err
 		}
 		held = append(held, u)
 	}
-	return release, nil
+	return release, "", nil
 }
 
-// lockPublish takes the lock that runs one publish at a time, push included.
-// Without it two publishes push the same branch at once and the remote refuses
-// one ref update. No writer takes it, so it stalls nothing but another publish.
-func (p publisher) lockPublish() (func() error, error) {
-	return p.fs.Lock(filepath.Join(p.croot, publishLockName))
+// lockPublish takes the lock that runs one publish at a time, push included,
+// without waiting: when another publish or init holds it, it refuses with
+// ErrPublishBusy, naming the holder the lock file describes. Without it two
+// publishes push the same branch at once and the remote refuses one ref
+// update; refusing rather than queueing keeps a timer from stacking runs
+// behind a hung one. No writer takes it, so it stalls nothing but another
+// publish.
+//
+// The holder writes its PID and start time into the lock file in place, which
+// keeps the lock it holds on the file. Release leaves the content: the lock,
+// not the content, says whether a publish runs, and the next holder
+// overwrites it.
+func (p *publisher) lockPublish() (func() error, error) {
+	path := filepath.Join(p.croot, publishLockName)
+	unlock, ok, err := p.fs.TryLock(path)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		content, _ := p.fs.ReadFile(path)
+		return nil, errPublishBusy(content)
+	}
+	if err := p.fs.WriteInPlace(path, publishHolder(p.pid, p.now()), 0o644); err != nil {
+		_ = unlock()
+		return nil, err
+	}
+	return unlock, nil
 }
 
 // revision returns the commit ref names, or "" when there is none — an unborn
 // HEAD, or a branch never pushed.
-func (p publisher) revision(ref string) (string, error) {
+func (p *publisher) revision(ref string) (string, error) {
 	sha, err := p.git("rev-parse", "--verify", "--quiet", ref)
 	if gitAbsent(err) {
 		return "", nil

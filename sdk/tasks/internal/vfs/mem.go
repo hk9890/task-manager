@@ -266,6 +266,24 @@ func (m *Mem) WriteAtomic(name string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// WriteInPlace sets the content of name, as WriteAtomic does: the Mem has no
+// file identity a rename could replace, so a lock on name is unaffected either
+// way. It honours FailOn("WriteInPlace", …).
+func (m *Mem) WriteInPlace(name string, data []byte, perm os.FileMode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFault("WriteInPlace", name); err != nil {
+		return err
+	}
+	if err := m.requireParentDir(name, "parent directory"); err != nil {
+		return err
+	}
+	m.files[name] = bytes.Clone(data)
+	m.changed(name)
+	return nil
+}
+
 // Append appends data to the named file, creating it if it does not exist.
 //
 // The parent directory must already exist (created via MkdirAll); if it does

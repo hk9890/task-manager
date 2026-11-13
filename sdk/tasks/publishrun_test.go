@@ -27,6 +27,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hk9890/task-manager/sdk/tasks/internal/env"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
@@ -225,8 +226,15 @@ func TestPublish_RunsGitInTheStoresWithTheFixedIdentityAndSettings(t *testing.T)
 				t.Errorf("git %q inherits %s", c.Argv, name)
 			}
 		}
-		if c.Timeout != 0 {
-			t.Errorf("git %q has timeout %v, want none", c.Argv, c.Timeout)
+		want := time.Duration(0)
+		if c.Argv[len(publishGitSettings)+1] == "push" {
+			want = publishPushTimeout
+		}
+		if c.Timeout != want {
+			t.Errorf("git %q has timeout %v, want %v", c.Argv, c.Timeout, want)
+		}
+		if !c.KeepGroup {
+			t.Errorf("git %q leaves taskmgr's process group: a Ctrl-C would leave it running", c.Argv)
 		}
 	}
 	got := subcommands(runner.Calls())
@@ -347,7 +355,7 @@ func TestPublish_BusyStoreReleasesEveryLockBeforeWaiting(t *testing.T) {
 }
 
 // Two publishes that push at once make the remote refuse one ref update; the
-// publish lock, which no writer takes, makes them run one after the other.
+// publish lock, which no writer takes, lets only one of them run.
 func TestPublish_HoldsThePublishLockAroundEveryGitCommand(t *testing.T) {
 	fs, e, runner, g := publishFixture(t, true)
 	if _, err := publishWith(fs, e, runner); err != nil {
@@ -377,7 +385,7 @@ func TestPublish_NothingNewCommitsAndPushesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publishWith: %v", err)
 	}
-	if res != (PublishResult{Machine: "laptop", Branch: "machine/laptop"}) {
+	if res != (PublishResult{Machine: "laptop", Branch: "machine/laptop", RemoteName: "origin"}) {
 		t.Errorf("result = %+v, want nothing done", res)
 	}
 	if got := subcommands(runner.Calls()); slices.ContainsFunc(got, func(s string) bool {
@@ -605,7 +613,7 @@ func TestInitPublish_CreatesTheWorkTreeOnTheMachineBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initPublishWith: %v", err)
 	}
-	want := PublishInfo{Machine: "laptop", Branch: "machine/laptop", Path: publishStores, Remote: "/remote.git"}
+	want := PublishInfo{Machine: "laptop", Branch: "machine/laptop", Path: publishStores, Remote: "/remote.git", RemoteName: "origin"}
 	if info != want {
 		t.Errorf("info = %+v, want %+v", info, want)
 	}
@@ -727,5 +735,82 @@ func TestLoadPublish_MachineIDConfiguredElseHostname(t *testing.T) {
 	}
 	if p, err := loadPublish(fs, e, nil); err != nil || p.id != "desk-1" {
 		t.Errorf("machine ID from the config = %q, %v", p.id, err)
+	}
+}
+
+// holdPublishLock takes the publish lock as a publish with PID 4711, started
+// at 14:02:00Z, would, and returns its release.
+func holdPublishLock(t *testing.T, fs vfs.FS, e env.Fake) func() error {
+	t.Helper()
+	e.Pid = 4711
+	at := time.Date(2026, 11, 13, 14, 2, 0, 0, time.UTC)
+	holder, err := loadPublish(fs, e, nil, WithClock(func() time.Time { return at }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := holder.lockPublish()
+	if err != nil {
+		t.Fatalf("lockPublish: %v", err)
+	}
+	return unlock
+}
+
+// A timer that fires while another sync runs must not queue behind it: it
+// refuses at once, naming the run that holds the lock.
+func TestPublish_BusyPublishLockRefusesNamingTheHolder(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	unlock := holdPublishLock(t, fs, e)
+	const want = "another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)"
+	if _, err := publishWith(fs, e, runner); !errors.Is(err, ErrPublishBusy) || err.Error() != want {
+		t.Errorf("publish while another runs: %v, want %q", err, want)
+	}
+	if _, err := initPublishWith("/remote.git", fs, e, runner); !errors.Is(err, ErrPublishBusy) || err.Error() != want {
+		t.Errorf("init while a publish runs: %v, want %q", err, want)
+	}
+	if n := len(runner.Calls()); n != 0 {
+		t.Errorf("a refused publish ran git %d times", n)
+	}
+
+	// The lock, not the content, decides: the content the holder leaves
+	// behind does not refuse the next publish.
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishWith(fs, e, runner); err != nil {
+		t.Errorf("publish after the holder released: %v", err)
+	}
+}
+
+// The holder's content is informative: a lock file that does not name one —
+// not yet written, cut short — still refuses, with the bare message.
+func TestPublish_BusyPublishLockWithoutAHolderStillRefuses(t *testing.T) {
+	fs, e, runner, _ := publishFixture(t, true)
+	fs.busy["publish"] = true
+	if err := fs.WriteInPlace(filepath.Join("/home", publishLockName), []byte("pid: 47"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishWith(fs, e, runner); !errors.Is(err, ErrPublishBusy) || err.Error() != ErrPublishBusy.Error() {
+		t.Errorf("publish under a lock with no holder named: %v, want %q", err, ErrPublishBusy)
+	}
+}
+
+func TestPublish_WritesTheHolderIntoTheLockFile(t *testing.T) {
+	fs, e, _, _ := publishFixture(t, true)
+	unlock := holdPublishLock(t, fs, e)
+	defer func() { _ = unlock() }()
+	got, err := fs.ReadFile(filepath.Join("/home", publishLockName))
+	if err != nil || string(got) != "pid: 4711\nsince: 2026-11-13T14:02:00Z\n" {
+		t.Errorf("lock file = %q, %v; want the holder's pid and start", got, err)
+	}
+}
+
+// A dead connection must end an unattended run: the seam kills the push, and
+// the error says so, with what git said before it was killed.
+func TestPublish_PushTimeoutEndsTheRun(t *testing.T) {
+	fs, e, runner, g := publishFixture(t, true)
+	g.fail = map[string]exec.Result{"push": {Category: exec.Timeout, Stderr: []byte("Connecting to example.com...\n"), Err: errors.New("signal: terminated")}}
+	_, err := publishWith(fs, e, runner)
+	if err == nil || !strings.Contains(err.Error(), "push timed out after 2m0s: Connecting to example.com...") {
+		t.Errorf("hung push: %v, want 'push timed out after 2m0s' with git's stderr", err)
 	}
 }

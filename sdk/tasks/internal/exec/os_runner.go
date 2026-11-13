@@ -111,15 +111,22 @@ func (osRunner) Run(spec Spec) Result {
 	// would be bounded by nothing and interruptible by nothing — a hang the user
 	// has to find with ps. An unlimited hook therefore stays in taskmgr's group,
 	// where Ctrl-C still reaches both.
+	//
+	// A KeepGroup process stays in taskmgr's group even with a timeout, so a
+	// Ctrl-C ends it together with taskmgr instead of leaving it to run on
+	// unbounded; its timeout then signals it alone.
+	detached := spec.Timeout > 0 && !spec.KeepGroup
 	if spec.Timeout > 0 {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
 		// On timeout, send SIGTERM to the whole group (the default would SIGKILL
 		// the spawned process alone); WaitDelay then upgrades to SIGKILL after
 		// KillGrace if it has not exited. A hook that ignores SIGTERM therefore
 		// still costs hook_timeout + KillGrace, the documented ceiling
 		// (HOOK-SPEC §8).
-		cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		if detached {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Cancel = func() error { return killGroup(cmd.Process.Pid, syscall.SIGTERM) }
+		}
 		cmd.WaitDelay = KillGrace
 	}
 
@@ -156,8 +163,11 @@ func (osRunner) Run(spec Spec) Result {
 		// the group SIGTERM — the ["sh", "-c", ...] tree killGroup exists for —
 		// outlives the run as an orphan. SIGTERM went to the group; SIGKILL has
 		// to as well, or the escalation only half happens. ESRCH (nothing left)
-		// is the expected case and is discarded.
-		_ = killGroup(pid, syscall.SIGKILL)
+		// is the expected case and is discarded. A KeepGroup process leads no
+		// group, so there is none to sweep.
+		if detached {
+			_ = killGroup(pid, syscall.SIGKILL)
+		}
 		res.Category = Timeout
 		res.Err = err
 		return res

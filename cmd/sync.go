@@ -47,9 +47,6 @@ type syncInitDTO struct {
 	Remote  string `json:"remote"`
 }
 
-// syncRemote is the remote the summary names; the SDK publishes to no other.
-const syncRemote = "origin"
-
 var syncInitFlags struct{ remote string }
 
 var syncCmd = &cobra.Command{
@@ -63,7 +60,12 @@ always a fast-forward. A push the remote rejects means another machine uses
 this machine ID, or this machine was set up again: pick another machine_id.
 
 A run with nothing new commits nothing and reaches no network. Project-local
-.tasks stores are not published.`,
+.tasks stores are not published.
+
+One sync runs at a time: a second one, or a 'sync init', fails at once and
+names the process that is running. A push that has not finished after 2
+minutes is stopped, and the sync fails; the next sync pushes the commit.
+TASKMGR_LOG=debug logs each step on stderr.`,
 	Example: "taskmgr sync",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -90,7 +92,7 @@ remote is refused rather than overwritten.`,
 
 // initSync makes the central stores directory a work tree publishing to url.
 func initSync(url string) error {
-	info, err := tasks.InitPublish(url)
+	info, err := tasks.InitPublish(url, logOption())
 	if err != nil {
 		return err
 	}
@@ -105,25 +107,24 @@ func initSync(url string) error {
 // runSync commits what changed under the central stores directory and pushes
 // it.
 func runSync() error {
-	res, err := tasks.Publish()
+	res, err := tasks.Publish(logOption())
 	if err != nil {
 		return err
 	}
-	out := syncDTO{Machine: res.Machine, Branch: res.Branch, Committed: res.Committed, Commit: res.Commit, Pushed: res.Pushed}
 	if flagJSON {
-		return printJSON(out)
+		return printJSON(syncDTO{Machine: res.Machine, Branch: res.Branch, Committed: res.Committed, Commit: res.Commit, Pushed: res.Pushed})
 	}
-	_, _ = fmt.Fprintln(stdout, syncSummary(out))
+	_, _ = fmt.Fprintln(stdout, syncSummary(res))
 	return nil
 }
 
 // syncSummary is the one line `sync` prints.
-func syncSummary(r syncDTO) string {
+func syncSummary(r tasks.PublishResult) string {
 	switch {
 	case r.Committed && r.Pushed:
-		return fmt.Sprintf("Committed %s and pushed %s to %s", shortSHA(r.Commit), r.Branch, syncRemote)
+		return fmt.Sprintf("Committed %s and pushed %s to %s", shortSHA(r.Commit), r.Branch, r.RemoteName)
 	case r.Pushed:
-		return fmt.Sprintf("Nothing new to commit; pushed %s to %s", r.Branch, syncRemote)
+		return fmt.Sprintf("Nothing new to commit; pushed %s to %s", r.Branch, r.RemoteName)
 	default:
 		return "Nothing to publish: no change since the last sync"
 	}

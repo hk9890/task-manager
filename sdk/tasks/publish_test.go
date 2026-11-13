@@ -25,6 +25,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func TestDeriveMachineID_NormalisesHostnames(t *testing.T) {
@@ -195,5 +197,100 @@ func TestPublishExcludes_BuiltFromTheEngineNames(t *testing.T) {
 		if l != "" && !strings.HasPrefix(l, "#") && strings.Contains(l, ".tmp-") {
 			t.Errorf("pattern %q copies the vfs temp prefix instead of taking it", l)
 		}
+	}
+}
+
+func TestRedactUserinfo_StripsCredentialsFromSchemeURLsOnly(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://user:token@github.com/you/stores.git", "https://github.com/you/stores.git"},
+		{"https://token@github.com/x.git", "https://github.com/x.git"},
+		{"ssh://git@host:22/x.git", "ssh://host:22/x.git"},
+		{"fatal: unable to access 'https://u:p@h/x/': 403", "fatal: unable to access 'https://h/x/': 403"},
+		{"a https://u:p@h/1 and http://v@k/2", "a https://h/1 and http://k/2"},
+		{"git@github.com:you/stores.git", "git@github.com:you/stores.git"},
+		{"/srv/remote.git", "/srv/remote.git"},
+		{"https://github.com/a@b", "https://github.com/a@b"},
+	} {
+		if got := redactUserinfo(tc.in); got != tc.want {
+			t.Errorf("redactUserinfo(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestErrRemoteChanged_CredentialsOnly_SaysSoWithoutEither(t *testing.T) {
+	msg := errRemoteChanged("/c/stores", "https://u:old@h/x.git", "https://u:new@h/x.git").Error()
+	for _, secret := range []string{"old", "new@"} {
+		if strings.Contains(msg, secret) {
+			t.Errorf("message %q repeats a credential", msg)
+		}
+	}
+	for _, want := range []string{"https://h/x.git with other credentials", "remote set-url origin <url>"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "not https://h/x.git") {
+		t.Errorf("message %q names the same URL as old and new", msg)
+	}
+}
+
+func TestErrRemoteChanged_OtherURL_NamesBoth(t *testing.T) {
+	msg := errRemoteChanged("/c/stores", "https://u:t@h/a.git", "https://h/b.git").Error()
+	if !strings.Contains(msg, "already publishes to https://h/a.git, not https://h/b.git") {
+		t.Errorf("message %q does not name both remotes", msg)
+	}
+}
+
+func TestErrPublishBusy_NamesTheHolderTheContentDescribes(t *testing.T) {
+	at := time.Date(2026, 11, 13, 15, 2, 0, 0, time.FixedZone("CET", 3600))
+	if got, want := errPublishBusy(publishHolder(4711, at)).Error(), "another taskmgr sync is running (pid 4711, since 2026-11-13T14:02:00Z)"; got != want {
+		t.Errorf("busy with a holder = %q, want %q", got, want)
+	}
+	for _, content := range []string{"", "pid: 4711\n", "since: 2026-11-13T14:02:00Z\n", "pid: 0\nsince: 2026-11-13T14:02:00Z\n", "pid: x\nsince: 2026-11-13T14:02:00Z\n", "pid: 4711\nsince: yesterday\n"} {
+		err := errPublishBusy([]byte(content))
+		if !errors.Is(err, ErrPublishBusy) || err.Error() != "another taskmgr sync is running" {
+			t.Errorf("busy with content %q = %q, want the bare ErrPublishBusy", content, err)
+		}
+	}
+}
+
+func TestGitAnswer_OnlyTheQuestionsThatExitOne(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"config", "--get", "remote.origin.url"}, true},
+		{[]string{"diff", "--cached", "--quiet"}, true},
+		{[]string{"rev-parse", "--verify", "--quiet", "HEAD"}, true},
+		{[]string{"symbolic-ref", "--quiet", "HEAD"}, true},
+		{[]string{"symbolic-ref", "HEAD", "refs/heads/machine/laptop"}, false},
+		{[]string{"push", "--quiet", "--no-verify", "origin", "x:x"}, false},
+		{[]string{"commit", "--quiet", "--no-verify", "-m", ""}, false},
+		{[]string{"add", "--all"}, false},
+		{[]string{"config"}, false},
+	} {
+		if got := gitAnswer(tc.args); got != tc.want {
+			t.Errorf("gitAnswer(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestLogStderr_TrimsRedactsAndBounds(t *testing.T) {
+	if got := logStderr([]byte("  fatal: 'https://u:p@h/x' failed\n")); got != "fatal: 'https://h/x' failed" {
+		t.Errorf("logStderr = %q", got)
+	}
+	long := logStderr([]byte(strings.Repeat("é", logStderrMax)))
+	if !strings.HasSuffix(long, "…") || len(long) > logStderrMax+len("…") || !utf8.ValidString(long) {
+		t.Errorf("long stderr cut to %d bytes, valid %v; want at most %d and a marker", len(long), utf8.ValidString(long), logStderrMax)
+	}
+}
+
+func TestErrGitTimeout_NamesTheCommandTheLimitAndGitsStderr(t *testing.T) {
+	err := errGitTimeout([]string{"push", "origin"}, publishPushTimeout, []byte("fatal: https://u:p@h/x hangs\n"))
+	if got, want := err.Error(), "push timed out after 2m0s: fatal: https://h/x hangs"; got != want {
+		t.Errorf("errGitTimeout = %q, want %q", got, want)
+	}
+	if got := errGitTimeout([]string{"push"}, publishPushTimeout, nil).Error(); got != "push timed out after 2m0s" {
+		t.Errorf("errGitTimeout without stderr = %q", got)
 	}
 }

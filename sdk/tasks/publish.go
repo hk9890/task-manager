@@ -27,24 +27,28 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // PublishInfo is what InitPublish set up (SDK-SPEC §1).
 type PublishInfo struct {
-	Machine string // the machine ID
-	Branch  string // machine/<Machine>, the branch published to
-	Path    string // <central_root>/stores, the git work tree
-	Remote  string // the URL the remote "origin" publishes to
+	Machine    string // the machine ID
+	Branch     string // machine/<Machine>, the branch published to
+	Path       string // <central_root>/stores, the git work tree
+	Remote     string // the URL the remote RemoteName publishes to
+	RemoteName string // the git remote's name, "origin"
 }
 
 // PublishResult is what one Publish did (SDK-SPEC §1).
 type PublishResult struct {
-	Machine   string // the machine ID
-	Branch    string // machine/<Machine>, the branch published to
-	Committed bool   // this run made a commit
-	Commit    string // its full SHA; "" when Committed is false
-	Pushed    bool   // this run pushed
+	Machine    string // the machine ID
+	Branch     string // machine/<Machine>, the branch published to
+	RemoteName string // the git remote's name, "origin"
+	Committed  bool   // this run made a commit
+	Commit     string // its full SHA; "" when Committed is false
+	Pushed     bool   // this run pushed
 }
 
 // Errors InitPublish and Publish refuse with (SDK-SPEC §1, §6). Each message
@@ -62,10 +66,102 @@ var (
 	ErrMachineIDClash = errors.New("another machine publishes under this machine ID")
 	// ErrGitMissing is git not found on PATH.
 	ErrGitMissing = errors.New("git is not on PATH")
+	// ErrPublishBusy is another publish or init holding the publish lock. The
+	// message names its process ID and start time when the lock file holds
+	// them.
+	ErrPublishBusy = errors.New("another taskmgr sync is running")
 )
 
 // publishRemote is the one remote a publish pushes to.
 const publishRemote = "origin"
+
+// publishPushTimeout ends a push that has not finished. A publish runs
+// unattended, from a timer, so a dead connection must end the run rather than
+// hold the publish lock until someone notices; every other git command is
+// local and runs without a limit.
+const publishPushTimeout = 2 * time.Minute
+
+// The stages of a publish and an init, in the order they start. Each is
+// logged when it starts, so the last publish_stage record of a hung run names
+// where it hangs, and a failure is logged with the stage it happened in
+// (MONITORING.md).
+const (
+	stageConfig = "config" // read the per-user config and the machine ID
+	stageLock   = "lock"   // take the publish lock
+	stageInit   = "init"   // init only: create the repository and its remote
+	stageCheck  = "check"  // publish only: the remote, the branch, the excludes
+	stageCommit = "commit" // take the store locks, add, commit
+	stagePush   = "push"   // push the branch
+)
+
+// publishHolder is what the publish lock file holds while a publish runs: the
+// holder's process ID and when it took the lock, so a refused publish can say
+// which one is running. The lock, not this content, says whether one runs.
+func publishHolder(pid int, since time.Time) []byte {
+	return fmt.Appendf(nil, "pid: %d\nsince: %s\n", pid, since.UTC().Format(time.RFC3339))
+}
+
+// errPublishBusy is ErrPublishBusy naming the holder that content, the lock
+// file's, describes. Content that does not name one — empty, half written,
+// unreadable — still refuses, with the bare message.
+func errPublishBusy(content []byte) error {
+	var pid, since string
+	for line := range strings.SplitSeq(string(content), "\n") {
+		key, value, _ := strings.Cut(line, ": ")
+		switch key {
+		case "pid":
+			pid = value
+		case "since":
+			since = value
+		}
+	}
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 0 {
+		return ErrPublishBusy
+	}
+	at, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return ErrPublishBusy
+	}
+	return fmt.Errorf("%w (pid %d, since %s)", ErrPublishBusy, n, at.UTC().Format(time.RFC3339))
+}
+
+// userinfoRe matches the user and password of a URL with a scheme, as in
+// https://user:token@host/path.
+var userinfoRe = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
+
+// redactUserinfo removes the user and password from every URL with a scheme
+// in s. A remote URL may carry a token, and an error or a log record must not
+// repeat it. An scp-form address (git@host:path) names a user and no secret,
+// and is left as it is.
+func redactUserinfo(s string) string { return userinfoRe.ReplaceAllString(s, "$1") }
+
+// gitAnswer reports whether exit 1 from git args is an answer rather than a
+// failure: "no such key" from config --get, "differences" from diff --quiet,
+// "no such ref" from rev-parse --verify, and "not a symbolic ref" from
+// symbolic-ref --quiet. gitAbsent is how the caller reads one; the log
+// records one at debug, not as a failed git run.
+func gitAnswer(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	flag, ok := map[string]string{"config": "--get", "diff": "--quiet", "rev-parse": "--verify", "symbolic-ref": "--quiet"}[args[0]]
+	return ok && slices.Contains(args[1:], flag)
+}
+
+// logStderrMax bounds the git stderr a publish_git record carries: enough for
+// git's message, not a whole transfer log.
+const logStderrMax = 1024
+
+// logStderr is git's stderr as a log field: trimmed, redacted, and cut at
+// logStderrMax bytes.
+func logStderr(stderr []byte) string {
+	s := redactUserinfo(strings.TrimSpace(string(stderr)))
+	if len(s) > logStderrMax {
+		s = strings.ToValidUTF8(s[:logStderrMax], "") + "…"
+	}
+	return s
+}
 
 // machineIDRe is the machine-ID grammar (CONFIG-SPEC §2). It is a git ref
 // component and an email local part as it stands, so neither needs escaping.
@@ -156,7 +252,8 @@ func localRelativeRemote(url string) bool {
 // files out of the mirror; line-ending conversion and the filters a global
 // attributes file names would make the snapshot differ from the engine's
 // bytes, and a filter runs a program; an fsmonitor is a program too; signing
-// would need a key or a prompt.
+// would need a key or a prompt; git's advice on a rejected push is to pull,
+// which a publish must never do.
 var publishGitSettings = []string{
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "core.excludesFile=/dev/null",
@@ -166,6 +263,7 @@ var publishGitSettings = []string{
 	"-c", "core.fsmonitor=false",
 	"-c", "commit.gpgSign=false",
 	"-c", "push.gpgSign=false",
+	"-c", "advice.pushUpdateRejected=false",
 }
 
 // gitRepoEnv is what `git rev-parse --local-env-vars` lists: the variables that
@@ -210,9 +308,9 @@ type gitError struct {
 func (e *gitError) Error() string {
 	head := fmt.Sprintf("git %s: exit status %d", strings.Join(e.Args, " "), e.ExitCode)
 	if e.Message == "" {
-		return head
+		return redactUserinfo(head)
 	}
-	return head + ": " + e.Message
+	return redactUserinfo(head + ": " + e.Message)
 }
 
 // gitAbsent reports whether err is git exiting 1: its answer "no such key" to
@@ -244,7 +342,17 @@ func errGitSpawn(cause error) error {
 
 // errGitKilled is git that started and was killed by a signal.
 func errGitKilled(args []string, cause error) error {
-	return fmt.Errorf("git %s: %v", strings.Join(args, " "), cause)
+	return errors.New(redactUserinfo(fmt.Sprintf("git %s: %v", strings.Join(args, " "), cause)))
+}
+
+// errGitTimeout is git that the seam killed when timeout ran out, with what
+// git wrote to stderr before then.
+func errGitTimeout(args []string, timeout time.Duration, stderr []byte) error {
+	msg := fmt.Sprintf("%s timed out after %s", args[0], timeout)
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		msg += ": " + s
+	}
+	return errors.New(redactUserinfo(msg))
 }
 
 func errNotSetUp(dir string) error {
@@ -257,8 +365,15 @@ func errNoRemote(dir string) error {
 
 // errRemoteChanged names `git remote remove`, not `set-url`: removing the remote
 // also removes its remote-tracking ref, which a publish reads as what was last
-// pushed, so the next one pushes the whole branch to the new remote.
+// pushed, so the next one pushes the whole branch to the new remote. URLs that
+// differ only in their credentials name one remote, so `set-url` keeps that ref;
+// the message cannot show either credential, so it says that they differ.
 func errRemoteChanged(dir, cur, url string) error {
+	cur, url = redactUserinfo(cur), redactUserinfo(url)
+	if cur == url {
+		return fmt.Errorf("%s already publishes to %s with other credentials in the URL; to use the new ones, run 'git -C %s remote set-url %s <url>' with the new URL",
+			dir, url, dir, publishRemote)
+	}
 	return fmt.Errorf("%s already publishes to %s, not %s; to publish to %s instead, run 'git -C %s remote remove %s' and then this command again",
 		dir, cur, url, url, dir, publishRemote)
 }
@@ -304,5 +419,5 @@ func errWrongBranch(dir, ref, id string, unborn, branchExists bool) error {
 func errNotFastForward(dir, id, gitMsg string) error {
 	return fmt.Errorf("%w %q: the remote rejected the push of %s because it holds commits this machine never made, so another machine uses this ID, or this machine was set up again. "+
 		"Pick another ID with 'taskmgr config set machine_id <id> --global', move the work tree to it with 'git -C %s branch -m machine/<id>', and run 'taskmgr sync' again. git said: %s",
-		ErrMachineIDClash, id, machineBranch(id), dir, gitMsg)
+		ErrMachineIDClash, id, machineBranch(id), dir, redactUserinfo(gitMsg))
 }

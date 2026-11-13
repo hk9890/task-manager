@@ -585,10 +585,25 @@ This section is the command surface over it.
 Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
 `git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
 `sync init` yet, another remote, a branch other than `machine/<machine-id>`, a rejected
-push — exits `1` with its message on stderr and prints nothing on stdout. A rejected push
-prints git's own message after the explanation. git runs with the user's line-ending,
-attributes, fsmonitor, hook and signing settings turned off, so the published files are
-the stores' own bytes; the list is SDK-SPEC's.
+push, a push that timed out, another `sync` or `sync init` running — exits `1` with its
+message on stderr and prints nothing on stdout. A rejected push prints git's own message
+after the explanation. git runs with the user's line-ending, attributes, fsmonitor, hook
+and signing settings turned off, so the published files are the stores' own bytes; the
+list is SDK-SPEC's.
+
+- **One at a time.** A `sync` or `sync init` while another runs on the machine does not
+  wait: it exits `1` with `another taskmgr sync is running (pid <pid>, since <time>)`,
+  the time in UTC, RFC 3339, or without the parenthesis when the running one has not
+  recorded itself yet. A timer that fires during a manual sync therefore fails one tick
+  instead of queueing behind it.
+- **A push has 2 minutes.** A push not finished by then is stopped and exits `1` with
+  `push timed out after 2m0s`; the commit is kept and the next `sync` pushes it. A Ctrl-C
+  during a push ends both `taskmgr` and the push (SDK-SPEC).
+- **Logging.** Both commands pass the CLI's logger (`TASKMGR_LOG`, §1) to the SDK.
+  `TASKMGR_LOG=debug` puts each stage, each git command and the outcome on stderr; the
+  records are [MONITORING.md § Publishing](../MONITORING.md#publishing)'s. At the default
+  level a failed run also writes its `publish_error` record — and a failed git command its
+  `publish_git` record — to stderr, before the `taskmgr: <message>` line.
 
 ### `taskmgr sync init --remote <url>`
 
@@ -601,6 +616,8 @@ publishes to `url`.
 
 Running `init` again with the same remote changes nothing and exits `0`. Another remote
 exits `1`, and the message names `git remote remove origin` to run before `init` again.
+A URL that differs only in its credentials exits `1` and names
+`git remote set-url origin <url>` instead.
 An `init` that stopped after creating the repository is repaired by running it again: a
 branch with no commit yet is moved to `machine/<machine-id>`.
 
@@ -612,7 +629,8 @@ branch with no commit yet is moved to `machine/<machine-id>`.
 Commit what changed under `<central_root>/stores/` and push it to `machine/<machine-id>`.
 
 - **Output (human):** one line — the commit and the push, the push alone, or
-  `Nothing to publish: no change since the last sync`. That last line says nothing about
+  `Nothing to publish: no change since the last sync`. A push names the remote by the
+  name the SDK returns (`PublishResult.RemoteName`), not one the CLI keeps. That last line says nothing about
   the remote, which a sync with nothing new does not reach, and stays true when nothing
   was ever pushed.
 - **Output (JSON):** `syncDTO` (§6).

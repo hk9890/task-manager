@@ -61,6 +61,11 @@ type Spec struct {
 	// Timeout bounds the process wall-clock time. Zero disables the limit. On
 	// expiry the process group is sent SIGTERM, then SIGKILL after KillGrace.
 	Timeout time.Duration
+	// KeepGroup keeps a process that has a Timeout in the caller's process
+	// group, where a Ctrl-C at the terminal reaches it as it reaches the
+	// caller. The timeout then signals the process alone, not a group: it suits
+	// a process whose children end when it does, such as git and its transport.
+	KeepGroup bool
 }
 
 // Category describes how a process ended. The exit code is authoritative only

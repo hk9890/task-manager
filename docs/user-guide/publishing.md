@@ -69,8 +69,15 @@ what it did, for a script that runs it.
 A sync never publishes a half-written ticket: while it commits, every write to your
 central stores waits, for as long as the local commit takes. When a write is already in
 progress, sync waits for it to finish and blocks nothing while it waits. The push to the remote does
-not hold anyone up, and two syncs started at the same time run one after the other. Your
-tickets on this machine are never changed; sync only reads them.
+not hold anyone up. Only one sync runs at a time: a second one stops at once and says
+which one is running, so a scheduled sync that fires during yours simply fails that
+once. A push that has not finished after 2 minutes is stopped; the commit stays, and the
+next sync pushes it. Your tickets on this machine are never changed; sync only reads them.
+
+To see what a sync is doing, or where a slow one is stuck, run it with
+`TASKMGR_LOG=debug taskmgr sync`: each step and each git command it runs are printed on
+stderr, the last one naming where it is. `--json` output on stdout is not affected. A
+token in your remote URL is never printed in these lines or in an error.
 
 Every sync commit is made as `taskmgr`, with the e-mail `<machine-id>@taskmgr.invalid`,
 whatever git identity your machine has. Your own name and e-mail never reach the
@@ -90,7 +97,10 @@ repository.
 | git is not on PATH | git is not installed, or not on this shell's `PATH` | install git |
 | could not run git | git is installed but could not start, for the reason the message gives | fix that reason, such as the permissions of the stores directory |
 | already publishes to | `sync init` was given a different URL from the first time | to publish to the new URL, run the `git remote remove origin` the message prints, then the same `sync init` again |
+| already publishes to ... with other credentials | `sync init` was given the same URL with a new user or token in it | run the `git remote set-url origin` the message prints, with the new URL |
 | is not a valid machine ID | the name breaks the rule in step 1 | set a valid name |
+| another taskmgr sync is running | a sync or `sync init` is running on this machine, with the process ID and start time the message gives | wait for it and run `taskmgr sync` again; a process that is no longer there holds nothing, so the next sync runs |
+| push timed out after 2m0s | the remote did not finish receiving the push in 2 minutes: no network, or a remote that does not answer | check the connection and run `taskmgr sync` again; the commit was kept |
 
 `sync` never overwrites what is on the remote. When it refuses, the remote still holds
 everything it held before.

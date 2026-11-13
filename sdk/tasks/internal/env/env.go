@@ -38,6 +38,10 @@ type Environment interface {
 	// Hostname returns the host name the kernel reports (matching
 	// os.Hostname), from which the machine ID defaults (CONFIG-SPEC §2).
 	Hostname() (string, error)
+
+	// Getpid returns this process's ID (matching os.Getpid), which a publish
+	// writes into its lock file so a refused one can name it.
+	Getpid() int
 }
 
 // NewOS returns an Environment backed by the real process environment.
