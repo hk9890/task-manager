@@ -66,6 +66,10 @@ var (
 	// Reopen is the only permitted mutation for a closed issue; comment appends
 	// are also allowed (those go through the sidecar, not the task .md).
 	ErrImmutable = errors.New("issue is closed and immutable")
+	// ErrStoreBusy is returned by a write of a store opened WithLockTimeout when
+	// another writer held the write lock for the whole timeout. Nothing was
+	// written; the write can be tried again.
+	ErrStoreBusy = errors.New("store busy")
 )
 
 var prefixRe = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
@@ -165,6 +169,14 @@ type Store struct {
 	// process on Linux/macOS). Reads remain lock-free (SDK-SPEC §1/§7,
 	// ARCHITECTURE-SPEC §6/§7, TASK-STORAGE-SPEC §7).
 	mu sync.Mutex
+
+	// lockTimeout bounds how long withLock waits for mu and the flock; zero
+	// waits without a limit. Set by WithLockTimeout.
+	lockTimeout time.Duration
+
+	// lockPause waits between two tries of a bounded withLock. Nil sleeps
+	// lockRetry; an L2 test replaces it so that it does not sleep.
+	lockPause func()
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
@@ -921,6 +933,9 @@ func (s *Store) writeIssue(iss *Issue) error {
 // withLock themselves, or the non-reentrant Mutex will deadlock.
 // Reads (Get, All, Comments, …) are intentionally lock-free.
 func (s *Store) withLock(fn func() error) error {
+	if s.lockTimeout > 0 {
+		return s.withLockWithin(fn)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -930,6 +945,41 @@ func (s *Store) withLock(fn func() error) error {
 	}
 	defer unlock() //nolint:errcheck
 	return fn()
+}
+
+// lockRetry is how long a bounded withLock waits, holding nothing, before it
+// tries the locks again.
+const lockRetry = 10 * time.Millisecond
+
+// withLockWithin is withLock for a store opened WithLockTimeout: it takes mu
+// and the flock without waiting, in the same order, and when either is busy it
+// releases what it took, pauses lockRetry and tries again. When the pauses add
+// up to lockTimeout it gives up with ErrStoreBusy. The pauses, not a clock,
+// measure the wait, so a test drives it without sleeping.
+func (s *Store) withLockWithin(fn func() error) error {
+	pause := s.lockPause
+	if pause == nil {
+		pause = func() { time.Sleep(lockRetry) }
+	}
+	for waited := time.Duration(0); ; waited += lockRetry {
+		if s.mu.TryLock() {
+			unlock, ok, err := s.fs.TryLock(filepath.Join(s.dir, lockFileName))
+			if err != nil {
+				s.mu.Unlock()
+				return err
+			}
+			if ok {
+				defer s.mu.Unlock()
+				defer unlock() //nolint:errcheck
+				return fn()
+			}
+			s.mu.Unlock()
+		}
+		if waited >= s.lockTimeout {
+			return fmt.Errorf("%w: %s: another writer held the write lock for %s", ErrStoreBusy, s.dir, s.lockTimeout)
+		}
+		pause()
+	}
 }
 
 // lockStoreDir takes the advisory write lock of the store in dir, the flock
