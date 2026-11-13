@@ -171,12 +171,8 @@ type Store struct {
 	mu sync.Mutex
 
 	// lockTimeout bounds how long withLock waits for mu and the flock; zero
-	// waits without a limit. Set by WithLockTimeout.
+	// or less waits without a limit. Set by WithLockTimeout.
 	lockTimeout time.Duration
-
-	// lockPause waits between two tries of a bounded withLock. Nil sleeps
-	// lockRetry; an L2 test replaces it so that it does not sleep.
-	lockPause func()
 
 	// now returns the current time; overridable in tests.
 	now func() time.Time
@@ -933,53 +929,60 @@ func (s *Store) writeIssue(iss *Issue) error {
 // withLock themselves, or the non-reentrant Mutex will deadlock.
 // Reads (Get, All, Comments, …) are intentionally lock-free.
 func (s *Store) withLock(fn func() error) error {
-	if s.lockTimeout > 0 {
-		return s.withLockWithin(fn)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	unlock, err := lockStoreDir(s.fs, s.dir)
+	release, err := s.lock()
 	if err != nil {
 		return err
 	}
-	defer unlock() //nolint:errcheck
+	defer release()
 	return fn()
 }
 
-// lockRetry is how long a bounded withLock waits, holding nothing, before it
-// tries the locks again.
-const lockRetry = 10 * time.Millisecond
+// lock takes mu and then the flock, and returns the func that releases both.
+// Without a lock timeout it waits as long as a holder holds either. With one,
+// a goroutine waits for both exactly as an unbounded writer does, so it keeps
+// its place among the other waiters, and lock gives up with ErrStoreBusy when
+// the timeout runs out first. The goroutine then goes on waiting, and releases
+// both locks as soon as it holds them: a flock wait cannot be cancelled.
+func (s *Store) lock() (release func(), err error) {
+	if s.lockTimeout <= 0 {
+		return s.lockWait()
+	}
+	type taken struct {
+		release func()
+		err     error
+	}
+	got := make(chan taken, 1)
+	go func() {
+		release, err := s.lockWait()
+		got <- taken{release, err}
+	}()
+	timer := time.NewTimer(s.lockTimeout)
+	defer timer.Stop()
+	select {
+	case t := <-got:
+		return t.release, t.err
+	case <-timer.C:
+		go func() {
+			if t := <-got; t.err == nil {
+				t.release()
+			}
+		}()
+		return nil, fmt.Errorf("%w: %s: another writer held the write lock for %s", ErrStoreBusy, s.dir, s.lockTimeout)
+	}
+}
 
-// withLockWithin is withLock for a store opened WithLockTimeout: it takes mu
-// and the flock without waiting, in the same order, and when either is busy it
-// releases what it took, pauses lockRetry and tries again. When the pauses add
-// up to lockTimeout it gives up with ErrStoreBusy. The pauses, not a clock,
-// measure the wait, so a test drives it without sleeping.
-func (s *Store) withLockWithin(fn func() error) error {
-	pause := s.lockPause
-	if pause == nil {
-		pause = func() { time.Sleep(lockRetry) }
+// lockWait is lock without a time limit.
+func (s *Store) lockWait() (release func(), err error) {
+	s.mu.Lock()
+	unlock, err := lockStoreDir(s.fs, s.dir)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
 	}
-	for waited := time.Duration(0); ; waited += lockRetry {
-		if s.mu.TryLock() {
-			unlock, ok, err := s.fs.TryLock(filepath.Join(s.dir, lockFileName))
-			if err != nil {
-				s.mu.Unlock()
-				return err
-			}
-			if ok {
-				defer s.mu.Unlock()
-				defer unlock() //nolint:errcheck
-				return fn()
-			}
-			s.mu.Unlock()
-		}
-		if waited >= s.lockTimeout {
-			return fmt.Errorf("%w: %s: another writer held the write lock for %s", ErrStoreBusy, s.dir, s.lockTimeout)
-		}
-		pause()
-	}
+	return func() {
+		_ = unlock()
+		s.mu.Unlock()
+	}, nil
 }
 
 // lockStoreDir takes the advisory write lock of the store in dir, the flock

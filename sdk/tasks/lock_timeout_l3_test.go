@@ -44,6 +44,12 @@ func TestWithLockTimeout_RealFlockHeld_StoreBusyWithinTheTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			_ = release()
+		}
+	})
 
 	start := time.Now()
 	_, err = s.Create(tasks.CreateInput{Title: "blocked"})
@@ -55,6 +61,7 @@ func TestWithLockTimeout_RealFlockHeld_StoreBusyWithinTheTimeout(t *testing.T) {
 		t.Errorf("Create gave up after %s, want about %s", waited, timeout)
 	}
 
+	released = true
 	if err := release(); err != nil {
 		t.Fatal(err)
 	}

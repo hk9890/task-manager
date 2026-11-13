@@ -23,56 +23,49 @@ package tasks
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/hk9890/task-manager/sdk/tasks/internal/exec"
 	"github.com/hk9890/task-manager/sdk/tasks/internal/vfs"
 )
 
-// newBoundedStore returns a Mem store opened WithLockTimeout(timeout) whose
-// pauses between tries call pause instead of sleeping, and the path of its
+// newBoundedStore returns a Mem store opened with opts, and the path of its
 // write lock.
-func newBoundedStore(t *testing.T, timeout time.Duration, pause func()) (*Store, *vfs.Mem, string) {
+func newBoundedStore(t *testing.T, opts ...Option) (*Store, *vfs.Mem, string) {
 	t.Helper()
 	m := vfs.NewMem()
-	s, err := InitWithVFS("/", "agt", m, WithLockTimeout(timeout), WithClock(monotonicClock()))
+	s, err := InitWithVFS("/", "agt", m, append([]Option{WithClock(monotonicClock())}, opts...)...)
 	if err != nil {
 		t.Fatalf("InitWithVFS: %v", err)
 	}
-	s.lockPause = pause
 	return s, m, filepath.Join(s.dir, lockFileName)
 }
 
-// assertLocksFree fails when the store's mutex or its flock is still held.
-func assertLocksFree(t *testing.T, s *Store, m *vfs.Mem, lockPath string) {
+// holdLock takes the store's write lock as another writer would, and releases
+// it at the end of the test unless the test released it first.
+func holdLock(t *testing.T, m *vfs.Mem, lockPath string) (release func()) {
 	t.Helper()
-	if !s.mu.TryLock() {
-		t.Fatal("the store mutex is still held")
-	}
-	s.mu.Unlock()
-	unlock, ok, err := m.TryLock(lockPath)
-	if err != nil || !ok {
-		t.Fatalf("the write lock is still held (ok=%v, err=%v)", ok, err)
-	}
-	_ = unlock()
-}
-
-func TestWithLockTimeout_FlockHeldForTheWholeTimeout_StoreBusyAndNothingWritten(t *testing.T) {
-	pauses := 0
-	s, m, lockPath := newBoundedStore(t, 50*time.Millisecond, func() { pauses++ })
-	release, err := m.Lock(lockPath)
+	unlock, err := m.Lock(lockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var once sync.Once
+	release = func() { once.Do(func() { _ = unlock() }) }
+	t.Cleanup(release)
+	return release
+}
 
-	_, err = s.Create(CreateInput{Title: "blocked"})
+func TestWithLockTimeout_LockHeldForTheWholeTimeout_StoreBusyAndNothingWritten(t *testing.T) {
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond))
+	release := holdLock(t, m, lockPath)
+
+	_, err := s.Create(CreateInput{Title: "blocked"})
 	if !errors.Is(err, ErrStoreBusy) {
 		t.Fatalf("Create = %v, want ErrStoreBusy", err)
 	}
-	if want := int(50 * time.Millisecond / lockRetry); pauses != want {
-		t.Errorf("pauses = %d, want %d: the pauses measure the wait", pauses, want)
-	}
-	_ = release()
+	release()
 	all, err := s.All()
 	if err != nil {
 		t.Fatal(err)
@@ -80,22 +73,36 @@ func TestWithLockTimeout_FlockHeldForTheWholeTimeout_StoreBusyAndNothingWritten(
 	if len(all) != 0 {
 		t.Errorf("a busy write wrote %d issues, want 0", len(all))
 	}
-	assertLocksFree(t, s, m, lockPath)
 }
 
-func TestWithLockTimeout_FlockReleasedDuringTheWait_WriteGoesThrough(t *testing.T) {
-	var release func() error
-	pauses := 0
-	s, m, lockPath := newBoundedStore(t, time.Second, func() {
-		pauses++
-		if pauses == 3 {
-			_ = release()
-		}
-	})
-	var err error
-	if release, err = m.Lock(lockPath); err != nil {
-		t.Fatal(err)
+// The goroutine a busy write leaves behind still waits for both locks; once it
+// holds them it must release them, or every later write of the store hangs.
+func TestWithLockTimeout_AfterABusyWrite_TheWaiterReleasesBothLocks(t *testing.T) {
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond))
+	release := holdLock(t, m, lockPath)
+	if _, err := s.Create(CreateInput{Title: "blocked"}); !errors.Is(err, ErrStoreBusy) {
+		t.Fatalf("Create = %v, want ErrStoreBusy", err)
 	}
+
+	release()
+	// The waiter holds mu while it waits for the flock, so this returns only
+	// once it has taken the flock and released both.
+	s.mu.Lock()
+	unlock, ok, err := m.TryLock(lockPath)
+	s.mu.Unlock()
+	if err != nil || !ok {
+		t.Fatalf("the write lock is still held (ok=%v, err=%v)", ok, err)
+	}
+	_ = unlock()
+	if _, err := s.Create(CreateInput{Title: "free"}); err != nil {
+		t.Fatalf("Create after the release = %v, want success", err)
+	}
+}
+
+func TestWithLockTimeout_LockReleasedDuringTheWait_WriteGoesThrough(t *testing.T) {
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(time.Minute))
+	release := holdLock(t, m, lockPath)
+	time.AfterFunc(20*time.Millisecond, release)
 
 	res, err := s.Create(CreateInput{Title: "waited"})
 	if err != nil {
@@ -104,46 +111,89 @@ func TestWithLockTimeout_FlockReleasedDuringTheWait_WriteGoesThrough(t *testing.
 	if res.Issue.Title != "waited" {
 		t.Errorf("Title = %q, want %q", res.Issue.Title, "waited")
 	}
-	if pauses != 3 {
-		t.Errorf("pauses = %d, want 3", pauses)
-	}
-	assertLocksFree(t, s, m, lockPath)
 }
 
-func TestWithLockTimeout_MutexHeldByAnotherGoroutine_StoreBusyAndFlockNotTaken(t *testing.T) {
-	s, m, lockPath := newBoundedStore(t, 30*time.Millisecond, func() {})
+func TestWithLockTimeout_MutexHeld_StoreBusy(t *testing.T) {
+	s, _, _ := newBoundedStore(t, WithLockTimeout(20*time.Millisecond))
 	s.mu.Lock()
-
 	_, err := s.Create(CreateInput{Title: "blocked"})
+	s.mu.Unlock()
 	if !errors.Is(err, ErrStoreBusy) {
 		t.Fatalf("Create = %v, want ErrStoreBusy", err)
 	}
-	unlock, ok, err := m.TryLock(lockPath)
-	if err != nil || !ok {
-		t.Fatalf("the write lock is held after a busy mutex (ok=%v, err=%v)", ok, err)
+}
+
+func TestWithLockTimeout_BusyWrite_RunsNoPreHook(t *testing.T) {
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond))
+	var runs int
+	s.runner = &exec.Fake{Func: func(exec.Spec) exec.Result { runs++; return exec.Allow("") }}
+	storePackage(t, s, "p", []Hook{{ID: "g", Event: "pre-create", Run: []string{"g"}}})
+	holdLock(t, m, lockPath)
+
+	if _, err := s.Create(CreateInput{Title: "blocked"}); !errors.Is(err, ErrStoreBusy) {
+		t.Fatalf("Create = %v, want ErrStoreBusy", err)
 	}
-	_ = unlock()
-	s.mu.Unlock()
+	if runs != 0 {
+		t.Errorf("a busy write ran %d hooks, want 0", runs)
+	}
 }
 
 func TestWithLockTimeout_LockFault_ReturnedAndMutexReleased(t *testing.T) {
-	s, m, lockPath := newBoundedStore(t, time.Second, func() { t.Fatal("a lock fault must not be retried") })
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(time.Minute))
 	fault := errors.New("ENOLCK")
-	m.FailOn("TryLock", lockPath, fault)
+	m.FailOn("Lock", lockPath, fault)
 
-	_, err := s.Create(CreateInput{Title: "fault"})
-	if !errors.Is(err, fault) {
+	if _, err := s.Create(CreateInput{Title: "fault"}); !errors.Is(err, fault) {
 		t.Fatalf("Create = %v, want the lock fault", err)
 	}
-	assertLocksFree(t, s, m, lockPath)
+	if _, err := s.Create(CreateInput{Title: "after"}); err != nil {
+		t.Fatalf("Create after the fault = %v, want success: the fault must release mu", err)
+	}
 }
 
-func TestWithLockTimeout_ZeroOrNegative_WaitStaysUnbounded(t *testing.T) {
-	for _, d := range []time.Duration{0, -time.Second} {
-		var s Store
-		WithLockTimeout(d)(&s)
-		if s.lockTimeout != 0 {
-			t.Errorf("WithLockTimeout(%s) set lockTimeout %s, want 0", d, s.lockTimeout)
+func TestWithLockTimeout_ConcurrentWritesOfOneStore_AllWritten(t *testing.T) {
+	s, _, _ := newBoundedStore(t, WithLockTimeout(time.Minute))
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.Create(CreateInput{Title: "parallel"})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Create = %v", err)
 		}
+	}
+	if all, _ := s.All(); len(all) != n {
+		t.Errorf("wrote %d issues, want %d", len(all), n)
+	}
+}
+
+func TestWithLockTimeout_ZeroAfterABound_WaitsWithoutALimit(t *testing.T) {
+	s, m, lockPath := newBoundedStore(t, WithLockTimeout(20*time.Millisecond), WithLockTimeout(0))
+	release := holdLock(t, m, lockPath)
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Create(CreateInput{Title: "waits"})
+		done <- err
+	}()
+
+	// Five times the cleared bound: a write still bounded has returned by now.
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("Create returned %v while the lock was held, want it to wait", err)
+	default:
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("Create = %v, want success after the release", err)
 	}
 }

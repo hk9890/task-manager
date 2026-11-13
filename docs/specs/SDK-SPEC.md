@@ -145,9 +145,12 @@ const FileExt        = ".md"         // the per-issue file extension
   does so only through the `internal/env` seam — [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §5 — so it stays
   hermetically testable.)
   `WithLockTimeout` bounds how long each write waits for the store write lock (§7);
-  without it, or with `d <= 0`, a write waits without a limit. It is a store option, not
-  a `context.Context` on each write: per-call variants would double the write API, and
-  a front end that must not hang on a save needs a bound, not a cancel.
+  without it, or with `d <= 0`, a write waits without a limit, so a later
+  `WithLockTimeout(0)` clears an earlier bound. It bounds the writes of the returned
+  `Store`, not the registry locks that `InitCentral` and `MoveToCentral` wait for. It
+  is a store option, not a `context.Context` on each write: per-call variants would
+  double the write API, and a front end that must not hang on a save needs a bound,
+  not a cancel.
 
 ```go
 type ResolveOptions struct {
@@ -1513,7 +1516,8 @@ var (
 )
 ```
 
-`ErrStoreBusy` is returned by every write (§4) of a store opened `WithLockTimeout`
+`ErrStoreBusy` is returned by every write (§4), and by `UpdateConfig` and `SetConfig`
+(§1), of a store opened `WithLockTimeout`
 when another writer held the write lock for the whole timeout. The write wrote
 nothing and ran no hook, so the caller can try it again. The message names the
 store directory and the timeout.
@@ -1644,9 +1648,13 @@ func (e *HookDeniedError) Error() string
   serializes goroutines, and an exclusive advisory `flock` on `.tasks/.lock`
   serializes processes. Reads are lock-free.
 - **Bounded wait.** A write waits for both locks without a limit, unless the store was
-  opened `WithLockTimeout(d)`. Then it tries the mutex and the `flock` without
-  blocking, in that order, holds neither between tries, tries again every 10ms, and
-  returns `ErrStoreBusy` (§6) after `d`. A holder is another write, its pre-hooks
+  opened `WithLockTimeout(d)`. Then a goroutine waits for both, in the same order and
+  the same queue as an unbounded writer, and the write returns `ErrStoreBusy` (§6)
+  when `d` runs out first. The goroutine goes on waiting, because a `flock` wait cannot
+  be cancelled, and releases both locks as soon as it holds them; until then it keeps
+  one goroutine and one open file. Polling with a non-blocking `flock` was rejected:
+  each try reopens `.lock`, and a writer that blocks takes every hand-off before the
+  next try, so the poller loses to it. A holder is another write, its pre-hooks
   (HOOK-SPEC §8), or a publish staging the central stores (§1).
 - **Atomic writes.** Each file write is temp-file + `fsync` + `rename`, so a reader
   never observes a torn file — except the append-only comment sidecar (§4), which is
