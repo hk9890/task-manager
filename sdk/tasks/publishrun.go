@@ -68,8 +68,8 @@ const publishLockWaitMax = 2 * time.Minute
 // machine/<machine-id> that publishes to remote as "origin" (SDK-SPEC §1). A
 // relative local path is resolved against the working directory. The returned
 // PublishInfo.Remote is the URL without its user and password. Running it
-// again with the same remote changes nothing; a different one is refused.
-// While a publish or another init runs it refuses with ErrPublishBusy. Of the
+// again with the same remote changes nothing; a different one is refused. It
+// records the remote for PublishStatus. While a publish or another init runs it refuses with ErrPublishBusy. Of the
 // options, WithLogger and WithClock apply.
 func InitPublish(remote string, opts ...Option) (PublishInfo, error) {
 	return initPublishWith(remote, vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
@@ -145,6 +145,9 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 	if err := p.writeExcludes(); err != nil {
 		return PublishInfo{}, err
 	}
+	if err := p.recordRemote(url); err != nil {
+		return PublishInfo{}, err
+	}
 	// Remote is for display, and nothing reads the credentials back from it.
 	return PublishInfo{Machine: p.id, Branch: p.branch(), Path: p.dir, Remote: redactUserinfo(url), RemoteName: publishRemote}, nil
 }
@@ -156,7 +159,9 @@ func (p *publisher) initPublish(remote string) (PublishInfo, error) {
 // push ends after publishPushTimeout.
 // While another publish or an init runs it refuses with ErrPublishBusy. A run
 // with nothing new commits nothing, and pushes only a commit an earlier,
-// failed push left behind. Of the options, WithLogger and WithClock apply.
+// failed push left behind. Each successful run, that one included, records its
+// time and HEAD for PublishStatus. Of the options, WithLogger and WithClock
+// apply.
 func Publish(opts ...Option) (PublishResult, error) {
 	return publishWith(vfs.NewOS(), env.NewOS(), exec.NewOS(), opts...)
 }
@@ -265,7 +270,110 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		}
 		out.Pushed = true
 	}
+	// Recorded under the publish lock, so a status never reads a half-written
+	// file from a publish and an init at once.
+	rec := publishRecord{Remote: redactUserinfo(remote), LastSync: p.now(), Commit: head}
+	if err := p.writeRecord(rec); err != nil {
+		return PublishResult{}, err
+	}
 	return out, nil
+}
+
+// statePath is the publish state file (CONFIG-SPEC §3).
+func (p *publisher) statePath() string { return filepath.Join(p.croot, publishStateName) }
+
+// readRecord reads the publish state file; a missing one is the zero record.
+func (p *publisher) readRecord() (publishRecord, error) {
+	content, err := p.fs.ReadFile(p.statePath())
+	if vfs.IsNotExist(err) {
+		return publishRecord{}, nil
+	}
+	if err != nil {
+		return publishRecord{}, err
+	}
+	return decodePublishRecord(p.statePath(), content)
+}
+
+// writeRecord replaces the publish state file. The caller holds the publish
+// lock.
+func (p *publisher) writeRecord(r publishRecord) error {
+	content, err := encodePublishRecord(r)
+	if err != nil {
+		return err
+	}
+	return p.fs.WriteAtomic(p.statePath(), content, 0o644)
+}
+
+// recordRemote records the remote an init set up, keeping what the last
+// publish recorded. A damaged file is replaced rather than refusing the init
+// that can repair it.
+func (p *publisher) recordRemote(url string) error {
+	rec, err := p.readRecord()
+	if err != nil {
+		rec = publishRecord{}
+	}
+	rec.Remote = redactUserinfo(url)
+	return p.writeRecord(rec)
+}
+
+// PublishStatus reports this machine's sync state without running a sync
+// (SDK-SPEC §1): whether sync init has run, the machine and its branch, what
+// the last successful publish recorded, and whether a publish runs now. It
+// runs no git and takes no lock while the publish lock file is empty, which it
+// is whenever no publish runs.
+func PublishStatus() (PublishState, error) {
+	return publishStatusWith(vfs.NewOS(), env.NewOS())
+}
+
+// publishStatusWith has no process runner: a status that ran git would panic
+// in its L2 test, which is how that test proves it runs none.
+func publishStatusWith(fs vfs.FS, e env.Environment) (PublishState, error) {
+	p := newPublisher(fs, e, nil, nil)
+	if err := p.load(); err != nil {
+		return PublishState{}, err
+	}
+	st := PublishState{Machine: p.id, Branch: p.branch()}
+	if _, err := p.fs.Stat(filepath.Join(p.dir, ".git")); err == nil {
+		st.SetUp = true
+	} else if !vfs.IsNotExist(err) {
+		return PublishState{}, err
+	}
+	rec, err := p.readRecord()
+	if err != nil {
+		return PublishState{}, err
+	}
+	st.Remote, st.LastSync, st.Commit = rec.Remote, rec.LastSync, rec.Commit
+	if st.Running, st.RunningPID, st.RunningSince, err = p.publishRunning(); err != nil {
+		return PublishState{}, err
+	}
+	return st, nil
+}
+
+// publishRunning reports whether a publish or an init holds the publish lock,
+// and the holder its lock file names. Empty content means none runs, and no
+// lock is tried: a holder writes its content right after taking the lock and
+// empties it before the release. Content under a free lock was left by a
+// killed holder, so the lock is tried to tell the two apart. While that try
+// holds the lock, a publish that starts is refused with ErrPublishBusy, which
+// a stale file makes rare and the next run repairs.
+func (p *publisher) publishRunning() (running bool, pid int, since time.Time, err error) {
+	path := filepath.Join(p.croot, publishLockName)
+	content, err := p.fs.ReadFile(path)
+	if vfs.IsNotExist(err) || (err == nil && len(content) == 0) {
+		return false, 0, time.Time{}, nil
+	}
+	if err != nil {
+		return false, 0, time.Time{}, err
+	}
+	unlock, free, err := p.fs.TryLock(path)
+	if err != nil {
+		return false, 0, time.Time{}, err
+	}
+	if free {
+		return false, 0, time.Time{}, unlock()
+	}
+	pid, since, _ = parsePublishHolder(content)
+	return true, pid, since, nil
 }
 
 // publisher is one publish's inputs and what it has done so far: the seams,

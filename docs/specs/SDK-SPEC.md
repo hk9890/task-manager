@@ -27,6 +27,7 @@ func RelinkCentral(name, projectPath string) (string, error)     // re-point an 
 func Stores() ([]StoreEntry, error)                              // enumerate the central registry
 func InitPublish(remote string, opts ...Option) (PublishInfo, error) // make <central_root>/stores a work tree publishing to remote
 func Publish(opts ...Option) (PublishResult, error)               // commit the central stores and push machine/<id>
+func PublishStatus() (PublishState, error)                        // read the sync state; runs no sync and no git
 func DerivePrefix(path string) string                            // project path → default ID prefix
 
 type Option func(*Store)
@@ -93,7 +94,8 @@ const FileExt        = ".md"         // the per-issue file extension
   test resolution applies, so enumerating the registry costs one `stat` per entry
   and never reports a dangling or broken entry as usable.
 - **`InitPublish`** and **`Publish`** publish the central stores to a git remote, the
-  operation behind `taskmgr sync init` and `taskmgr sync`
+  operation behind `taskmgr sync init` and `taskmgr sync`, and **`PublishStatus`** reads
+  what they left
   ([Publishing the central stores](#publishing-the-central-stores) below).
 
   ```go
@@ -112,6 +114,18 @@ const FileExt        = ".md"         // the per-issue file extension
       Committed  bool   // this run made a commit
       Commit     string // its full SHA; "" when Committed is false
       Pushed     bool   // this run pushed
+  }
+
+  type PublishState struct {
+      SetUp        bool      // <central_root>/stores holds a .git: sync init has run
+      Machine      string    // the machine ID
+      Branch       string    // machine/<Machine>
+      Remote       string    // the URL the last init or successful publish used, without its user and password
+      LastSync     time.Time // when the last successful publish ended; zero when none is recorded
+      Commit       string    // HEAD after that publish; "" when the branch had no commit
+      Running      bool      // a publish or an init holds the publish lock now
+      RunningPID   int       // its process ID; 0 when the lock file does not name one
+      RunningSince time.Time // when it took the lock; zero when the lock file does not name it
   }
   ```
 
@@ -351,6 +365,9 @@ ancestor; any other status is a failure.
    either credential, so it says that they differ and names
    `git remote set-url origin <url>`, which keeps that ref.
 5. Write the exclude file (below).
+6. Record the remote, without its user and password, in the publish state file
+   (CONFIG-SPEC §3), keeping what the last publish recorded there. A damaged file is
+   replaced, because the init is the repair.
 
 Running it again with the same remote changes nothing.
 
@@ -387,6 +404,28 @@ Running it again with the same remote changes nothing.
    push is not seen, and is published again at the next change. Checking the remote on
    every run (`git ls-remote`) was rejected because it would make every no-op publish a
    network call.
+5. **Record.** Replace the publish state file (CONFIG-SPEC §3) with the remote, the time
+   the run ended and `HEAD`, still under the publish lock. A run with nothing new records
+   too: it is a successful sync. A failed run records nothing, so the file keeps the last
+   success. A failed write of the file fails the run, after the push, and the next run
+   records again.
+
+**`PublishStatus()`** reads the sync state without running a sync. It reads the
+per-user config for the machine ID, so an invalid one is refused as in the two other
+calls. `SetUp` is whether `stores/` holds a `.git`. `Remote`, `LastSync` and `Commit`
+come from the publish state file: a missing one is the zero value of each, with no
+error, and a damaged one is an error naming the file. `Running`, `RunningPID` and
+`RunningSince` come from `.publish.lock` (below): empty content means no publish runs,
+and no lock is tried. Content is tried with the lock, without waiting, because a holder
+killed before it emptied the file leaves content under a free lock. While that try
+holds the lock, a publish that starts is refused with `ErrPublishBusy`. Only a killed
+holder leaves content behind, and the next run repairs it, so the cost is accepted. It
+runs no git, so a front end can call it as often as it redraws.
+
+The record is a file of its own, not git history. A run with nothing new makes no commit,
+so the time of the last commit cannot tell a store with no changes from a sync that
+stopped running. Reading the remote from git (`git config --get`) was rejected so that a
+status starts no process.
 
 **What the locks cover, and why the commit and the push are outside them.** The
 `git add --all` of step 3 runs under the central-root lock (CONFIG-SPEC §3), then the

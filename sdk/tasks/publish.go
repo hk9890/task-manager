@@ -30,6 +30,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // PublishInfo is what InitPublish set up (SDK-SPEC §1).
@@ -39,6 +41,20 @@ type PublishInfo struct {
 	Path       string // <central_root>/stores, the git work tree
 	Remote     string // the URL the remote RemoteName publishes to, without its user and password
 	RemoteName string // the git remote's name, "origin"
+}
+
+// PublishState is this machine's sync state, as PublishStatus reads it without
+// running a sync (SDK-SPEC §1).
+type PublishState struct {
+	SetUp        bool      // <central_root>/stores holds a .git: sync init has run
+	Machine      string    // the machine ID
+	Branch       string    // machine/<Machine>, the branch published to
+	Remote       string    // the URL the last init or successful publish used, without its user and password; "" before either
+	LastSync     time.Time // when the last successful publish ended; zero when none is recorded
+	Commit       string    // HEAD after that publish; "" when the branch had no commit
+	Running      bool      // a publish or an init holds the publish lock now
+	RunningPID   int       // its process ID; 0 when the lock file does not name one
+	RunningSince time.Time // when it took the lock; zero when the lock file does not name it
 }
 
 // PublishResult is what one Publish did (SDK-SPEC §1).
@@ -113,25 +129,59 @@ func publishHolder(pid int, since time.Time) []byte {
 // file's, describes. Content that does not name one — empty, half written,
 // unreadable — still refuses, with the bare message.
 func errPublishBusy(content []byte) error {
-	var pid, since string
+	pid, since, ok := parsePublishHolder(content)
+	if !ok {
+		return ErrPublishBusy
+	}
+	return fmt.Errorf("%w (pid %d, since %s)", ErrPublishBusy, pid, since.Format(time.RFC3339))
+}
+
+// parsePublishHolder reads the holder publishHolder wrote. Content that does
+// not name one — empty, half written, unreadable — is not ok.
+func parsePublishHolder(content []byte) (pid int, since time.Time, ok bool) {
+	var rawPID, rawSince string
 	for line := range strings.SplitSeq(string(content), "\n") {
 		key, value, _ := strings.Cut(line, ": ")
 		switch key {
 		case "pid":
-			pid = value
+			rawPID = value
 		case "since":
-			since = value
+			rawSince = value
 		}
 	}
-	n, err := strconv.Atoi(pid)
-	if err != nil || n <= 0 {
-		return ErrPublishBusy
+	pid, err := strconv.Atoi(rawPID)
+	if err != nil || pid <= 0 {
+		return 0, time.Time{}, false
 	}
-	at, err := time.Parse(time.RFC3339, since)
+	since, err = time.Parse(time.RFC3339, rawSince)
 	if err != nil {
-		return ErrPublishBusy
+		return 0, time.Time{}, false
 	}
-	return fmt.Errorf("%w (pid %d, since %s)", ErrPublishBusy, n, at.UTC().Format(time.RFC3339))
+	return pid, since.UTC(), true
+}
+
+// publishRecord is the content of the publish state file (CONFIG-SPEC §3):
+// what the last init or successful publish did.
+type publishRecord struct {
+	Remote   string    `yaml:"remote,omitempty"`
+	LastSync time.Time `yaml:"last_sync,omitempty"`
+	Commit   string    `yaml:"commit,omitempty"`
+}
+
+func encodePublishRecord(r publishRecord) ([]byte, error) {
+	r.LastSync = r.LastSync.UTC()
+	return yaml.Marshal(r)
+}
+
+// decodePublishRecord reads a publish state file. Content that is not a record
+// is an error naming the file, never a zero record: a front end that shows
+// "never synced" for a damaged file hides the damage.
+func decodePublishRecord(path string, content []byte) (publishRecord, error) {
+	var r publishRecord
+	if err := yaml.Unmarshal(content, &r); err != nil {
+		return publishRecord{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return r, nil
 }
 
 // userinfoRe matches the user and password of a URL with a scheme, as in
