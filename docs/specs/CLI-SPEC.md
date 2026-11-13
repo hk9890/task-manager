@@ -331,6 +331,7 @@ it is managed with `taskmgr package` (§2.3).
 | `version` | global | no | Schema version of the per-user config. |
 | `central_root` | global | yes | Directory holding the registry and central stores. Unset means the taskmgr home. Setting it does **not** move existing stores. |
 | `hook_timeout` | global | yes | Fallback limit for a store that sets none (HOOK-SPEC §3.5). |
+| `machine_id` | global | yes | This machine's name to `sync` (§2.5). Unset means one derived from the hostname. A value outside the grammar of CONFIG-SPEC §2 exits `1` and is not written. |
 
 A package cannot set `hook_timeout`; the limit bounds how long the store lock is held, so
 it is the machine owner's to set (HOOK-SPEC §3.1).
@@ -371,9 +372,9 @@ taskmgr to mediate. What these commands manage is the shared, lock-protected `us
 the merged chain that no single file shows, and the **package repositories** a machine
 installs packages from (§2.4).
 
-Installing a package repository is the one thing here that reaches a network, and it does
-so by running `git clone`. That is a deliberate exception to "taskmgr never downloads a
-package", taken because distribution was otherwise a README convention that no `--help`
+Only two kinds of command reach a network, and both do it by running git: installing or
+updating a package repository (§2.4), and `taskmgr sync` (§2.5). Installing runs
+`git clone`. That is a deliberate exception to "taskmgr never downloads a package", taken because distribution was otherwise a README convention that no `--help`
 could teach — and it is scoped so the invariant that matters survives: the network is
 reached at install time and never on the hook path, so resolving a `use:` entry during a
 `create` or a `close` still reads nothing but local directories (HOOK-SPEC §3.5).
@@ -569,6 +570,85 @@ warnings and one name in `still_used`.
 
 - **Output:** the repository that was removed, and the packages a config still uses
   (`repoRemovedDTO` in JSON, §6).
+
+---
+
+## 2.5 Publishing the central stores
+
+`taskmgr sync` publishes this machine's central stores to a git remote, as a read-only
+mirror on the branch `machine/<machine-id>` that only this machine pushes. The operation
+is the SDK's — `InitPublish` and `Publish` — and every step, the locks it takes, the files
+it keeps out and the git settings it runs under are stated in
+[SDK-SPEC § Publishing the central stores](SDK-SPEC.md#publishing-the-central-stores).
+This section is the command surface over it.
+
+Both commands resolve no store, so `--dir` and `--store-name` have no effect on them.
+`git` must be on `PATH`. Every refusal of the operation — an invalid machine ID, no
+`sync init` yet, another remote, a branch other than `machine/<machine-id>`, a rejected
+push, a push that timed out, a store still busy after 2 minutes, another `sync` or
+`sync init` running — exits `1` with its
+message on stderr and prints nothing on stdout. A rejected push prints git's own message
+after the explanation. git runs with the user's line-ending, attributes, fsmonitor, hook
+and signing settings turned off, so the published files are the stores' own bytes; the
+list is SDK-SPEC's.
+
+- **One at a time.** A `sync` or `sync init` while another runs on the machine does not
+  wait: it exits `1` with `another taskmgr sync is running (pid <pid>, since <time>)`,
+  the time in UTC, RFC 3339, or without the parenthesis when the running one has not
+  recorded itself yet. A timer that fires during a manual sync therefore fails one tick
+  instead of queueing behind it.
+- **A push has 10 minutes.** A push not finished by then is stopped and exits `1` with
+  `push timed out after 10m0s`; the commit is kept and the next `sync` pushes it. git
+  cannot resume a push, so the limit leaves a slow link room: about 75 MB at 1 Mbit/s. An
+  HTTPS push that moves under 1000 bytes/s for 60 seconds ends sooner, with git's own
+  message; an ssh push has only the 10 minutes (SDK-SPEC). A Ctrl-C
+  during a push ends both `taskmgr` and the push. On Linux any signal that kills
+  `taskmgr` also kills git; git's transport (ssh, `git-remote-https`) then ends when its
+  pipe to git closes or its connection gives up (SDK-SPEC). git never prompts for
+  credentials: a push that needs them fails at once with git's message.
+- **A busy store has 2 minutes.** `sync` waits for a store another `taskmgr` writes to,
+  holding no store lock, and exits `1` with `gave up after waiting 2m0s for the write lock of
+  store "<name>"…` when it is still busy then; the next `sync` tries again.
+- **Logging.** Both commands pass the CLI's logger (`TASKMGR_LOG`, §1) to the SDK.
+  `TASKMGR_LOG=debug` puts each stage, each git command and the outcome on stderr; the
+  records are [MONITORING.md § Publishing](../MONITORING.md#publishing)'s. At the default
+  level a failed run also writes its `publish_error` record — and a failed git command its
+  `publish_git` record — to stderr, before the `taskmgr: <message>` line. The exception is
+  a refusal because another sync runs: its `publish_error` record is info, so at the
+  default level that run prints only its `taskmgr:` line.
+
+### `taskmgr sync init --remote <url>`
+
+Make `<central_root>/stores/` a git repository on the branch `machine/<machine-id>` that
+publishes to `url`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--remote` | — (required) | The git URL to publish to, as the remote `origin`. A relative local path is relative to the working directory the command runs in. A URL with a scheme or in scp form (`host:path`) is kept as typed. |
+
+Running `init` again with the same remote changes nothing and exits `0`. Another remote
+exits `1`, and the message names `git remote remove origin` to run before `init` again.
+A URL that differs only in its credentials exits `1` and names
+`git remote set-url origin <url>` instead.
+An `init` that stopped after creating the repository is repaired by running it again: a
+branch with no commit yet is moved to `machine/<machine-id>`.
+
+- **Output:** the stores directory, the remote and the branch, and a `next: taskmgr sync`
+  line (`syncInitDTO` in JSON, §6). The remote is printed without the user and password a
+  URL with a scheme carries (`https://user:token@host/…` prints as `https://host/…`), as
+  the SDK returns it; an scp-form address (`git@host:path`) prints as typed. The remote
+  `origin` keeps the URL as given.
+
+### `taskmgr sync`
+
+Commit what changed under `<central_root>/stores/` and push it to `machine/<machine-id>`.
+
+- **Output (human):** one line — the commit and the push, the push alone, or
+  `Nothing to publish: no change since the last sync`. A push names the remote by the
+  name the SDK returns (`PublishResult.RemoteName`), not one the CLI keeps. That last line says nothing about
+  the remote, which a sync with nothing new does not reach, and stays true when nothing
+  was ever pushed.
+- **Output (JSON):** `syncDTO` (§6).
 
 ---
 
@@ -1288,6 +1368,20 @@ one is a `use:` entry that no longer resolves (§2.4), so the key is deliberatel
 `packages`: a caller reading that key as "what was removed" would take the broken
 references for cleaned-up ones.
 
+**`syncInitDTO`** — emitted by `sync init`: `{machine, branch, path, remote}`. `machine`
+is the machine ID, `branch` is `machine/<machine>`, `path` is `<central_root>/stores`, and
+`remote` is the URL `origin` publishes to, without its user and password (§2.5).
+
+**`syncDTO`** — emitted by `sync`: `{machine, branch, committed, commit, pushed}`.
+`committed` says whether this run made a commit, and `commit` is its full SHA, omitted
+when `committed` is `false`. `pushed` says whether this run pushed; a run that made no
+commit can still push one an earlier, failed push left behind.
+
+```json
+{"machine": "laptop", "branch": "machine/laptop", "committed": true,
+ "commit": "3f9c2a1e4b7d8c6a5f0e1d2c3b4a59687f6e5d4c", "pushed": true}
+```
+
 **`guideTopicDTO`** — emitted by `guide --list` (an array):
 `{id, kind, summary, package, scope, into, detail}`. `kind` is `core` for a section
 the binary owns and `package` for one a package contributes; `package` and `scope`
@@ -1355,6 +1449,8 @@ taskmgr package  add <name> [--path]                       [--global]
                  repo add <url> [--as N]      # clone a package repository
                  repo list | update [N] | rm N
 taskmgr hook     list                        # the effective chain, in run order
+taskmgr sync     init --remote <url>         # make the central stores a git work tree
+taskmgr sync                                 # commit and push them to machine/<machine-id>
 taskmgr create   --title T [--description[-file] --type --priority --assignee
                           --creator --agent --session --label… --parent
                           --blocked-by… --related…]

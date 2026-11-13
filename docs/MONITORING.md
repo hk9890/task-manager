@@ -27,6 +27,15 @@ Each row is one `slog` record (`msg` in the first column):
 | `hook` — a **post**-hook that **reported a failure** | info | `event`, `hook`, `issue`, `decision=warn`, `duration_ms` |
 | `hook` — a hook that **errored** (missing / timeout / signal) | warn | `event`, `hook`, `issue`, `decision=error`, `duration_ms` |
 | `io_error` — a failed store write | error | `op`, `issue`, `error` |
+| `publish_stage` — a publish or init stage **starts** | debug | `stage` |
+| `publish_git` — a git command ended with exit `0`, or with an exit-`1` answer | debug | `cmd`, `exit`, `duration_ms` |
+| `publish_git` — any other git outcome: another exit, not started, timed out, killed | warn | `cmd`, `exit` (`-1` when git did not exit on its own), `duration_ms`, `stderr`, `error` (when git did not exit) |
+| `publish_lock_wait` — a busy store held the publish back for 5s | warn | `store`, `waited_ms` |
+| `publish_error` — a busy store held the publish back for 2 minutes, and it gave up | error | `stage=commit`, `error` (names the store, or the central-root lock) |
+| `publish` — a publish succeeded | debug | `machine`, `branch`, `committed`, `pushed`, `commit`, `retries`, `lock_wait_ms`, `duration_ms` |
+| `publish_init` — an init succeeded | debug | `machine`, `branch`, `remote`, `duration_ms` |
+| `publish_error` — a publish or init failed | error | `stage`, `error` |
+| `publish_error` — refused because another publish runs | info | `stage=lock`, `error` |
 
 Every hook invocation emits one `hook` record regardless of outcome — only the
 level and `decision` differ — so allow/deny/warn/error are one query away from
@@ -106,6 +115,67 @@ SIGTERM is SIGKILLed after a fixed 2s grace (HOOK-SPEC §7), and that grace is
 additive: with the 2s default, a hanging pre-close hook holds the lock for ~4s,
 and `duration_ms` will report it. Size `hook_timeout` accordingly.
 
+## Publishing
+
+`taskmgr sync` and `sync init` (SDK `Publish`, `InitPublish`) log through the same
+logger. A sync runs unattended, from a timer, so its records are how a failed or hung run
+is diagnosed after the fact.
+
+- **`publish_stage` is logged when a stage starts.** Publish stages, in order: `config`
+  (machine ID, and whether `sync init` has run), `lock` (the publish lock), `check`
+  (remote, branch, exclude file),
+  `commit` (store locks, add, locks released, commit), `push`. Init stages: `config`, `lock`, `init`. A
+  publish with nothing to push logs no `push` stage. The last `publish_stage` of a run
+  that never ends names the stage it hangs in.
+- **One `publish_git` per git command.** `cmd` is the subcommand (`add`, `diff`, `commit`,
+  `push`, `rev-parse`, `config`, `symbolic-ref`, `init`, `remote`); `duration_ms` is the
+  process's own wall-clock time. Exit `1` from `config --get`, `diff --quiet`,
+  `rev-parse --verify` and `symbolic-ref --quiet` is an answer — no such key, something
+  staged, no such ref, detached — and logs at debug. A push the remote rejects also
+  exits `1`, and is a failure. `stderr` is trimmed and cut at 1024 bytes.
+- **`publish_lock_wait` is logged once per publish**, when its back-off on busy store
+  locks reaches 5s. `store` names the store that was busy at that try, or
+  `(central root)` when the registry lock was. `retries` and `lock_wait_ms` on the
+  `publish` record carry the whole wait. A back-off that reaches 2 minutes gives up with
+  a `publish_error` at `stage=commit` whose `error` names the busy store and the wait.
+- **`publish_error` is error, except for a busy publish lock, which is info.** A timer
+  that fires during a manual sync expects to be refused, and the next tick publishes.
+  Count real failures with `level=ERROR`, never with `msg=publish_error` alone.
+- **No credentials.** A remote URL may carry a token (`https://user:token@host/…`). Every
+  `remote`, `stderr` and `error` value has the user and password removed from each URL
+  with a scheme in it.
+
+**Reading a hung or failed sync.** Capture it at debug, as below. Then:
+
+- **Killed:** a run that ended has a last record of `publish`, `publish_init` or
+  `publish_error`. A log with none of them is a process that was killed, by a Ctrl-C or
+  a signal, at its last `publish_stage`. On Linux the git it ran, the push included, was
+  killed with it, whatever the signal; after a signal other than Ctrl-C, git's transport
+  (an `ssh` or `git-remote-https` process) can still run until its connection gives up.
+  On macOS only a Ctrl-C at the terminal ends git
+  too; a `taskmgr` killed alone leaves a push running until git gives up on the
+  connection.
+- **Hung:** the last `publish_stage` is where it is. A `push` stage lasts at most 10
+  minutes plus the seam's 2s kill grace; then the push is killed and logs
+  `publish_git cmd=push exit=-1` with `error`. An HTTPS push that moves under 1000
+  bytes/s for 60 seconds ends sooner: git aborts it itself, and `publish_git cmd=push`
+  logs git's exit status and its `stderr`. An ssh push has only the 10 minutes. The
+  limits and why are SDK-SPEC's
+  ([§ Publishing the central stores](specs/SDK-SPEC.md#publishing-the-central-stores)).
+  A hang in `commit` with
+  `publish_lock_wait` names the store a long write or a slow pre-hook holds
+  ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
+  `publish_error`.
+- **Failed:** the `publish_error` record names the stage; the `publish_git` warn just
+  before it carries git's `stderr`.
+
+```bash
+TASKMGR_LOG=debug taskmgr sync 2> sync.log
+grep 'msg=publish_stage' sync.log | tail -1            # where it is, or where it stopped
+grep -E 'msg=publish_(git|error)' sync.log | grep -v 'level=DEBUG'  # what failed, with git's stderr
+grep 'msg=publish ' sync.log                           # the summary of a run that succeeded
+```
+
 ## Format & configuration
 
 For the CLI:
@@ -126,6 +196,7 @@ SDK embedders pick their own format and sink — `tasks.WithLogger` takes any
 ```go
 h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
 store, err := tasks.Open("", tasks.WithLogger(slog.New(h)))
+res, err := tasks.Publish(tasks.WithLogger(slog.New(h)))   // the publishing records
 ```
 
 ## Capturing and aggregating

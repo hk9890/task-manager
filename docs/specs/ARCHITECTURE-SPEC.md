@@ -13,7 +13,7 @@ system.
 
 A lean, file-based task tracker. Issues, dependencies, and ready-work computation
 live as plain files in a directory tree under version control — no database, no
-daemon, no sync engine. It deliberately implements only the small set of tracker
+daemon, no merging sync engine. It deliberately implements only the small set of tracker
 features that are actually used, and nothing more.
 
 ---
@@ -58,7 +58,8 @@ the first and currently only consumer; the same boundary would let a future
 consumer (e.g. a viewer or an HTTP server) sit on the engine without duplicating
 storage or validation logic. Those are illustrations, not planned work — see §9.
 
-- **Engine (`sdk/tasks`)** — the only code that reads or writes issue files. It
+- **Engine (`sdk/tasks`)** — the only code that reads or writes issue files, publishing
+  them to a git mirror included ([SDK-SPEC](SDK-SPEC.md) §1). It
   enforces the on-disk format, validates input, computes ready/blocked and derived
   edges, and serializes concurrent writers.
 - **CLI (`taskmgr`)** — a command-line front end for agents and humans; a thin
@@ -109,9 +110,9 @@ github.com/hk9890/task-manager            root module — the taskmgr CLI (cobra
 |---|---|---|
 | `tasks` (facade) | imperative shell | Public API for consumers: `Store` CRUD, `Marshal`/`Unmarshal`, locking. Composes pure core with the vfs seam. |
 | `tasks/internal/query` | pure | Filter-expression language (QUERY-SPEC). Compiles a query to a `Predicate` over a `Row` interface; no disk, no `tasks` import. |
-| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `Append`, `flock`, `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback, `Watch` over `fsnotify`) + `Mem` (in-memory, for tests). |
-| `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs hook processes (HOOK-SPEC). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout) + `Fake` (scripted, for tests). |
-| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
+| `tasks/internal/vfs` | disk seam | One of three packages that call `os`/`syscall`. `FS` interface + `osFS` (real: `WriteAtomic`, `WriteInPlace` (a lock file's content, no rename), `Append`, `flock` (`Lock` blocks, `TryLock` does not), `Remove`/`RemoveAll`, `MoveTree` incl. its cross-device copy fallback, `Watch` over `fsnotify`) + `Mem` (in-memory, for tests). |
+| `tasks/internal/exec` | process seam | Another `os`/`syscall` package: runs the processes the engine spawns — hooks (HOOK-SPEC), and git for publishing the central stores (SDK-SPEC §1). `Runner` interface + OS runner (`os/exec`, SIGTERM→SIGKILL timeout — to the process's own group, or with `KeepGroup` to the process alone, which stays in the caller's group so a Ctrl-C reaches it and, on Linux, is killed when the caller dies by any signal (the publishing git), inherited variables dropped on request, a binary missing from `PATH` told apart from any other spawn failure) + `Fake` (scripted, for tests). |
+| `tasks/internal/env` | environment seam | The third `os`/`syscall` package: reads the user environment (CONFIG-SPEC) — `UserHomeDir`, `Getenv`, `Hostname`, `Getpid` — to locate the taskmgr home for store resolution and for the machine-wide hook packages a write inherits (HOOK-SPEC §3.5). `Environment` interface + OS impl + `Fake` (for hermetic tests, no real `HOME`). |
 | `tasks/internal/storetest` | test support | Fixture builder: constructs a populated store into `vfs.Mem` (L2) or a real `t.TempDir()` (L3) from a declarative spec, plus `RawFixture` for raw on-disk bytes. Reaches disk through the `vfs` seam, and is held to the seam rule like any other package. |
 
 ### Imperative-shell files (may declare `*Store` methods)
@@ -127,9 +128,9 @@ carries its own list:
 
 | Seam | Exemption list | Files |
 |---|---|---|
-| `internal/vfs` (disk) | `mayImportVFS` | `store.go`, `comments.go`, `content.go`, `config.go`, `registry.go`, `packageload.go` |
-| `internal/env` (user environment) | `mayImportEnv` | `store.go`, `config.go`, `registry.go`, `packageload.go` |
-| `internal/exec` (hook processes) | `mayImportExec` | `store.go`, `hookrun.go`, `log.go` |
+| `internal/vfs` (disk) | `mayImportVFS` | `store.go`, `comments.go`, `content.go`, `config.go`, `registry.go`, `packageload.go`, `packagerepo.go`, `publishrun.go` |
+| `internal/env` (user environment) | `mayImportEnv` | `store.go`, `config.go`, `registry.go`, `packageload.go`, `packagerepo.go`, `publishrun.go` |
+| `internal/exec` (processes: hooks and git) | `mayImportExec` | `store.go`, `hookrun.go`, `log.go`, `publishrun.go` |
 
 The lists are separate because the rules exempt different files. A single shared
 list short-circuits every check at once: a file added for its `*Store` methods
@@ -157,6 +158,7 @@ already on both.
 | `import.go` | The `Import` primitive: a direct write of a complete externally-sourced end-state (caller supplies status and timestamps, unlike `Create`). |
 | `hookrun.go` | Runs hooks for a transition via the `internal/exec` seam; applies the timeout and interprets the gate verdict (§6 steps 4 and 7). |
 | `log.go` | `WithLogger` and the `slog` plumbing; the no-op default. |
+| `publishrun.go` | `InitPublish`, `Publish` (SDK-SPEC §1): runs git in the central stores' work tree via the `internal/exec` seam, writes its exclude file, and holds the central-root lock and every central store's around the `git add` only — tried without waiting, all released before it retries, given up after 2 minutes — and the publish lock around the whole run, tried once: a held one is `ErrPublishBusy`. Logs each stage, git command and outcome (MONITORING.md). Declares no `*Store` method: it locks a store by its directory, as a move does. |
 | `packageload.go` | Reads a package directory through the vfs seam and merges the two `use:` lists into the chain a mutation runs (HOOK-SPEC §3.5). Declares no `*Store` method: everything is a function over the seams and the directories. |
 
 ### Pure-core files (no filesystem access)
@@ -185,16 +187,17 @@ call.
 | `hooks.go` | Hook types (`Hook`) and their compilation into the runnable chain (HOOK-SPEC §3). Pure: it takes a resolved chain and returns a validated one. |
 | `packages.go` | The hook-package format (HOOK-SPEC §3.6) as pure core: manifest decoding, `use:` entry resolution, the `argv[0]` rule, and `checkUseChange`, which checks only what a write introduces. |
 | `hookpayload.go` | Builds the JSON payload handed to a hook process (HOOK-SPEC §5). |
+| `publish.go` | The pure half of publishing: the machine-ID grammar and hostname derivation (CONFIG-SPEC §2), the exclude patterns built from the engine's own file names, the fixed git settings and identity, and how a git exit reads. |
 | `configdoc.go` | Renders a config change back into an existing `config.yaml`, leaving unknown keys and comments as the author wrote them. Maps bytes to bytes. |
 | `watch.go` | `mergeChanges`: merges the changed paths of a watch into the change signals of `Watch` (SDK-SPEC §4) — the quiet period, the one-signal channel, the lock-file filter. A function over a channel of paths; the method that feeds it from the vfs seam is in `store.go`. |
 | `doc.go` | Package documentation. |
 
 ### Seams and os/syscall confinement
 
-`internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
+`internal/vfs` (disk), `internal/exec` (processes: hooks and git), and `internal/env`
 (user environment) are the **only** three locations for `os`/`syscall` calls. Every
 other package — pure core and imperative shell alike — reaches the filesystem via
-the `vfs.FS` interface, spawns hook processes via the `exec.Runner` interface, and
+the `vfs.FS` interface, spawns processes via the `exec.Runner` interface, and
 reads the environment via the `env.Environment` interface, so all three can be
 swapped for in-memory/scripted/fake implementations in tests. Store resolution
 (CONFIG-SPEC) therefore reads `HOME` and the environment **only** through the `env`
@@ -264,9 +267,13 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 
 ## 7. Core invariants
 
-- **One writer.** All file access funnels through the engine; every mutation
+- **One writer.** All file access funnels through the engine, the git that publishes
+  the central stores included; every mutation
   serializes against all others — goroutines via an in-process mutex, processes via
-  an exclusive store-wide `flock`. This is the precondition for validation and atomicity.
+  an exclusive store-wide `flock` — and the `git add` of a publish serializes against
+  every mutation of a central store and every registry change, by taking the
+  central-root `flock` and then each store's. This is the
+  precondition for validation and atomicity.
 - **Derived inverse edges.** Only `parent`, `blocked_by`, and `related` are stored,
   on the dependent issue. Children, "blocks", and the inverse of `related` (which is
   symmetric) are always computed by scanning, so the on-disk graph cannot contradict
@@ -314,7 +321,29 @@ Deliberately out of scope, because they are unused weight:
   everything else, and nothing more. The store holds documents; it does not
   interpret them, rank them, or feed them to anything;
 - external tracker integrations (Jira, Linear, GitHub);
-- a database or SQL backend; a sync engine or federation;
+- a database or SQL backend;
+- a **sync engine or federation** — nothing merges one store's changes with another's,
+  and no copy of a store is writable from two machines. What is in scope is the opposite
+  shape: `taskmgr sync` publishes a machine's central stores to a git remote as a
+  **read-only mirror**, on a branch that only that machine pushes
+  ([SDK-SPEC](SDK-SPEC.md) §1). One writer per branch is what keeps it out of
+  sync-engine territory: every push is a fast-forward, so there is never a merge, a
+  rebase or a force-push, and a push that is not a fast-forward is a misconfiguration to
+  report, not a conflict to resolve. The cost is that a mirror cannot be edited where it
+  is read; changing a ticket means changing it on the machine that owns its store.
+  Rejected on the way there:
+  - **Merging tickets across machines.** Two writers to one issue need a merge rule per
+    field and per sidecar, and the one-writer invariant (§7) stops holding the moment a
+    store has two homes.
+  - **A server.** It is a daemon, an account and an uptime to own, for a tool whose
+    premise is plain files under existing version control.
+  - **A file-sync tool** (Syncthing, Dropbox and the like). It syncs both ways, so
+    every copy is writable and a store gains a second writer; it then resolves a
+    concurrent change with a conflict copy the engine never reads. A snapshot taken
+    mid-write is a second difference: the git mirror commits under every central
+    store's lock ([SDK-SPEC](SDK-SPEC.md) §1).
+  - **git `merge=union`.** It merges by line, so a frontmatter scalar edited on both
+    sides comes out as both values, a document the engine rejects or misreads;
 - swarms, configurable status/type catalogs, and **policy baked into the core** — rules
   like "tests must pass before close" are not engine features; they live in the hook
   extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at

@@ -200,6 +200,12 @@ var configKeyDefs = []configKeyDef{
 		get:  func(t *configTarget) string { return t.gcfg.HookTimeout },
 		set:  func(t *configTarget, v string) error { t.gcfg.HookTimeout = v; return nil },
 	},
+	{
+		name: "machine_id", scope: scopeGlobal, writable: true,
+		desc: "this machine's name to 'taskmgr sync', which publishes on branch machine/<id>; unset means the hostname",
+		get:  func(t *configTarget) string { return t.gcfg.MachineID },
+		set:  func(t *configTarget, v string) error { t.gcfg.MachineID = v; return nil },
+	},
 }
 
 // keysForScope returns the catalog entries of one scope, in table order.

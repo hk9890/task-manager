@@ -49,11 +49,18 @@ func (s *Store) contentPath(id string) string {
 	return filepath.Join(s.contentDir(), id)
 }
 
+// stagedContentPrefix and stagedContentSuffix frame the name new sidecar bytes
+// are staged under (stagedContentPath). The leading dot puts it outside the
+// issue-ID grammar, so it can never collide with a real sidecar.
+const (
+	stagedContentPrefix = "."
+	stagedContentSuffix = ".incoming"
+)
+
 // stagedContentPath returns the path new sidecar bytes are written to before
-// they replace an existing body — see writeFiles. The leading dot puts it
-// outside the issue-ID grammar, so it can never collide with a real sidecar.
+// they replace an existing body — see writeFiles.
 func (s *Store) stagedContentPath(id string) string {
-	return filepath.Join(s.contentDir(), "."+id+".incoming")
+	return filepath.Join(s.contentDir(), stagedContentPrefix+id+stagedContentSuffix)
 }
 
 // previousLayout reports whether the issue currently on disk keeps its body in

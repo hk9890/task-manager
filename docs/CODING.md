@@ -24,9 +24,10 @@ One task per `mise run`: trailing words become arguments to the first task, so
 
 ## Single-writer rule
 
-Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/`. `cmd/`
-and every consumer go through the `Store` API. **Within `sdk/tasks`, only the three
-seams `internal/vfs` (disk), `internal/exec` (hook processes), and `internal/env`
+Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/` and
+`<central_root>/stores/`, and only it runs the git that publishes the central stores.
+`cmd/` and every consumer go through the SDK API. **Within `sdk/tasks`, only the three
+seams `internal/vfs` (disk), `internal/exec` (processes: hooks and git), and `internal/env`
 (user environment — CONFIG-SPEC) may import `os`/`syscall`;** the pure core imports
 none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-only:
 `cmd/` is the process boundary and reads `os` directly for args, env, and exit codes.
@@ -35,12 +36,12 @@ none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-on
 
 | Change | Goes in |
 |---|---|
-| CLI command / flag | `cmd/` (wired in `root.go`); calls `Store`, never the FS. A selector every subcommand of a group reads is that group's own *persistent* flag (`configFlags` on `config`), which also makes it accept in both positions |
+| CLI command / flag | `cmd/`, registered with `rootCmd.AddCommand` in its own file's `init()`; calls the SDK, never the FS, git or any store file. A selector every subcommand of a group reads is that group's own *persistent* flag (`configFlags` on `config`), which also makes it accept in both positions |
 | Stored field / store behaviour | `sdk/tasks` (`model`/`frontmatter`/`validate`/`store`) |
 | Filter-expression language | `sdk/tasks/internal/query` (pure; no `os`, no `tasks` import) |
 | Any disk operation | `sdk/tasks/internal/vfs` (the seam) — never inline `os` elsewhere |
-| Spawning a hook process | `sdk/tasks/internal/exec` (the process seam) — never inline `os/exec` elsewhere |
-| Reading the environment (home, any `TASKMGR_*`) | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
+| Spawning a process the engine runs — a hook, or git to publish the central stores | `sdk/tasks/internal/exec` (the process seam) — never inline `os/exec` elsewhere |
+| Reading the environment (home, any `TASKMGR_*`, the hostname) | `sdk/tasks/internal/env` (the env seam) — never inline `os.Getenv`/`os.UserHomeDir` elsewhere |
 | Store resolution / global config / registry | `sdk/tasks` (`resolve.go` pure matching; `config.go`/`registry.go` shell, via the vfs/env seams) — see [CONFIG-SPEC](specs/CONFIG-SPEC.md) |
 | Hook packages: the format, `use:` resolution, the `argv[0]` rule | `sdk/tasks` (`packages.go` pure; `packageload.go` reads a package directory) |
 | Hook compilation / orchestration | `sdk/tasks` (`hooks.go` compile+validate, `hookrun.go` run, `hookpayload.go`) |

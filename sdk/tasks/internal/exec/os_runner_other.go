@@ -23,15 +23,16 @@ import (
 	"runtime"
 )
 
-// osRunner fails closed on platforms without unix signals. Like vfs.Lock, hook
-// execution is unix-only today; a non-unix target reports a spawn error rather
-// than silently running hooks without the SIGTERM/SIGKILL timeout contract.
+// osRunner fails closed on platforms without unix signals. Like vfs.Lock,
+// process execution — hooks and the publishing git — is unix-only today; a
+// non-unix target reports a spawn error rather than silently running a process
+// without the SIGTERM/SIGKILL timeout contract.
 // Production builds must target a unix OS.
 type osRunner struct{}
 
 func (osRunner) Run(spec Spec) Result {
 	return Result{
 		Category: SpawnError,
-		Err:      fmt.Errorf("exec: hook execution unsupported on %s; build for a unix target", runtime.GOOS),
+		Err:      fmt.Errorf("exec: process execution unsupported on %s; build for a unix target", runtime.GOOS),
 	}
 }

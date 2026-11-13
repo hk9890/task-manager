@@ -70,6 +70,7 @@ func applyGlobalConfigToDoc(old []byte, cfg GlobalConfig) ([]byte, error) {
 	})
 	setScalar(root, "central_root", cfg.CentralRoot)
 	setScalar(root, "hook_timeout", cfg.HookTimeout)
+	setScalar(root, "machine_id", cfg.MachineID)
 	if err := setUse(root, cfg.Use, hasDefect(cfg.defects, useKey)); err != nil {
 		return nil, err
 	}

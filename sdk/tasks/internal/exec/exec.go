@@ -15,16 +15,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package exec is the process seam: the only package in sdk/tasks besides vfs
-// that is permitted to import os, os/exec, and syscall. Hook execution spawns
-// external programs, which needs the parent environment, signals, and the
-// process API; concentrating that here keeps the pure core (and the rest of
-// sdk/tasks) free of os/syscall, exactly as vfs does for the filesystem.
+// that is permitted to import os, os/exec, and syscall. The engine spawns two
+// kinds of process — hooks, and git for publishing the central stores — which
+// needs the parent environment, signals, and the process API; concentrating
+// that here keeps the pure core (and the rest of sdk/tasks) free of os/syscall,
+// exactly as vfs does for the filesystem.
 //
-// Callers build a Spec (argv, env extras, stdin, working dir, timeout) and get
+// Callers build a Spec (argv, env changes, stdin, working dir, timeout) and get
 // back a Result describing how the process ended (Category) plus its exit code,
 // captured stdout/stderr, and wall-clock duration. The seam reports mechanics
 // only — interpreting an exit code as allow/deny is the hook orchestration's
-// job (HOOK-SPEC §6.1), not this package's.
+// job (HOOK-SPEC §6.1), and as "absent" or "failed" the git caller's, not this
+// package's.
 package exec
 
 import "time"
@@ -51,11 +53,22 @@ type Spec struct {
 	// parent process environment, which the OS runner inherits. The seam owns
 	// the os.Environ() read so callers stay free of the os import.
 	Env []string
+	// Unset names inherited variables the OS runner drops before Env is
+	// layered on, for a caller that must not pass one through at any value.
+	Unset []string
 	// Stdin is written to the process's standard input, which is then closed.
 	Stdin []byte
 	// Timeout bounds the process wall-clock time. Zero disables the limit. On
 	// expiry the process group is sent SIGTERM, then SIGKILL after KillGrace.
 	Timeout time.Duration
+	// KeepGroup keeps a process that has a Timeout in the caller's process
+	// group, where a Ctrl-C at the terminal reaches it as it reaches the
+	// caller. The timeout then signals the process alone, not a group: it suits
+	// a process whose children end when it does, such as git and its transport.
+	// On Linux the kernel also kills a KeepGroup process, with or without a
+	// Timeout, when the caller dies by any signal (runKeptInGroup); macOS has
+	// no such mechanism.
+	KeepGroup bool
 }
 
 // Category describes how a process ended. The exit code is authoritative only
@@ -86,6 +99,10 @@ type Result struct {
 	Stderr   []byte        // captured standard error
 	Duration time.Duration // wall-clock time the process ran
 	Err      error         // underlying cause for non-Completed categories (for logging)
+	// NotFound is a SpawnError whose cause is Argv[0] not found on PATH, the
+	// one spawn failure a caller can name a remedy for; any other — a working
+	// directory it cannot enter, a platform with no runner — leaves it false.
+	NotFound bool
 }
 
 // KillGrace is how long the seam waits after SIGTERM before sending SIGKILL to

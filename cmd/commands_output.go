@@ -81,6 +81,8 @@ var jsonOutputs = map[string]jsonOutput{
 	"statuses":            {prints: []string{}},
 	"store list":          {prints: []storeEntryDTO{}},
 	"store move":          {prints: storeMoveDTO{}},
+	"sync":                {prints: syncDTO{}},
+	"sync init":           {prints: syncInitDTO{}},
 	"tree":                {prints: []treeDTO{}},
 	"types":               {prints: []string{}},
 	"update":              {prints: mutationDTO{}},

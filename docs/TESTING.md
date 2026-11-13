@@ -65,6 +65,12 @@ nil. Coverage says where to look; the assertion is still the work.
 - A test that touches a real disk is L3 and belongs in an `_l3_test.go` file
   behind `//go:build integration`, whatever the subject is. The default
   `mise run test` must stay disk-free.
+  - **Exception — the seam packages** `sdk/tasks/internal/vfs`,
+    `sdk/tasks/internal/exec` and `sdk/tasks/internal/env`: a test behind
+    `//go:build integration` that touches the real disk or spawns processes may
+    sit in a file named after the seam source file or the function it tests
+    (`os_test.go` for `os.go`, `copytree_internal_test.go` for `copyTree`)
+    instead of `_l3_test.go`. Only the file name is exempt: the tag is still required.
 - Assert errors with `errors.Is` against the sentinels; validation failures are
   `*ValidationError` with a `Field`.
 - **Durability:** assert the parent-directory fsync through the `fsyncDirFn` seam
