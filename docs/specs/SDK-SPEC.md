@@ -328,8 +328,8 @@ started for another reason — a work tree it cannot enter, a platform with no p
 runner — is reported as `could not run git: <cause>`, because telling the user to install
 a git that is installed sends them the wrong way. git's own stderr is carried into any
 other failure. Where git's exit status is read as an answer, only exit `1` means
-"absent" — no such key, not a symbolic ref, no such ref, staged differences; any other
-status is a failure.
+"absent" — no such key, not a symbolic ref, no such ref, staged differences, not an
+ancestor; any other status is a failure.
 
 **`InitPublish(remote)`:**
 
@@ -484,7 +484,7 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   outranked by a `-c user.email`. The `.invalid` domain (RFC 2606) can never be delivered
   to;
 - runs with `GIT_TERMINAL_PROMPT=0`, so a push that needs credentials git cannot find
-  fails at once, with git's message, instead of waiting on a terminal nobody watches
+  ends at once, with git's message, instead of waiting on a terminal nobody watches
   until the push times out. `GIT_SSH_COMMAND` and ssh's `BatchMode` are
   deliberately not set:
   either would replace the user's own ssh setup — the command, the key, the agent — that
@@ -510,8 +510,8 @@ run goes through the process seam (ARCHITECTURE-SPEC §5), in `<central_root>/st
   A `.gitattributes` inside `stores/` is the user's, like a `.gitignore` there, and
   applies;
 - has no timeout, except the two commands that reach the remote: the push, and the
-  `ls-remote` after a failed push (below), each with the same limit. Every other command
-  is local. The push is ended after
+  `ls-remote` after a failed push (below), which lists refs and moves no objects, so it
+  is ended after 1 minute. Every other command is local. The push is ended after
   10 minutes by the process seam's timeout — SIGTERM to the git process, SIGKILL after
   the seam's grace (HOOK-SPEC §7) — and the call fails with
   `push timed out after 10m0s`, followed by what git wrote to stderr before then. A publish
@@ -549,27 +549,32 @@ messages.** A message is written for a person: git translates it, and a new git 
 may reword it. So git's message is passed on to the caller, and never read.
 
 **A push to a diverged branch is a clash, not a race.** When a push ends with an exit
-status, the publish asks the remote for the branch's tip with
-`git ls-remote origin refs/heads/machine/<machine-id>`. The tip is a clash when this work
-tree does not have it (`git rev-parse --verify --quiet <tip>^{commit}` exits `1`), or
-has it off HEAD's history (`git merge-base --is-ancestor <tip> HEAD` exits `1`). Either
-way a second writer exists: another machine publishes under this ID, or this machine
-was set up again from scratch. `Publish` returns `ErrMachineIDClash` with a message
-saying exactly that, telling the user to pick another `machine_id`
-(`taskmgr config set machine_id <id> --global`), move the work tree to it with
-`git branch -m machine/<id>`, and publish again, followed by git's own message. It never
-forces: overwriting the branch would delete the other writer's snapshots. A clash is
-found only by a publish that pushes, so a machine with nothing new reports it at its
-next change. The check costs one more call to the remote, and only after a failed push.
-A remote that `ls-remote` cannot reach, or with no such branch, is no clash.
+status, the publish asks each URL the push went to (`git remote get-url --push --all
+origin`, so every `pushurl` and `pushInsteadOf` rewrite counts) for the branch's tip with
+`git ls-remote <url> refs/heads/machine/<machine-id>`; where the push URL is origin's
+`url`, it passes the name `origin`, so a token in the URL stays out of the process list.
+It reads only the line whose ref is exactly the branch: `ls-remote` matches the end of a
+ref name. Then:
+
+| The remote's tip | Error |
+|---|---|
+| this work tree does not have it (`git rev-parse --verify --quiet <tip>^{commit}` exits `1`) | `ErrMachineIDClash`: a second writer exists, another machine under this ID, or this machine set up again from scratch. The message says to pick another `machine_id` (`taskmgr config set machine_id <id> --global`), move the work tree to it with `git branch -m machine/<id>`, and publish again |
+| this work tree has it off HEAD's history (`git merge-base --is-ancestor <tip> HEAD` exits `1`) | no sentinel: the branch was amended or reset here after it was published. The message names `git -C <stores> reset --soft <tip>`, which makes the branch descend from the tip again and keeps every store file, so the next publish commits the difference |
+| anything else, or no answer | the failed push below |
+
+Both messages end with git's own. A publish never forces: overwriting the branch would
+delete the other writer's snapshots. A clash is found only by a publish that pushes, so
+a machine with nothing new reports it at its next change. The check costs one more call
+to each push URL, only after a failed push, and at most a minute each (above).
 
 **Any other failed push is one error.** Its cause — no network, a login git cannot make
 without a prompt, a remote that refuses the push — is git's to tell. The error names the
-branch and the URL the push went to, from `git remote get-url --push origin`, so a
-`pushurl` or an `insteadOf` rewrite is named as git used it. It names
-`git -C <stores> push origin machine/<machine-id>` to run by hand, where git can ask what a
-sync never lets it ask, and ends with git's own message. A push that timed out or was
-killed keeps its own error (above).
+branch and every URL the push went to, so a `pushurl` or an `insteadOf` rewrite is named
+as git used it. It names
+`git -C <stores> push --no-verify origin refs/heads/machine/<machine-id>:refs/heads/machine/<machine-id>`
+to run by hand, the publish's own push, where git can ask what a sync never lets it
+ask, and ends with git's own message. A push that timed out or was killed keeps its own
+error (above).
 
 **A remote's credentials stay out of errors and logs.** A remote URL may carry them
 (`https://user:token@host/…`). Every error both calls return, and every record they log,

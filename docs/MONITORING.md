@@ -167,8 +167,10 @@ is diagnosed after the fact.
   `publish_lock_wait` names the store a long write or a slow pre-hook holds
   ([Hook timing](#hook-timing)); it lasts at most 2 minutes, then ends in
   `publish_error`.
-- **Failed:** the `publish_error` record names the stage; the `publish_git` warn just
-  before it carries git's `stderr`. A failure after the commit, or in the push, keeps
+- **Failed:** the `publish_error` record names the stage; the last `publish_git` warn of
+  the failed command carries git's `stderr`. After a failed push, read the one with
+  `cmd=push`: the `ls-remote` that asks the remote for its tip comes after it and can
+  fail too, with the same cause. A failure after the commit, or in the push, keeps
   the commit local: `head` names the commit that is not on the remote yet (empty when
   the failure came before it was read), and `committed` says whether this run made it.
   The next sync tries the push again, and succeeds once what the error names is fixed.

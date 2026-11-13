@@ -287,6 +287,30 @@ func TestPublish_L3_RejectedPushNamesTheMachineIDClash(t *testing.T) {
 	}
 }
 
+// A branch amended here after it was published is this machine's own
+// rewrite, not a second writer; the soft reset the error names makes the
+// next publish succeed and keeps the store files.
+func TestPublish_L3_RewrittenBranchNamesTheSoftReset(t *testing.T) {
+	p := newPublishL3(t)
+	p.mustInit()
+	p.create("one")
+	p.mustPublish()
+	published := realGit(t, p.stores, "rev-parse", "HEAD")
+	realGit(t, p.stores, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false",
+		"commit", "--quiet", "--amend", "-m", "rewritten")
+
+	p.create("two")
+	_, err := p.publish()
+	if err == nil || errors.Is(err, ErrMachineIDClash) || !strings.Contains(err.Error(), "reset --soft "+published) {
+		t.Fatalf("publish after an amend: %v, want the soft reset to %s, not the clash", err, published)
+	}
+	realGit(t, p.stores, "reset", "--quiet", "--soft", published)
+	p.mustPublish()
+	if got := realGit(t, p.remote, "rev-parse", "machine/laptop^"); got != published {
+		t.Errorf("remote branch parent = %s, want the published %s", got, published)
+	}
+}
+
 func TestPublish_L3_ChangedMachineIDIsRefused(t *testing.T) {
 	p := newPublishL3(t)
 	p.mustInit()

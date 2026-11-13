@@ -248,16 +248,20 @@ func (p *publisher) commitAndPush() (PublishResult, error) {
 		// name ambiguous, and git refuses to push it.
 		if _, err := p.gitWithin(publishPushTimeout, "push", "--quiet", "--no-verify", publishRemote, p.ref()+":"+p.ref()); err != nil {
 			// A timeout or a kill has its own error. A push git ended with an
-			// exit status is a clash when the remote holds a commit this work
-			// tree never made; any other cause is git's to tell.
+			// exit status is a clash when the remote's branch holds a commit
+			// HEAD does not descend from; any other cause is git's to tell.
 			var g *gitError
 			if !errors.As(err, &g) {
 				return PublishResult{}, err
 			}
-			if p.remoteDiverged() {
+			urls := p.pushURLs(remote)
+			switch div, tip := p.remoteDivergence(remote, urls); div {
+			case foreignTip:
 				return PublishResult{}, errNotFastForward(p.dir, p.id, g.Message)
+			case rewrittenTip:
+				return PublishResult{}, errBranchRewritten(p.dir, p.id, tip, g.Message)
 			}
-			return PublishResult{}, errPushFailed(p.dir, p.branch(), p.pushURL(remote), err)
+			return PublishResult{}, errPushFailed(p.dir, p.ref(), urls, err)
 		}
 		out.Pushed = true
 	}
@@ -353,43 +357,67 @@ func (p *publisher) branch() string { return machineBranch(p.id) }
 // ref is the branch's full ref name.
 func (p *publisher) ref() string { return "refs/heads/" + p.branch() }
 
-// remoteDiverged reports whether the remote's branch holds a commit this work
-// tree never made: one it does not have, or one that is not in HEAD's
-// history. Only this machine pushes the branch, so that is a second writer.
-// It reads ls-remote's output and exit statuses only, never git's messages,
-// which are written for people and translated. A remote it cannot ask, or
-// with no such branch, has not diverged.
-func (p *publisher) remoteDiverged() bool {
-	out, err := p.gitWithin(publishPushTimeout, "ls-remote", publishRemote, p.ref())
-	if err != nil {
-		return false
-	}
-	// ls-remote matches the pattern against the end of each ref name, so a
-	// deeper ref with the same ending is listed too: take the exact one.
-	var tip string
-	for line := range strings.Lines(out) {
-		if sha, ref, _ := strings.Cut(strings.TrimSpace(line), "\t"); ref == p.ref() {
-			tip = sha
+// divergence is what the remote's branch holds after a failed push.
+type divergence int
+
+const (
+	notDiverged  divergence = iota // nothing this work tree lacks, or the remote could not say
+	foreignTip                     // a commit this work tree does not have: a second writer
+	rewrittenTip                   // a commit it has, off HEAD's history: the branch was rewritten here
+)
+
+// remoteDivergence asks each URL the push went to for the branch's tip, and
+// returns the first that HEAD does not descend from, with that tip. It reads
+// ls-remote's output and exit statuses only, never git's messages, which are
+// written for people and translated. A URL it cannot ask, or with no such
+// branch, has not diverged.
+//
+// ls-remote is given origin's name where the push URL is origin's url, the
+// common case, so a token in that URL stays out of the process list.
+func (p *publisher) remoteDivergence(remote string, urls []string) (divergence, string) {
+	for _, url := range urls {
+		target := url
+		if url == remote {
+			target = publishRemote
+		}
+		out, err := p.gitWithin(publishQueryTimeout, "ls-remote", target, p.ref())
+		if err != nil {
+			continue
+		}
+		// ls-remote matches the pattern against the end of each ref name, so
+		// a deeper ref with the same ending is listed too: take the exact one.
+		var tip string
+		for line := range strings.Lines(out) {
+			if sha, ref, _ := strings.Cut(strings.TrimSpace(line), "\t"); ref == p.ref() {
+				tip = sha
+			}
+		}
+		if tip == "" {
+			continue
+		}
+		have, err := p.revision(tip + "^{commit}")
+		switch {
+		case err != nil:
+			continue
+		case have == "":
+			return foreignTip, tip
+		}
+		if _, err := p.git("merge-base", "--is-ancestor", tip, "HEAD"); gitAbsent(err) {
+			return rewrittenTip, tip
 		}
 	}
-	if tip == "" {
-		return false
-	}
-	if _, err := p.git("rev-parse", "--verify", "--quiet", tip+"^{commit}"); err != nil {
-		return gitAbsent(err)
-	}
-	_, err = p.git("merge-base", "--is-ancestor", tip, "HEAD")
-	return gitAbsent(err)
+	return notDiverged, ""
 }
 
-// pushURL is the URL a push of origin goes to: pushurl and the insteadOf
-// rewrites applied. It falls back to remote, origin's url, when git cannot
-// say.
-func (p *publisher) pushURL(remote string) string {
-	if url, err := p.git("remote", "get-url", "--push", publishRemote); err == nil {
-		return url
+// pushURLs are the URLs a push of origin goes to: every pushurl, with the
+// insteadOf rewrites applied. It falls back to remote, origin's url, when git
+// cannot say.
+func (p *publisher) pushURLs(remote string) []string {
+	out, err := p.git("remote", "get-url", "--push", "--all", publishRemote)
+	if err != nil || out == "" {
+		return []string{remote}
 	}
-	return remote
+	return strings.Fields(out)
 }
 
 // git runs one local git command in the work tree, without a time limit, and

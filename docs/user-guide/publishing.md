@@ -100,6 +100,7 @@ repository.
 | no machine ID can be derived from the hostname | this machine's hostname gives no usable name | set one with `taskmgr config set machine_id <id> --global` |
 | is not on a branch | the stores' git work tree was checked out on a single commit by hand | check out `machine/<machine-id>` again with the `git checkout` the message prints |
 | another machine publishes under this machine ID | two machines use one name, or this machine was set up again from scratch | pick a new name with `taskmgr config set machine_id <id> --global`, run the `git branch -m` the message prints, then `taskmgr sync`. git's own message follows, naming what the remote refused |
+| was rewritten in ... after it was published | the stores' branch was amended or reset by hand after a sync, so the remote holds a commit the branch no longer has | run the `git reset --soft` the message prints, which keeps every store file, then `taskmgr sync` |
 | machine_id changed since 'taskmgr sync init' | you renamed the machine after setting it up | set the old name back, or run the `git branch -m` the message prints |
 | sync publishes only from machine/... | the stores were already a git repository on another branch, such as `main`, or a `sync init` stopped part-way | run what the message prints: `sync init` again, or a `git checkout` or `git branch -m` |
 | git is not on PATH | git is not installed, or not on this shell's `PATH` | install git |

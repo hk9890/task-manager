@@ -218,8 +218,8 @@ func TestPublish_FailureBeforePushLogsNoCommitFields(t *testing.T) {
 }
 
 // Exit 1 from config --get, diff --quiet, rev-parse --verify, symbolic-ref
-// --quiet and merge-base --is-ancestor answers a question; a warn for each would bury the real failures.
-// A rejected push also exits 1, and is one.
+// --quiet and merge-base --is-ancestor answers a question; a warn for each
+// would bury the real failures. A rejected push also exits 1, and is one.
 func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 	buf, logOpt := debugLog()
 
@@ -239,6 +239,10 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 	if _, err := publishWith(fs, e, runner, logOpt); !errors.Is(err, ErrMachineIDClash) {
 		t.Fatalf("rejected publish: %v", err)
 	}
+	g.staged, g.reject, g.remoteTip, g.side = true, false, sha(99), sha(99)
+	if _, err := publishWith(fs, e, runner, logOpt); err == nil {
+		t.Fatal("publish after a rewrite succeeded")
+	}
 
 	answered := map[string]bool{}
 	for _, r := range withMsg(records(t, buf), "publish_git") {
@@ -247,7 +251,7 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 		}
 		cmd := r["cmd"].(string)
 		if cmd == "push" {
-			if r["level"] != "WARN" || !strings.Contains(r["stderr"].(string), "[rejected]") {
+			if r["level"] != "WARN" || r["stderr"] == "" {
 				t.Errorf("rejected push record = %v, want warn with git's stderr", r)
 			}
 			continue
@@ -260,7 +264,7 @@ func TestPublish_ExitOneAnswersAreDebugAndFailuresWarn(t *testing.T) {
 			t.Errorf("an answer carries stderr: %v", r)
 		}
 	}
-	for _, cmd := range []string{"config", "diff", "rev-parse", "symbolic-ref"} {
+	for _, cmd := range []string{"config", "diff", "rev-parse", "symbolic-ref", "merge-base"} {
 		if !answered[cmd] {
 			t.Errorf("no exit-1 answer from %s was logged", cmd)
 		}
