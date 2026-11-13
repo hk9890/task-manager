@@ -22,7 +22,8 @@
 // to extract, so the only thing taskmgr adds over `git clone` is knowing where
 // the clone belongs and what it provides.
 //
-// git is spawned here and nowhere else. The SDK's contract stays "a directory
+// The git that installs a package is spawned here, never by the SDK, whose
+// git runs only to publish the central stores. The SDK's contract stays "a directory
 // that exists on disk", so nothing on the hook path — the resolution a create or
 // a close performs — has any notion of a network, a URL or a revision
 // (HOOK-SPEC §3.5).

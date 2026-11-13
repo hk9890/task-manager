@@ -45,6 +45,7 @@ central_root: ~/.taskmgr   # registry + central stores live here; ~ expands
 hook_timeout: 2s           # fallback limit for a store that sets none
 use:                       # hook packages applied to every store on this machine
   - name: doc-policy       # <home>/packages/<repo>/doc-policy
+machine_id: laptop         # this machine's name to `taskmgr sync`; default: the hostname
 ```
 
 | Field | Required | Notes |
@@ -53,6 +54,23 @@ use:                       # hook packages applied to every store on this machin
 | `central_root` | no | Directory holding the registry and central stores. `~` expands; a relative value resolves against the home. Defaults to the home. |
 | `hook_timeout` | no | Fallback per-hook wall-clock limit for a store that sets none ([HOOK-SPEC](HOOK-SPEC.md) §3.1). A store's own value wins. |
 | `use` | no | Hook packages applied to **every** store on this machine, running before the store's own. Entry schema in [HOOK-SPEC](HOOK-SPEC.md) §3.5; a `path` entry resolves against the home and stays inside it. |
+| `machine_id` | no | This machine's name to `taskmgr sync`, which publishes the central stores on the branch `machine/<machine_id>` ([CLI-SPEC](CLI-SPEC.md) §2.5). Defaults to one derived from the hostname (below). |
+
+**Machine ID.** A set `machine_id` and a derived one obey one grammar:
+`^[a-z0-9][a-z0-9-]{0,62}$` — lowercase letters, digits and `-`, a leading letter or
+digit, at most 63 characters. It is used unescaped as a git ref component and as the
+local part of the commit e-mail, and the grammar is what makes both safe. The engine
+enforces it: a write of the per-user config that introduces a value outside it is refused
+with a validation error naming the key, before anything is written, and a hand-edited one
+is refused where the machine ID is read — by the publish calls, before they create or run
+anything ([SDK-SPEC](SDK-SPEC.md) §1, §2).
+
+When `machine_id` is unset, the ID is derived from the hostname: lowercased, cut at the
+first `.`, every character outside `[a-z0-9-]` replaced by `-`, and leading and trailing
+`-` trimmed — `Hans-Laptop.local` becomes `hans-laptop`. A result that is empty or still
+fails the grammar is an error telling the user to set `machine_id`. The default is a
+convenience, not an identity: two machines with one hostname derive one ID, and the
+first sync after the second is set up reports the clash (CLI-SPEC §2.5).
 
 `<home>/packages` holds the installed **package repositories**, one directory each, and a
 repository's own top-level directories are the packages it provides. A `name` entry in
@@ -94,12 +112,12 @@ repository.
 ## 3. Central root & registry — `mapping.yaml`
 
 The **central root** (default = the home) is a plain directory — **not a store**. It
-holds the registry, an advisory lock (below), and a `stores/` directory with one
+holds the registry, its advisory locks (below), and a `stores/` directory with one
 subfolder per central store; each subfolder is a complete, ordinary store per
 TASK-STORAGE-SPEC (own `config.yaml`, prefix, hot files, `comments/`, `closed/`). The
 dedicated `stores/` directory keeps store names in their own namespace, so a store can
-never collide with the central root's own files (`config.yaml`, `mapping.yaml`, and the
-two lock files). Because a central store is an ordinary store, relocating one is a plain folder
+never collide with the central root's own files (`config.yaml`, `mapping.yaml`,
+`.publish.state`, and the three lock files). Because a central store is an ordinary store, relocating one is a plain folder
 move plus a registry edit (§5).
 
 ```
@@ -108,6 +126,8 @@ move plus a registry edit (§5).
 ├── .config.lock         # advisory flock for config.yaml writes (empty; only its lock state matters)
 ├── mapping.yaml         # the registry (below)
 ├── .lock                # advisory flock for registry writes (empty; only its lock state matters)
+├── .publish.lock        # advisory flock that runs one publish at a time (SDK-SPEC §1); holds its holder while held (below)
+├── .publish.state       # what the last init or successful publish recorded (below)
 └── stores/              # all central stores live here
     └── my-project/      # a central store — a complete, ordinary store
         ├── config.yaml
@@ -115,6 +135,42 @@ move plus a registry edit (§5).
         ├── comments/
         └── closed/
 ```
+
+`.publish.lock` is the one lock file with content. A publish that takes the lock writes,
+in place, its process ID and the time it took the lock, in UTC, RFC 3339:
+
+```
+pid: 4711
+since: 2026-11-13T14:02:00Z
+```
+
+A publish refused because the lock is held names them. The holder empties the file before
+it releases the lock. The content is informative only: the lock, not the content, says
+whether a publish runs, so stale content under a free lock — a holder killed before it
+emptied the file — never refuses a publish on its own, and is overwritten by the next
+holder. `PublishStatus` is the one other taker of the lock: over stale content it holds
+the lock for one try and empties the content. A publish that starts during that try is
+refused, and the refusal names the killed holder (SDK-SPEC §1).
+
+`.publish.state` is YAML that `InitPublish` and every successful `Publish` write (behind
+`taskmgr sync init` and `taskmgr sync`), under `.publish.lock`, and `PublishStatus` reads (SDK-SPEC §1). Each key is left
+out while it has no value:
+
+```
+remote: https://github.com/me/tasks-mirror.git   # origin's URL, without its user and password
+branch: machine/laptop                           # the branch the record is of
+last_sync: 2026-11-13T14:02:07Z                  # UTC, whole seconds, when the last successful publish ended
+commit: 4f0c3b9e8d…                              # HEAD after it
+```
+
+It sits outside `stores/`, so it is never published, and it is machine-local like the
+registry. Deleting it loses only the status until the next sync.
+
+`stores/` may also be a git work tree: `taskmgr sync init` puts a `.git/` directory in it
+(CLI-SPEC §2.5). It is not mistaken for a store, and no store can take its name. Nothing lists `stores/`: every path into it is
+`stores/<store>` for a name the registry holds, and the store-name grammar below admits
+no leading `.`. The same rule keeps the `.incoming-<name>` staging directory of a move
+(§5) out of the namespace.
 
 The registry is one YAML document at `<central_root>/mapping.yaml`:
 
@@ -189,7 +245,8 @@ a broken folder means external interference or a store edited by hand.
 **Registry lock.** Writes to `mapping.yaml` are serialized by an advisory `flock` on
 `<central_root>/.lock` — an empty file whose only role is its lock state, mirroring a
 store's `.tasks/.lock` (TASK-STORAGE-SPEC §4.5). The central root is not itself a store,
-so it carries this separate lock for registry mutations.
+so it carries this separate lock for registry mutations. A publish holds it too while it
+commits, so no store is created, moved in or renamed mid-commit (SDK-SPEC §1).
 
 ---
 

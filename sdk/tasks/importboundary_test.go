@@ -28,7 +28,7 @@ import (
 
 // TestImportBoundary_OnlyVfsImportsOS verifies that no non-test Go file
 // outside the three seams — sdk/tasks/internal/vfs (disk),
-// sdk/tasks/internal/exec (hook processes), and sdk/tasks/internal/env (user
+// sdk/tasks/internal/exec (processes: hooks and git), and sdk/tasks/internal/env (user
 // environment, for store resolution) — imports the "os" or "syscall" packages.
 // This is the grep-guard for the single-writer / seam rule: os and syscall are
 // concentrated in those three seams only.
@@ -47,7 +47,7 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 			return err
 		}
 		// Only inspect .go files; skip test files; skip the three seams that are
-		// permitted os/syscall (vfs = disk, exec = hook processes, env = user
+		// permitted os/syscall (vfs = disk, exec = processes, env = user
 		// environment). internal/storetest is deliberately NOT skipped: it is
 		// test-only support, which would have excused an os import, but its
 		// fixtures reach disk through the vfs seam like everything else, so it
@@ -91,7 +91,7 @@ func TestImportBoundary_OnlyVfsImportsOS(t *testing.T) {
 // ready.go read disk on every call while this test passed it:
 //
 //  1. It imports one of the three seams — internal/vfs (disk),
-//     internal/env (user environment) or internal/exec (hook processes).
+//     internal/env (user environment) or internal/exec (processes: hooks and git).
 //  2. It declares a method on *Store. A method needs no import to reach disk —
 //     it goes through the s.fs field, which no import list reveals — and it
 //     cannot be called without constructing a store, which is the property that
@@ -135,6 +135,10 @@ func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 		// packagerepo.go reads and removes the installed package repositories
 		// under the taskmgr home.
 		"packagerepo.go": true,
+
+		// publishrun.go creates the stores' work tree, writes its exclude file
+		// and takes every central store's lock around the commit.
+		"publishrun.go": true,
 	}
 	mayImportEnv := map[string]bool{
 		"store.go":       true, // carries the env seam its resolution used
@@ -142,11 +146,13 @@ func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 		"registry.go":    true, // central registry resolution
 		"packageload.go": true, // global package directory under the user home
 		"packagerepo.go": true, // the installed repositories under the user home
+		"publishrun.go":  true, // the per-user config and the hostname the machine ID defaults to
 	}
 	mayImportExec := map[string]bool{
-		"store.go":   true, // carries the runner hooks are spawned with
-		"hookrun.go": true, // spawns the hook process
-		"log.go":     true, // records a hook process failure
+		"store.go":      true, // carries the runner hooks are spawned with
+		"hookrun.go":    true, // spawns the hook process
+		"log.go":        true, // records a hook process failure
+		"publishrun.go": true, // spawns git to publish the central stores
 	}
 	mayDeclareStoreMethods := map[string]bool{
 		"store.go":    true,
@@ -169,7 +175,7 @@ func TestImportBoundary_PureCoreNoSeams(t *testing.T) {
 	}{
 		{"vfs (disk)", seamRoot + "vfs", mayImportVFS},
 		{"env (user environment)", seamRoot + "env", mayImportEnv},
-		{"exec (hook processes)", seamRoot + "exec", mayImportExec},
+		{"exec (processes: hooks and git)", seamRoot + "exec", mayImportExec},
 	}
 
 	entries, err := os.ReadDir(sdkTasksDir)

@@ -85,15 +85,22 @@ func loadRegistry(fs vfs.FS, croot, home string) ([]registryEntry, error) {
 // centralPaths resolves the home and the central root through the seams
 // (CONFIG-SPEC §1–§2) without reading the registry.
 func centralPaths(fs vfs.FS, e env.Environment) (home, croot string, err error) {
+	home, _, croot, err = centralConfig(fs, e)
+	return home, croot, err
+}
+
+// centralConfig is centralPaths with the per-user config it read, for a caller
+// that needs another key of it too.
+func centralConfig(fs vfs.FS, e env.Environment) (home string, cfg GlobalConfig, croot string, err error) {
 	home, err = taskmgrHome(e)
 	if err != nil {
-		return "", "", err
+		return "", GlobalConfig{}, "", err
 	}
-	gcfg, err := loadGlobalConfig(fs, home)
+	cfg, err = loadGlobalConfig(fs, home)
 	if err != nil {
-		return "", "", err
+		return "", GlobalConfig{}, "", err
 	}
-	return home, centralRoot(gcfg, home), nil
+	return home, cfg, centralRoot(cfg, home), nil
 }
 
 // loadCentral resolves the home and central root and loads (and validates) the
@@ -237,7 +244,7 @@ const stagingPrefix = ".incoming-"
 // lock serializes attempts, so anything staged is a leftover and never the only
 // copy of the data.
 func moveStoreDir(fs vfs.FS, src, dst string) error {
-	unlock, err := fs.Lock(filepath.Join(src, lockFileName))
+	unlock, err := lockStoreDir(fs, src)
 	if err != nil {
 		return err
 	}

@@ -136,9 +136,10 @@ nothing else should be.
 
 - Tests sit next to the code (`*_test.go`). Never hand-roll a real `.tasks/` —
   `storetest.NewRawFixture` is the way to write raw bytes into one.
-- A test that touches a real disk is L3 wherever its subject lives: it goes in an
-  `_l3_test.go` file behind `//go:build integration`, so the default run stays
-  disk-free.
+- A test that touches a real disk is L3 wherever its subject lives, behind
+  `//go:build integration`, so the default run stays disk-free.
+  [TESTING.md § Conventions](../TESTING.md#conventions) owns the file name it takes
+  and the seam packages' exception to that name.
 - Deterministic time only; never assert the wall clock. `Store.now` inside package
   `tasks`, `tasks.WithClock` at construction from `cmd/` and external consumers.
   There is no post-construction setter: a test that must move time owns the state

@@ -243,8 +243,8 @@ func TestMem_LockInProcess(t *testing.T) {
 	}
 
 	unlock, err := m.Lock(path)
-	if err != nil {
-		t.Fatalf("Lock: %v", err)
+	if err != nil || unlock == nil {
+		t.Fatalf("Lock = unlock %v, err %v; want the unlock", unlock != nil, err)
 	}
 	if err := unlock(); err != nil {
 		t.Fatalf("unlock: %v", err)
@@ -260,6 +260,69 @@ func TestMem_Lock_MissingParent(t *testing.T) {
 
 	if _, err := m.Lock("/nonexistent/.lock"); !vfs.IsNotExist(err) {
 		t.Fatalf("expected a not-exist error, got %v", err)
+	}
+}
+
+func TestMem_TryLock_BusyIsNotOK(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := m.Lock("/tasks/.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, ok, err := m.TryLock("/tasks/.lock"); ok || err != nil || u != nil {
+		t.Fatalf("TryLock on a held lock = ok %v, err %v; want not ok, no error, no unlock", ok, err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	u, ok, err := m.TryLock("/tasks/.lock")
+	if !ok || err != nil {
+		t.Fatalf("TryLock on a free lock = ok %v, err %v", ok, err)
+	}
+	if _, ok, _ := m.TryLock("/tasks/.lock"); ok {
+		t.Error("TryLock granted a lock TryLock holds")
+	}
+	if err := u(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMem_WriteInPlace_ReplacesTheContent(t *testing.T) {
+	m := vfs.NewMem()
+	if err := m.WriteInPlace("/missing/.lock", []byte("x"), 0o644); !vfs.IsNotExist(err) {
+		t.Errorf("WriteInPlace under a missing directory: %v, want not-exist", err)
+	}
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{"first, longer\n", "second\n"} {
+		if err := m.WriteInPlace("/tasks/.lock", []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := m.ReadFile("/tasks/.lock"); err != nil || string(got) != "second\n" {
+		t.Errorf("content = %q, %v; want only the last write", got, err)
+	}
+	m.FailOn("WriteInPlace", "/tasks/.lock", errors.New("injected"))
+	if err := m.WriteInPlace("/tasks/.lock", []byte("x"), 0o644); err == nil {
+		t.Error("FailOn(WriteInPlace) did not fail the write")
+	}
+}
+
+func TestMem_TryLock_FaultAndMissingParent(t *testing.T) {
+	m := vfs.NewMem()
+	if _, _, err := m.TryLock("/nonexistent/.lock"); !vfs.IsNotExist(err) {
+		t.Errorf("TryLock under a missing directory: %v, want not-exist", err)
+	}
+	if err := m.MkdirAll("/tasks", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.FailOn("TryLock", "/tasks/.lock", errInjected)
+	if _, ok, err := m.TryLock("/tasks/.lock"); ok || !errors.Is(err, errInjected) {
+		t.Errorf("TryLock with a fault = ok %v, err %v; want the injected error", ok, err)
 	}
 }
 
