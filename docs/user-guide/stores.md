@@ -119,7 +119,7 @@ There is no `unlink` command. The registry is one short YAML file at
 | What | Where |
 |---|---|
 | Your taskmgr home | `~/.taskmgr/`, or `$TASKMGR_HOME` if set (must be an absolute path) |
-| Global config | `<home>/config.yaml` — `central_root`, a fallback `hook_timeout`, and the hook packages applied to every store on this machine |
+| Global config | `<home>/config.yaml` — `central_root`, a fallback `hook_timeout`, the hook packages applied to every store on this machine, and `machine_id` ([Publishing your stores](publishing.md)) |
 | The registry | `<central_root>/mapping.yaml` |
 | Central stores | `<central_root>/stores/<name>/` |
 | A store's own config | `<store>/config.yaml` — the ID prefix, `hook_timeout`, and this project's hook packages |

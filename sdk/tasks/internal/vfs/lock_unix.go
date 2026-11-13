@@ -19,6 +19,7 @@
 package vfs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -29,20 +30,42 @@ import (
 // function releases the lock and closes the file descriptor.
 // This is the unix implementation; see lock_other.go for the fail-closed stub.
 func (osFS) Lock(path string) (func() error, error) {
+	return blocking(flock(path, syscall.LOCK_EX))
+}
+
+// blocking is flock's result for a blocking lock, which must hold the lock or
+// fail: a not-ok without an error would hand the caller no unlock and no
+// error, and it would write as if it held the lock.
+func blocking(unlock func() error, ok bool, err error) (func() error, error) {
+	if err == nil && !ok {
+		return nil, errors.New("vfs.Lock flock: a blocking lock returned without the lock")
+	}
+	return unlock, err
+}
+
+// TryLock is Lock with LOCK_NB: a lock another open file holds is ok false.
+func (osFS) TryLock(path string) (func() error, bool, error) {
+	return flock(path, syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+func flock(path string, how int) (unlock func() error, ok bool, err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("vfs.Lock open: %w", err)
+		return nil, false, fmt.Errorf("vfs.Lock open: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("vfs.Lock flock: %w", err)
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("vfs.Lock flock: %w", err)
 	}
-	unlock := func() error {
+	unlock = func() error {
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
 			_ = f.Close()
 			return fmt.Errorf("vfs.Lock unlock: %w", err)
 		}
 		return f.Close()
 	}
-	return unlock, nil
+	return unlock, true, nil
 }

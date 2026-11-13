@@ -811,7 +811,8 @@ state being written. The in-lock model is the price of a correct gate, and it is
 model.
 
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
-block until it returns. The worst case is `hook_timeout` + the 2-second SIGKILL grace
+block until it returns, and a writer of a store opened `WithLockTimeout` gives up with
+`ErrStoreBusy` when its timeout runs out first (SDK-SPEC §7). The worst case is `hook_timeout` + the 2-second SIGKILL grace
 (§3.1, §7.1) — ~4s at the default. **If you raise `hook_timeout` to run a test suite on
 close, you serialize all writes for that duration.** A set (`CreateBatch`, §4) holds
 the lock across the `pre-create` chains of all its entries — the same total as filing
