@@ -26,7 +26,8 @@ features that are actually used, and nothing more.
    artifact is human-readable text that diffs cleanly.
 3. **One writer.** A single engine owns all file access. Centralizing writes is
    what makes it possible to validate every change and guarantee that nothing
-   malformed or half-written reaches disk.
+   malformed or half-written reaches disk
+   ([decision 0002](../decisions/0002-one-engine-is-the-only-code-that-touches-a-store.md)).
 4. **Minimal dependencies.** The engine pulls in almost nothing, so it can be
    embedded by other programs without weight.
 
@@ -274,14 +275,14 @@ Reads take a fresh snapshot of the directory and never hold the lock.
   an exclusive store-wide `flock` — and the `git add` of a publish serializes against
   every mutation of a central store and every registry change, by taking the
   central-root `flock` and then each store's. This is the
-  precondition for validation and atomicity.
+  precondition for validation and atomicity
+  ([decision 0002](../decisions/0002-one-engine-is-the-only-code-that-touches-a-store.md)).
 - **Derived inverse edges.** Only `parent`, `blocked_by`, and `related` are stored,
   on the dependent issue. Children, "blocks", and the inverse of `related` (which is
-  symmetric) are always computed by scanning, so the on-disk graph cannot contradict
-  itself.
-- **No counter file.** IDs are random base36 tokens checked against existing IDs,
-  avoiding both a shared mutable counter (a git merge hotspot) and the
-  parallel-branch ID collisions that sequential numbering caused.
+  symmetric) are always computed by scanning
+  ([decision 0006](../decisions/0006-only-one-direction-of-a-relationship-is-stored.md)).
+- **No counter file.** IDs are random base36 tokens checked against existing IDs
+  ([decision 0005](../decisions/0005-an-issue-id-is-a-random-token-with-no-counter.md)).
 - **Bounded hot files.** Every issue file the engine writes stays under ~64 KiB:
   a larger body moves to a content sidecar
   ([TASK-STORAGE-SPEC.md](TASK-STORAGE-SPEC.md) §4.6). Since the hot scan reads
@@ -293,10 +294,8 @@ Reads take a fresh snapshot of the directory and never hold the lock.
 - **Hot/cold separation.** Active issues and closed history are physically
   separated so the common path stays proportional to open work, not total history.
   The partition axis is **open-vs-closed only** — deferred or long-parked issues
-  stay in the hot set; there is deliberately no `parked/` partition (decision
-  at-39dru2). The hot scan is O(open) at ~13µs/file, so it degrades gracefully even
-  at a few thousand hot issues; a status-based split would add routing complexity
-  for no correctness benefit.
+  stay in the hot set; there is no `parked/` partition
+  ([decision 0004](../decisions/0004-a-store-partitions-issues-into-open-and-closed-only.md)).
 
 ---
 
@@ -319,36 +318,23 @@ Deliberately out of scope, because they are unused weight:
 - a **knowledge base**: no retrieval layer, no indexing, no embedding, no
   "prime"-style context assembly. `type: doc` stores a document *as an issue* —
   it gets an ID, a lifecycle, `related` edges, and the same query language as
-  everything else, and nothing more. The store holds documents; it does not
-  interpret them, rank them, or feed them to anything;
+  everything else, and nothing more
+  ([decision 0012](../decisions/0012-taskmgr-is-not-a-knowledge-base.md));
 - external tracker integrations (Jira, Linear, GitHub);
-- a database or SQL backend;
+- a database or SQL backend
+  ([decision 0001](../decisions/0001-a-store-is-plain-text-files-with-no-database.md));
 - a **sync engine or federation** — nothing merges one store's changes with another's,
   and no copy of a store is writable from two machines. What is in scope is the opposite
   shape: `taskmgr sync` publishes a machine's central stores to a git remote as a
   **read-only mirror**, on a branch that only that machine pushes
-  ([SDK-SPEC](SDK-SPEC.md) §1). One writer per branch is what keeps it out of
-  sync-engine territory: every push is a fast-forward, so there is never a merge, a
-  rebase or a force-push, and a push that is not a fast-forward is a misconfiguration to
-  report, not a conflict to resolve. The cost is that a mirror cannot be edited where it
-  is read; changing a ticket means changing it on the machine that owns its store.
-  Rejected on the way there:
-  - **Merging tickets across machines.** Two writers to one issue need a merge rule per
-    field and per sidecar, and the one-writer invariant (§7) stops holding the moment a
-    store has two homes.
-  - **A server.** It is a daemon, an account and an uptime to own, for a tool whose
-    premise is plain files under existing version control.
-  - **A file-sync tool** (Syncthing, Dropbox and the like). It syncs both ways, so
-    every copy is writable and a store gains a second writer; it then resolves a
-    concurrent change with a conflict copy the engine never reads. A snapshot taken
-    mid-write is a second difference: the git mirror commits under every central
-    store's lock ([SDK-SPEC](SDK-SPEC.md) §1).
-  - **git `merge=union`.** It merges by line, so a frontmatter scalar edited on both
-    sides comes out as both values, a document the engine rejects or misreads;
+  ([SDK-SPEC](SDK-SPEC.md) §1). Every push is a fast-forward, and a push that is not is a
+  misconfiguration to report, not a conflict to resolve. Why the design stops at a mirror
+  is [decision 0003](../decisions/0003-sync-publishes-a-read-only-mirror-that-one-machine-pushes.md);
 - swarms, configurable status/type catalogs, and **policy baked into the core** — rules
   like "tests must pass before close" are not engine features; they live in the hook
   extension system ([HOOK-SPEC.md](HOOK-SPEC.md)), which runs user scripts at
-  transitions and keeps the core free of policy;
+  transitions and keeps the core free of policy
+  ([decision 0007](../decisions/0007-policy-lives-in-hooks-and-the-engine-holds-none.md));
 - **multi-project workspaces** — a store still tracks exactly **one** project; there
   is no enclosing workspace that aggregates several projects, and no `--project`
   selection. A store may live outside its repo under a per-user central root and be
@@ -383,7 +369,5 @@ written here against each operating system's own interface would be the same
 code as `fsnotify`, maintained in this repository.
 
 A feature in the **core must earn its place**: if a behaviour can be expressed as a hook
-([HOOK-SPEC.md](HOOK-SPEC.md)) rather than engine code, it is a hook. The core carries only
-issues, dependencies, and ready-work; per-repository policy and reactions live in the
-extension system. That split is what lets the engine stay small while still supporting
-complex, project-specific workflows.
+([HOOK-SPEC.md](HOOK-SPEC.md)) rather than engine code, it is a hook
+([decision 0007](../decisions/0007-policy-lives-in-hooks-and-the-engine-holds-none.md)).

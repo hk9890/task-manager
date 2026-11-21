@@ -35,6 +35,8 @@ When a spec is updated, and which one, is
   caller is a terminal belongs to the CLI spec, not to the storage, config or query spec.
 - Explain a trade-off where the design would otherwise read as arbitrary, and say what was
   rejected. A spec that only states the rule invites the next reader to "simplify" it back.
+  Where a record in [decisions/](decisions/) holds the trade-off, state the rule and link
+  the record.
 
 ## `docs/user-guide/`
 
@@ -85,10 +87,6 @@ filling the gap somewhere else.
   for the user from the changelog GoReleaser generates
   ([RELEASING.md § Release notes](RELEASING.md#release-notes)). The tracked file stays
   a pointer at the Releases page, not a second log that would repeat them.
-- **No ADR directory.** An architecture decision is filed as a `taskmgr` issue and cited by
-  ID from the spec it constrains — [ARCHITECTURE-SPEC §7](specs/ARCHITECTURE-SPEC.md) cites
-  `at-39dru2` for the open-vs-closed partition axis. The decision then sits beside the rule
-  it explains instead of in a parallel tree nobody opens.
 - **[implementation/](implementation/) owns nothing**, and says so at the top of each file.
   It exists because [ARCHITECTURE-SPEC §5](specs/ARCHITECTURE-SPEC.md) is normative and long,
   and an agent orienting needs one screen. Promoting either file would give the package
