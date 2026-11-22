@@ -18,6 +18,12 @@ skippable because the change looks small.
 `cmd/`, `sdk/`, or `scripts/`.** Where a change goes is not guessable from the tree: the
 storage engine is the only writer, and a disk, process or environment call has one seam.
 
+### Changing a decided design
+
+**MUST read the records in [docs/decisions/](docs/decisions/) that bear on the change
+before editing `sdk/`, `cmd/`, or `docs/specs/`.** Each holds a decision in force, and a
+change against one is the user's call — name the record and ask.
+
 ### Research, planning, architecture — and finding anything at all
 
 **MUST read [docs/OVERVIEW.md](docs/OVERVIEW.md) before your first `rg`, `grep`, `Glob`

@@ -19,10 +19,8 @@ than running `git worktree` by hand:
 
 ## Change loop
 
-1. Track the work in the repo's own `.tasks/` store with `taskmgr` (`taskmgr create`
-   to open an issue, `taskmgr close` when it lands).
-2. Make the change on the feature branch — never on `main`.
-3. Verify to the depth of the change:
+1. Make the change on the feature branch — never on `main`.
+2. Verify to the depth of the change:
    - **Docs-only** → `mise run check:docs` ([DOCUMENTING.md](DOCUMENTING.md)).
    - **Code** → run the green gate `mise run quality:full`
      (see [TESTING.md](TESTING.md)).
@@ -30,7 +28,7 @@ than running `git worktree` by hand:
      change (see [REVIEWING.md](REVIEWING.md#blocking)).
    - **Change a user would notice** → update the page covering it in
      `docs/user-guide/` in the same change (see [REVIEWING.md](REVIEWING.md#also-check)).
-4. Commit on the branch.
+3. Commit on the branch.
 
 ## Land via pull request
 

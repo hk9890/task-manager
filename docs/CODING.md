@@ -26,7 +26,8 @@ One task per `mise run`: trailing words become arguments to the first task, so
 
 Only `sdk/tasks` — through `internal/vfs` — touches files under `.tasks/` and
 `<central_root>/stores/`, and only it runs the git that publishes the central stores.
-`cmd/` and every consumer go through the SDK API. **Within `sdk/tasks`, only the three
+`cmd/` and every consumer go through the SDK API
+([decision 0002](decisions/0002-one-engine-is-the-only-code-that-touches-a-store.md)). **Within `sdk/tasks`, only the three
 seams `internal/vfs` (disk), `internal/exec` (processes: hooks and git), and `internal/env`
 (user environment — CONFIG-SPEC) may import `os`/`syscall`;** the pure core imports
 none of them. Enforced by `sdk/tasks/importboundary_test.go`. The rule is SDK-only:

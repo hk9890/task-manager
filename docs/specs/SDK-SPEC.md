@@ -343,7 +343,8 @@ registry and the per-user config are machine-local by construction (CONFIG-SPEC 
   telling the user to set one; the second carries the read's own error.
 - **One writer per branch.** Only the machine with that ID pushes it, so every push is a
   fast-forward. A publish never merges, rebases, fetches or force-pushes. Why the design
-  stops at a mirror is [ARCHITECTURE-SPEC](ARCHITECTURE-SPEC.md) §9.
+  stops at a mirror is
+  [decision 0003](../decisions/0003-sync-publishes-a-read-only-mirror-that-one-machine-pushes.md).
 
 A git the process seam cannot find on `PATH` is `ErrGitMissing`. A git that cannot be
 started for another reason — a work tree it cannot enter, a platform with no process

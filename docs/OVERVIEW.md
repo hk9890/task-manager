@@ -22,6 +22,7 @@ github.com/hk9890/task-manager     root module — the taskmgr CLI (cobra)
 ├── scripts/checkdocs/            the doc gate (DOCUMENTING.md)
 ├── scripts/checkgo/              the Go patch check on go.work's toolchain line (TESTING.md)
 └── docs/
+    ├── decisions/                one record per design decision in force
     ├── specs/                    the normative contract — the table below
     ├── implementation/           orientation maps that own nothing; the specs are normative
     └── user-guide/               the pages for someone who installed taskmgr (DOCUMENTING.md)

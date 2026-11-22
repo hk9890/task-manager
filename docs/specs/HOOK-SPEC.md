@@ -119,12 +119,8 @@ format itself is §3.6.
 
 Either `use:` list is editable by hand or with `taskmgr package` (CLI-SPEC.md §2.3).
 
-**Why a package and not an inline block.** A hook is argv, and its working directory is
-the project root (§3.2), so an inline entry could name a script only by absolute path —
-which is machine-specific, and therefore un-shippable. A package binds the hooks and
-their scripts into one directory and gives a relative `argv[0]` a meaning that survives
-being copied (§3.6). It also collapses the merge: two files each naming packages, rather
-than two files each carrying hooks *and* naming packages.
+**Why a package and not an inline block** is
+[decision 0011](../decisions/0011-a-configuration-takes-hooks-only-from-packages.md).
 
 ### 3.1 `hook_timeout` (top-level)
 
@@ -792,9 +788,9 @@ held and would deadlock; a post-hook could trigger further hooks. Read-only quer
 fine.
 
 Fail-closed means a **misconfigured pre-hook wedges the relevant mutations** until fixed
-(a typo'd `run` blocks all closes). This is intentional — the point of a gate is that it
-cannot be skipped. **There is no bypass flag** (§10): to relax or remove a gate you edit
-the package, or drop it from the `use:` list. Up-front checking (§3.4) makes the failure
+(a typo'd `run` blocks all closes). This is intentional, and **there is no bypass flag**
+([decision 0010](../decisions/0010-a-gate-has-no-bypass.md)): to relax or remove a gate you
+edit the package, or drop it from the `use:` list. Up-front checking (§3.4) makes the failure
 a clear config error rather than a mysterious per-close one.
 
 ---
@@ -802,13 +798,9 @@ a clear config error rather than a mysterious per-close one.
 ## 8. Concurrency and the lock
 
 Pre-hooks run **inside** the store write lock (§4), after validation and before the atomic
-write. This is a **deliberate, settled** choice, not a v1 shortcut. The decision is made
-against exactly the state that will be written (no check/use gap), the engine hands the hook
-the materialized `old` and `new` as one atomic snapshot, and a denial is atomic. Running a
-pre-hook *outside* the lock would mean it could not be given a stable `old`/`new` pair — the
-store could move under it — so the gate would decide against state that is no longer the
-state being written. The in-lock model is the price of a correct gate, and it is the chosen
-model.
+write. The engine hands the hook the materialized `old` and `new` as one atomic snapshot,
+and a denial is atomic. Why the gate runs in the lock is
+[decision 0009](../decisions/0009-pre-hooks-run-inside-the-store-write-lock.md).
 
 **The cost:** while a pre-hook runs, the store-wide `flock` is held, so all other writers
 block until it returns, and a writer of a store opened `WithLockTimeout` gives up with
@@ -855,15 +847,14 @@ project can see exactly how long its gates hold the lock and decide whether to r
 
 Deliberately excluded, with rationale:
 
-- **No bypass / skip mechanism.** A gate that can be skipped is not a gate. To relax or
-  remove one, edit the package or drop it from the `use:` list.
-- **Hooks never mutate issues.** No writing labels or any field from a hook output; hooks
-  gate (pre) or notify (post) only. The engine stays the sole author. This is deliberate
-  even though auto-labeling is a common lightweight-tracker hook: the chosen ergonomic is
-  **"gate, don't fix"** — a hook denies with a reason/hint (e.g. "label `area:*` required")
-  and the agent, the primary caller, applies the change on its side and retries. Keeping
-  hooks side-effect-free preserves the one-writer invariant (ARCHITECTURE-SPEC.md §7) and
-  the validation/atomicity guarantee.
+- **No bypass / skip mechanism**
+  ([decision 0010](../decisions/0010-a-gate-has-no-bypass.md)). To relax or remove a gate,
+  edit the package or drop it from the `use:` list.
+- **Hooks never mutate issues**
+  ([decision 0008](../decisions/0008-a-hook-gates-or-notifies-and-never-changes-an-issue.md)).
+  No writing labels or any field from a hook output; hooks gate (pre) or notify (post)
+  only: a hook denies with a reason/hint (e.g. "label `area:*` required") and the caller
+  applies the change on its side and retries.
 - **No per-hook `timeout`, `workdir`, or error policy.** One `hook_timeout` per store (§3.1); cwd is
   the project root (§3.2); fail-closed (pre) / warn (post) is uniform.
 - **`when` reads only `new`** — no `old.`/`new.` cross-state qualifiers.

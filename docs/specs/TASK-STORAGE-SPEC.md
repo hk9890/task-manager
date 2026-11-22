@@ -101,14 +101,11 @@ Rules:
 - **Allocation:** a random base36 token. Existing IDs are scanned across **all
   partitions of the store** — the hot directory **and** `closed/` (and any future
   cold partition) — and used to reject duplicates, regenerating on the
-  (astronomically unlikely) event of a collision. There is no counter file (it
-  would be the worst git merge hotspot) and no high-water scan. A caller may also
-  supply an explicit ID (import/migration) provided it matches this grammar,
-  carries the prefix, and is not already in use.
-- **Collisions:** the random token removes the parallel-branch merge-collision
-  class by construction. Two branches each allocate independently from a
-  ~2×10⁹ keyspace, so they effectively never pick the same ID on merge — no
-  renumber/doctor tooling is required.
+  (astronomically unlikely) event of a collision. There is no counter file and no
+  high-water scan
+  ([decision 0005](../decisions/0005-an-issue-id-is-a-random-token-with-no-counter.md)).
+  A caller may also supply an explicit ID (import/migration) provided it matches
+  this grammar, carries the prefix, and is not already in use.
 
 Hierarchy is expressed by the `parent` **field**, not by the ID. IDs are flat;
 an epic is just an issue that others name as `parent`.
@@ -525,9 +522,8 @@ An issue is **active** while its file lives in the store's hot directory and
   ever a candidate, and only old entries, since compression forfeits per-file
   diffing and grep.
 
-> **Why partition at all.** Closed issues dominate a mature store (often ~90%).
-> Keeping them out of the hot directory makes "scan the active work" O(open)
-> instead of O(all-issues-ever), and keeps it flat as history grows.
+> **Why partition at all**, and why on open against closed only, is
+> [decision 0004](../decisions/0004-a-store-partitions-issues-into-open-and-closed-only.md).
 
 ---
 
